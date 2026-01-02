@@ -250,7 +250,7 @@ export default function MapScreen() {
         // Leaflet uses [lat, lng] format
         hasFocusFromURL.current = true; // Mark that we have focus from URL
         setMapCenter([lat, lng]);
-        setMapZoom(16); // Zoom in closer for focus
+        setMapZoom(19); // Maximum zoom for closest view of product address
         // Clear URL params after focusing (with a delay to ensure map updates)
         setTimeout(() => {
           window.history.replaceState({}, '', '/app/map');
