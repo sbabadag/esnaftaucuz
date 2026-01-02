@@ -14,6 +14,18 @@ interface User {
     verifications: number;
   };
   isGuest?: boolean;
+  preferences?: {
+    notifications?: boolean;
+    searchRadius?: number;
+    language?: string;
+    [key: string]: any; // Allow other preference keys
+  };
+  search_radius?: number; // Legacy column for backward compatibility
+  location?: {
+    city?: string;
+    district?: string;
+    coordinates?: { lat: number; lng: number };
+  };
 }
 
 interface AuthContextType {
@@ -219,14 +231,32 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         clearTimeout(profileTimeout);
         
         if (profile) {
+          // Ensure preferences and search_radius are properly set
+          const userData = {
+            ...profile,
+            preferences: profile.preferences || {},
+            search_radius: profile.search_radius || profile.preferences?.searchRadius || 15,
+          };
+          
           // Only update if we don't already have a cached user, or if this is a fresh profile
           if (!cachedUser || profile.id !== cachedUser.id) {
-            setUser(profile);
-            localStorage.setItem('user', JSON.stringify(profile));
-            console.log('✅ User profile loaded:', profile.email);
+            setUser(userData);
+            localStorage.setItem('user', JSON.stringify(userData));
+            console.log('✅ User profile loaded with settings:', {
+              email: userData.email,
+              preferences: userData.preferences,
+              search_radius: userData.search_radius,
+            });
             setIsLoading(false); // Always set loading false when profile is loaded
           } else {
-            console.log('✅ User profile already cached, using cached version');
+            // Update cached user with fresh preferences if they exist
+            if (userData.preferences && Object.keys(userData.preferences).length > 0) {
+              setUser(userData);
+              localStorage.setItem('user', JSON.stringify(userData));
+              console.log('✅ Updated cached user with fresh settings');
+            } else {
+              console.log('✅ User profile already cached, using cached version');
+            }
             setIsLoading(false); // Set loading false even for cached user
           }
         } else {
@@ -611,9 +641,38 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const refreshUser = async () => {
     try {
-      const data = await authAPI.getCurrentUser();
-      setUser(data.user);
-      localStorage.setItem('user', JSON.stringify(data.user));
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) {
+        console.warn('⚠️ No session found for refreshUser');
+        return;
+      }
+      
+      // Fetch fresh user data from Supabase
+      const { data: profile, error } = await supabase
+        .from('users')
+        .select('*')
+        .eq('id', session.user.id)
+        .single();
+      
+      if (error) {
+        console.error('❌ Error refreshing user:', error);
+        return;
+      }
+      
+      if (profile) {
+        // Ensure preferences and search_radius are properly set
+        const userData = {
+          ...profile,
+          preferences: profile.preferences || {},
+          search_radius: profile.search_radius || profile.preferences?.searchRadius || 15,
+        };
+        setUser(userData);
+        localStorage.setItem('user', JSON.stringify(userData));
+        console.log('✅ User refreshed with settings:', {
+          preferences: userData.preferences,
+          search_radius: userData.search_radius,
+        });
+      }
     } catch (error) {
       console.error('Refresh user error:', error);
     }
