@@ -8,6 +8,7 @@ import ProductDetailScreen from './details/ProductDetailScreen';
 import LocationDetailScreen from './details/LocationDetailScreen';
 import NotificationsScreen from './NotificationsScreen';
 import SettingsScreen from './SettingsScreen';
+import ContributionsScreen from './ContributionsScreen';
 import { useState, useEffect } from 'react';
 
 const tabs = [
@@ -39,6 +40,7 @@ export default function MainApp() {
                      location.pathname.includes('/location/') ||
                      location.pathname.includes('/notifications') ||
                      location.pathname.includes('/settings') ||
+                     location.pathname.includes('/contributions') ||
                      location.pathname.includes('/add');
 
   const handleTabClick = (path: string) => {
@@ -84,6 +86,7 @@ export default function MainApp() {
           <Route path="location/:id" element={<LocationDetailScreen />} />
           <Route path="notifications" element={<NotificationsScreen />} />
           <Route path="settings" element={<SettingsScreen />} />
+          <Route path="contributions" element={<ContributionsScreen />} />
         </Routes>
       </main>
 

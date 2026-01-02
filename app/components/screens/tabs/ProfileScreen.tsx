@@ -45,7 +45,7 @@ export default function ProfileScreen() {
   };
 
   const menuItems = [
-    { icon: Share2, label: 'Katkılarım', onClick: () => {} },
+    { icon: Share2, label: 'Katkılarım', onClick: () => navigate('/app/contributions') },
     { icon: Heart, label: 'Favorilerim', onClick: () => {} },
     { icon: Award, label: 'Rozetler', onClick: () => {} },
     { icon: Settings, label: 'Ayarlar', onClick: () => navigate('/app/settings') },
