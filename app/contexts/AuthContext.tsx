@@ -169,18 +169,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             profile = fallbackUser; // Set profile so we can update it later
           }
           
+          // Prepare user data with explicit search_radius (must be integer, 1-1000)
+          const newUserData = {
+            id: session.user.id,
+            email: session.user.email || '',
+            name: userMetadata.name || userMetadata.full_name || session.user.email?.split('@')[0] || 'Kullanıcı',
+            avatar: userMetadata.avatar_url || userMetadata.picture,
+            google_id: userMetadata.provider === 'google' ? session.user.id : null,
+            is_guest: false,
+            search_radius: 15, // Default search radius (ensures constraint is satisfied: 1-1000)
+          };
+          
+          console.log('📝 Creating OAuth user profile with data:', {
+            ...newUserData,
+            search_radius: newUserData.search_radius,
+            search_radius_type: typeof newUserData.search_radius,
+          });
+          
           // Create profile in background (reduced timeout from 10s to 5s)
           const createPromise = supabase
             .from('users')
-            .insert({
-              id: session.user.id,
-              email: session.user.email || '',
-              name: userMetadata.name || userMetadata.full_name || session.user.email?.split('@')[0] || 'Kullanıcı',
-              avatar: userMetadata.avatar_url || userMetadata.picture,
-              google_id: userMetadata.provider === 'google' ? session.user.id : null,
-              is_guest: false,
-              search_radius: 15, // Default search radius (ensures constraint is satisfied: 1-1000)
-            })
+            .insert(newUserData)
             .select()
             .single();
           
