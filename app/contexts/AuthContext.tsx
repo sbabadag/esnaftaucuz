@@ -34,11 +34,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [token, setToken] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [isOAuthCallback, setIsOAuthCallback] = useState(false);
 
   useEffect(() => {
     // Check for OAuth callback in URL (Supabase adds hash fragments)
     const hashParams = new URLSearchParams(window.location.hash.substring(1));
     const accessToken = hashParams.get('access_token');
+    const code = hashParams.get('code');
     const error = hashParams.get('error');
     
     if (error) {
@@ -46,16 +48,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // Clean up URL
       window.history.replaceState({}, document.title, window.location.pathname);
       setIsLoading(false);
+      setIsOAuthCallback(false);
       return;
     }
     
     // If OAuth callback detected, keep loading until session is processed
-    const isOAuthCallback = !!accessToken;
-    if (isOAuthCallback) {
+    const hasOAuthCallback = !!(accessToken || code);
+    setIsOAuthCallback(hasOAuthCallback);
+    
+    if (hasOAuthCallback) {
       console.log('🔐 OAuth callback detected in URL');
       // Keep loading state - will be set to false after profile is loaded
-      // Clean up URL immediately to prevent issues
-      window.history.replaceState({}, document.title, '/');
+      // Don't clean URL yet - let Supabase process it first
     }
 
     // Load user profile helper with timeout protection
@@ -280,6 +284,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (isOAuthCallback) {
         console.log('🔐 OAuth callback detected, skipping initial auth check - waiting for onAuthStateChange');
         // Don't set loading to false yet - wait for onAuthStateChange
+        // Set a longer timeout for OAuth callback
+        setTimeout(() => {
+          if (isLoading && isOAuthCallback) {
+            console.warn('⚠️ OAuth callback timeout - forcing loading to false');
+            setIsLoading(false);
+            setIsOAuthCallback(false);
+          }
+        }, 30000); // 30 second timeout for OAuth
         return;
       }
 
@@ -374,6 +386,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             // Profile loaded successfully - ensure URL is clean and trigger navigation
             if (event === 'SIGNED_IN') {
               console.log('✅ OAuth login successful, profile loaded');
+              // Clear OAuth callback flag
+              setIsOAuthCallback(false);
+              // Clean up hash fragments first
+              if (window.location.hash) {
+                window.history.replaceState({}, document.title, window.location.pathname + window.location.search);
+                console.log('🧹 OAuth callback hash cleaned from URL');
+              }
               // Clean up URL to root path to trigger AppRoutes navigation
               if (window.location.pathname !== '/') {
                 window.history.replaceState({}, document.title, '/');
@@ -403,6 +422,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             localStorage.removeItem('authToken');
             localStorage.removeItem('user');
             setIsLoading(false);
+            setIsOAuthCallback(false);
+            return;
+          }
+          
+          // If INITIAL_SESSION with null session but OAuth callback is in progress, wait
+          if (event === 'INITIAL_SESSION' && isOAuthCallback) {
+            console.log('🔐 INITIAL_SESSION with null session but OAuth callback in progress - waiting...');
+            // Don't clear auth state yet - wait for SIGNED_IN event
+            if (stateChangeTimeout) {
+              clearTimeout(stateChangeTimeout);
+            }
+            // Keep loading state - will be set to false when SIGNED_IN event fires
             return;
           }
           
