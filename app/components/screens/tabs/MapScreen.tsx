@@ -147,7 +147,7 @@ function MapCenter({ center, zoom }: { center: [number, number]; zoom?: number }
   return null;
 }
 
-// Component to handle auto-opening popups
+// Component to handle auto-opening popups (LIMITED for performance)
 function AutoOpenPopups({ 
   prices, 
   markerRefs, 
@@ -167,11 +167,18 @@ function AutoOpenPopups({
 
   useEffect(() => {
     if (prices.length > 0 && mapRef.current) {
-      // Wait for markers to render, then open all popups
+      // Wait for markers to render, then open LIMITED popups (max 5 for performance)
       const timer = setTimeout(() => {
         try {
-          // Open all popups for cheapest prices
-          prices.forEach((price) => {
+          // Limit to first 5 prices to prevent ANR
+          const pricesToOpen = prices.slice(0, 5);
+          let openedCount = 0;
+          
+          // Use requestAnimationFrame to spread popup opening across frames
+          const openNextPopup = () => {
+            if (openedCount >= pricesToOpen.length) return;
+            
+            const price = pricesToOpen[openedCount];
             try {
               const priceId = price.id || price._id || '';
               const markerRef = markerRefs.current[priceId];
@@ -184,11 +191,22 @@ function AutoOpenPopups({
             } catch (error: any) {
               console.error('Error opening popup for price:', price.id, error);
             }
-          });
+            
+            openedCount++;
+            // Open next popup in next frame (prevents blocking)
+            if (openedCount < pricesToOpen.length) {
+              requestAnimationFrame(() => {
+                setTimeout(openNextPopup, 100); // 100ms delay between each
+              });
+            }
+          };
+          
+          // Start opening popups
+          requestAnimationFrame(openNextPopup);
         } catch (error: any) {
           console.error('Error in AutoOpenPopups:', error);
         }
-      }, 1500);
+      }, 2000); // Increased delay to ensure map is fully loaded
 
       return () => clearTimeout(timer);
     }
@@ -360,9 +378,9 @@ export default function MapScreen() {
     try {
       setIsLoading(true);
       setMapError(null); // Clear any previous errors
-      // Load all prices to find cheapest per product
+      // Load prices to find cheapest per product (LIMITED for performance)
       const data = await pricesAPI.getAll({
-        limit: 500, // Load more prices to find cheapest per product
+        limit: 200, // Reduced from 500 to prevent ANR
         sort: 'cheapest', // Sort by cheapest first
       });
       
@@ -489,13 +507,15 @@ export default function MapScreen() {
       const result = await searchNearbyPlaces(
         latitude,
         longitude,
-        Math.min(searchRadiusMeters, 5000), // Max 5km for Places API
+        Math.min(searchRadiusMeters, 3000), // Reduced to 3km max for performance
         ['store', 'shop', 'establishment', 'supermarket', 'grocery_or_supermarket', 'bakery', 'butcher', 'pharmacy']
       );
       
       if (result.success && result.places) {
-        setBusinesses(result.places);
-        console.log(`✅ Loaded ${result.places.length} nearby businesses`);
+        // Limit businesses to 20 for performance (prevent ANR)
+        const limitedBusinesses = result.places.slice(0, 20);
+        setBusinesses(limitedBusinesses);
+        console.log(`✅ Loaded ${limitedBusinesses.length} nearby businesses (limited for performance)`);
       } else {
         console.warn('⚠️ Failed to load businesses:', result.error);
       }
@@ -696,8 +716,8 @@ export default function MapScreen() {
               }
             })()}
 
-            {/* Price Markers - Only cheapest prices per product */}
-            {prices.map((price) => {
+            {/* Price Markers - Only cheapest prices per product (LIMITED for performance) */}
+            {prices.slice(0, 50).map((price) => { // Limit to 50 markers max to prevent ANR
               // Validate coordinates before rendering marker
               if (!price.lat || !price.lng) return null;
               
@@ -725,17 +745,24 @@ export default function MapScreen() {
                   eventHandlers={{
                     click: (e) => {
                       try {
-                        // Open popup when marker is clicked
-                        const marker = e.target;
-                        if (marker && marker.isPopupOpen()) {
-                          marker.closePopup();
-                        } else {
-                          marker.openPopup();
-                        }
-                        // Also open bottom sheet with details
-                        setSelectedPrice(price);
+                        // Use requestAnimationFrame to prevent blocking
+                        requestAnimationFrame(() => {
+                          try {
+                            // Open popup when marker is clicked
+                            const marker = e.target;
+                            if (marker && marker.isPopupOpen()) {
+                              marker.closePopup();
+                            } else {
+                              marker.openPopup();
+                            }
+                            // Also open bottom sheet with details
+                            setSelectedPrice(price);
+                          } catch (error: any) {
+                            console.error('❌ Error handling marker click:', error);
+                          }
+                        });
                       } catch (error: any) {
-                        console.error('❌ Error handling marker click:', error);
+                        console.error('❌ Error in click handler:', error);
                       }
                     },
                   }}
@@ -809,8 +836,8 @@ export default function MapScreen() {
               );
             })}
 
-            {/* Business/Place Markers */}
-            {showBusinesses && businesses.map((business) => {
+            {/* Business/Place Markers (LIMITED for performance) */}
+            {showBusinesses && businesses.slice(0, 20).map((business) => { // Limit to 20 businesses max
               const lat = business.geometry?.location?.lat;
               const lng = business.geometry?.location?.lng;
               
