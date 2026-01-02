@@ -38,6 +38,17 @@ function AppRoutes() {
   // Handle OAuth callback redirect - if user is logged in and on root, redirect to explore
   useEffect(() => {
     console.log('🔍 AppRoutes useEffect - user:', user ? user.email : 'null', 'isLoading:', isLoading, 'pathname:', location.pathname);
+    
+    // Check if this is an OAuth callback (has hash fragments with access_token)
+    const hashParams = new URLSearchParams(window.location.hash.substring(1));
+    const isOAuthCallback = hashParams.has('access_token') || hashParams.has('code');
+    
+    if (isOAuthCallback) {
+      console.log('🔐 OAuth callback detected, waiting for user to load...');
+      // Don't navigate yet, wait for user to be loaded
+      return;
+    }
+    
     if (user && !isLoading) {
       // If user is logged in and on root or login page, redirect to explore
       if (location.pathname === '/' || location.pathname === '/login') {
@@ -47,13 +58,27 @@ function AppRoutes() {
     }
   }, [user, isLoading, location.pathname, navigate]);
 
+  // Check if this is an OAuth callback - if so, keep loading until user is ready
+  const hashParams = new URLSearchParams(window.location.hash.substring(1));
+  const isOAuthCallback = hashParams.has('access_token') || hashParams.has('code');
+  
+  // If OAuth callback is in progress, show loading
+  if (isOAuthCallback && isLoading) {
+    console.log('🔐 OAuth callback in progress, showing loading...');
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <div className="text-gray-500">Giriş yapılıyor...</div>
+      </div>
+    );
+  }
+  
   // If user is already logged in, redirect to main app
   // Also handle OAuth callback - if we're on root with a user, redirect to explore
   if (user && !isLoading) {
     console.log('✅ AppRoutes: User is logged in, rendering main app routes');
     // If we're on root path and user is logged in, redirect to explore
-    if (location.pathname === '/') {
-      console.log('✅ AppRoutes: Redirecting from root to /app/explore');
+    if (location.pathname === '/' || location.pathname === '/login') {
+      console.log('✅ AppRoutes: Redirecting from root/login to /app/explore');
       return <Navigate to="/app/explore" replace />;
     }
     

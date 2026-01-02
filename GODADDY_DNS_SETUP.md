@@ -150,3 +150,4 @@ GoDaddy DNS Management sayfasında şöyle görünmeli:
 
 **Önemli:** DNS değişiklikleri anında etkili olmaz. Lütfen 1-2 saat bekleyin ve tekrar kontrol edin.
 
+

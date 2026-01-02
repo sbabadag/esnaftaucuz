@@ -234,9 +234,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         
         // Clean up OAuth callback URL - always go to root after OAuth
         if (shouldCleanUrl) {
-          // Always redirect to root after OAuth to trigger AppRoutes navigation
-          window.history.replaceState({}, document.title, '/');
-          console.log('🧹 OAuth callback URL cleaned, redirected to root');
+          // Clean up hash fragments from URL first
+          if (window.location.hash) {
+            const cleanPath = window.location.pathname + window.location.search;
+            window.history.replaceState({}, document.title, cleanPath);
+            console.log('🧹 OAuth callback hash cleaned from URL');
+          }
+          // Then ensure we're on root path for navigation
+          if (window.location.pathname !== '/') {
+            window.history.replaceState({}, document.title, '/');
+            console.log('🧹 OAuth callback URL cleaned, redirected to root');
+          }
         }
       } catch (error) {
         clearTimeout(profileTimeout);

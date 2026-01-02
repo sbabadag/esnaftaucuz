@@ -26,3 +26,4 @@ CREATE TRIGGER validate_user_id_trigger
   FOR EACH ROW
   EXECUTE FUNCTION validate_user_id();
 
+

@@ -19,3 +19,4 @@ CREATE POLICY "Users can create guest profile" ON public.users
   TO anon
   WITH CHECK (is_guest = true);
 
+

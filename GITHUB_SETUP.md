@@ -59,3 +59,4 @@ SUPABASE_ANON_KEY=your-anon-key
 PEXELS_API_KEY=your-pexels-api-key
 ```
 
+

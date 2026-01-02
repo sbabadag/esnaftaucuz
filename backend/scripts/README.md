@@ -96,3 +96,4 @@ Yeni ürün eklemek için `TURKISH_PRODUCTS` array'ine ekleyin:
 Kategoriler: `'Sebze'`, `'Meyve'`, `'Et'`, `'Süt Ürünleri'`, `'Bakliyat'`, `'Temel Gıda'`, `'Diğer'`
 Birimler: `'kg'`, `'adet'`, `'lt'`, `'paket'`
 
+

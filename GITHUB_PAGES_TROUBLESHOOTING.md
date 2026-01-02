@@ -110,3 +110,4 @@ Workflow log'larında şunları arayın:
 3. **GitHub Pages ayarlarını** mutlaka yapın (Settings → Pages)
 4. **Base path** repository adı ile eşleşmeli: `/esnaftaucuz/`
 
+
