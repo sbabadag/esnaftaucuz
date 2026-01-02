@@ -7,6 +7,7 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
+    "deploy": "npm run build && gh-pages -d dist",
     "mobile:init": "node init-capacitor.js",
     "mobile:sync": "npx cap sync",
     "mobile:ios": "npx cap open ios",
