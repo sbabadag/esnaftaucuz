@@ -233,8 +233,9 @@ export default function MapScreen() {
   const [mapZoom, setMapZoom] = useState(13);
   const markerRefs = useRef<Record<string, any>>({});
   const mapRef = useRef<L.Map | null>(null);
+  const hasFocusFromURL = useRef(false); // Track if we have focus coordinates from URL
 
-  // Check for focus location from URL params
+  // Check for focus location from URL params FIRST (before loading prices/location)
   useEffect(() => {
     const focusLat = searchParams.get('lat');
     const focusLng = searchParams.get('lng');
@@ -247,21 +248,34 @@ export default function MapScreen() {
       if (!isNaN(lat) && !isNaN(lng)) {
         console.log('📍 Focusing on location from URL:', { lat, lng, rawLat: focusLat, rawLng: focusLng });
         // Leaflet uses [lat, lng] format
+        hasFocusFromURL.current = true; // Mark that we have focus from URL
         setMapCenter([lat, lng]);
         setMapZoom(16); // Zoom in closer for focus
-        // Clear URL params after focusing (with a small delay to ensure map updates)
+        // Clear URL params after focusing (with a delay to ensure map updates)
         setTimeout(() => {
           window.history.replaceState({}, '', '/app/map');
-        }, 100);
+          // Clear the focus flag after a delay to allow other functions to work normally
+          setTimeout(() => {
+            hasFocusFromURL.current = false;
+          }, 1000);
+        }, 500);
       } else {
         console.error('❌ Invalid coordinates from URL:', { focusLat, focusLng, parsedLat: lat, parsedLng: lng });
+        hasFocusFromURL.current = false;
       }
+    } else {
+      hasFocusFromURL.current = false; // No focus from URL
     }
   }, [searchParams]);
 
+  // Load user location and prices AFTER URL params are checked
   useEffect(() => {
-    loadUserLocation();
-    loadPrices();
+    // Small delay to ensure URL params are processed first
+    const timer = setTimeout(() => {
+      loadUserLocation();
+      loadPrices();
+    }, 100);
+    return () => clearTimeout(timer);
   }, []);
 
   // Load nearby businesses when user location is available
@@ -278,8 +292,11 @@ export default function MapScreen() {
       if (position) {
         const location: [number, number] = [position.latitude, position.longitude];
         setUserLocation(location);
-        setMapCenter(location);
-        setMapZoom(15);
+        // Only update map center if we don't have focus from URL
+        if (!hasFocusFromURL.current) {
+          setMapCenter(location);
+          setMapZoom(15);
+        }
       }
     } catch (error) {
       console.error('Failed to get user location:', error);
@@ -345,12 +362,15 @@ export default function MapScreen() {
       const cheapestPrices = Object.values(cheapestByProduct);
       setPrices(cheapestPrices);
       
-      // If we have prices, center map on them
-      if (cheapestPrices.length > 0 && !userLocation) {
+      // If we have prices, center map on them (only if no user location and no focus from URL)
+      if (cheapestPrices.length > 0 && !userLocation && !hasFocusFromURL.current) {
         const firstPrice = cheapestPrices[0];
         if (firstPrice.lat && firstPrice.lng) {
+          console.log('📍 Centering map on first price location:', { lat: firstPrice.lat, lng: firstPrice.lng });
           setMapCenter([firstPrice.lat, firstPrice.lng]);
         }
+      } else if (hasFocusFromURL.current) {
+        console.log('📍 Skipping map center update from loadPrices - focus from URL is active');
       }
       
       if (cheapestPrices.length === 0) {
@@ -437,6 +457,7 @@ export default function MapScreen() {
       if (position) {
         const location: [number, number] = [position.latitude, position.longitude];
         setUserLocation(location);
+        hasFocusFromURL.current = false; // Clear URL focus when user manually centers
         setMapCenter(location);
         setMapZoom(15);
       } else {
