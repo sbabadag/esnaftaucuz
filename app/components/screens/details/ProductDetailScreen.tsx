@@ -25,6 +25,7 @@ interface Price {
   };
   is_verified: boolean;
   created_at: string;
+  photo?: string;
   user?: {
     id: string;
     name: string;
@@ -230,6 +231,38 @@ export default function ProductDetailScreen() {
         </div>
       </div>
 
+      {/* All Product Photos Section */}
+      {prices.some(p => p.photo) && (
+        <div className="bg-white p-4 border-b border-gray-200">
+          <h2 className="text-lg font-semibold mb-3">
+            Bu Ürün İçin Eklenen Tüm Resimler ({prices.filter(p => p.photo).length})
+          </h2>
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+            {prices
+              .filter(p => p.photo)
+              .map((item) => {
+                const itemId = item.id || item._id || '';
+                return (
+                  <div key={itemId} className="relative group">
+                    <img
+                      src={item.photo}
+                      alt={product.name}
+                      className="w-full h-32 sm:h-40 object-cover rounded-lg border border-gray-200 cursor-pointer hover:opacity-80 transition-opacity"
+                      onError={(e) => {
+                        (e.target as HTMLImageElement).style.display = 'none';
+                      }}
+                    />
+                    <div className="absolute bottom-0 left-0 right-0 bg-black bg-opacity-50 text-white text-xs p-2 rounded-b-lg">
+                      <div className="font-semibold">{formatPrice(item.price)} ₺</div>
+                      <div className="text-xs opacity-90">{item.location?.name}</div>
+                    </div>
+                  </div>
+                );
+              })}
+          </div>
+        </div>
+      )}
+
       {/* Filters */}
       <div className="bg-white p-4 border-b border-gray-200">
         <div className="flex items-center justify-between">
@@ -265,7 +298,17 @@ export default function ProductDetailScreen() {
               <div key={itemId} className="bg-white rounded-lg p-4 border border-gray-200">
                 <div className="flex gap-4">
                   <div className="w-16 h-16 rounded-lg bg-gray-100 flex items-center justify-center flex-shrink-0 overflow-hidden">
-                    {(item.product?.image || product.image) ? (
+                    {item.photo ? (
+                      <img 
+                        src={item.photo} 
+                        alt={item.product?.name || product.name}
+                        className="w-full h-full object-cover"
+                        onError={(e) => {
+                          (e.target as HTMLImageElement).style.display = 'none';
+                          (e.target as HTMLImageElement).nextElementSibling?.classList.remove('hidden');
+                        }}
+                      />
+                    ) : (item.product?.image || product.image) ? (
                       <img 
                         src={item.product?.image || product.image} 
                         alt={item.product?.name || product.name}
@@ -276,7 +319,7 @@ export default function ProductDetailScreen() {
                         }}
                       />
                     ) : null}
-                    <Package className={`w-8 h-8 text-gray-400 ${(item.product?.image || product.image) ? 'hidden' : ''}`} />
+                    <Package className={`w-8 h-8 text-gray-400 ${(item.photo || item.product?.image || product.image) ? 'hidden' : ''}`} />
                   </div>
                   <div className="flex-1 min-w-0">
                     <div className="flex justify-between items-start mb-3">

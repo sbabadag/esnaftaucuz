@@ -140,6 +140,8 @@ export default function MapScreen() {
   const [userLocation, setUserLocation] = useState<[number, number] | null>(null);
   const [prices, setPrices] = useState<Price[]>([]);
   const [selectedPrice, setSelectedPrice] = useState<Price | null>(null);
+  const [productPhotos, setProductPhotos] = useState<Price[]>([]);
+  const [isLoadingPhotos, setIsLoadingPhotos] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [mapCenter, setMapCenter] = useState<[number, number]>([37.8667, 32.4833]); // Default: Konya
   const [mapZoom, setMapZoom] = useState(13);
@@ -448,8 +450,10 @@ export default function MapScreen() {
                       
                       {/* Action button */}
                       <button
-                        onClick={() => {
+                        onClick={async () => {
                           setSelectedPrice(price);
+                          // Load all photos for this product
+                          await loadProductPhotos(price.product.id || price.product._id || '');
                         }}
                         className="w-full mt-2 px-4 py-2 bg-green-600 hover:bg-green-700 text-white text-sm font-semibold rounded-lg transition-colors"
                       >
@@ -543,7 +547,7 @@ export default function MapScreen() {
                 {/* Photo */}
                 {(selectedPrice.photo || selectedPrice.product?.image) && (
                   <div className="mt-4">
-                    <div className="text-sm font-medium text-gray-700 mb-2">Ürün Fotoğrafı</div>
+                    <div className="text-sm font-medium text-gray-700 mb-2">Bu Fiyatın Fotoğrafı</div>
                     <img
                       src={selectedPrice.photo || selectedPrice.product?.image}
                       alt={selectedPrice.product.name}
@@ -553,6 +557,42 @@ export default function MapScreen() {
                         (e.target as HTMLImageElement).style.display = 'none';
                       }}
                     />
+                  </div>
+                )}
+              </div>
+
+              {/* All Product Photos */}
+              <div className="mt-6 pt-6 border-t border-gray-200">
+                <div className="text-sm font-medium text-gray-700 mb-3">
+                  Bu Ürün İçin Eklenen Tüm Resimler ({productPhotos.length})
+                </div>
+                {isLoadingPhotos ? (
+                  <div className="text-center py-4 text-gray-500 text-sm">Yükleniyor...</div>
+                ) : productPhotos.length > 0 ? (
+                  <div className="grid grid-cols-2 gap-3">
+                    {productPhotos.map((priceWithPhoto) => {
+                      const priceId = priceWithPhoto.id || priceWithPhoto._id || '';
+                      return (
+                        <div key={priceId} className="relative group">
+                          <img
+                            src={priceWithPhoto.photo}
+                            alt={selectedPrice.product.name}
+                            className="w-full h-32 object-cover rounded-lg border border-gray-200 cursor-pointer hover:opacity-80 transition-opacity"
+                            onError={(e) => {
+                              (e.target as HTMLImageElement).style.display = 'none';
+                            }}
+                          />
+                          <div className="absolute bottom-0 left-0 right-0 bg-black bg-opacity-50 text-white text-xs p-2 rounded-b-lg">
+                            <div className="font-semibold">{formatPrice(priceWithPhoto.price)} ₺</div>
+                            <div className="text-xs opacity-90">{priceWithPhoto.location?.name}</div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div className="text-center py-4 text-gray-500 text-sm">
+                    Bu ürün için henüz fotoğraf eklenmemiş
                   </div>
                 )}
               </div>
