@@ -12,6 +12,7 @@ import { productsAPI, pricesAPI, searchAPI } from '../../../services/supabase-ap
 import { useGeolocation } from '../../../../src/hooks/useGeolocation';
 import { useAuth } from '../../../contexts/AuthContext';
 import { reverseGeocode } from '../../../utils/geocoding';
+import { supabase } from '../../../lib/supabase';
 import { toast } from 'sonner';
 
 interface Price {
@@ -193,6 +194,141 @@ export default function ExploreScreen() {
       clearTimeout(safetyTimeout);
     };
   }, []);
+
+  // Supabase Realtime subscription for price updates
+  useEffect(() => {
+    console.log('🔴 Setting up Realtime subscription for prices...');
+    
+    const channel = supabase
+      .channel('prices-changes')
+      .on(
+        'postgres_changes',
+        {
+          event: '*', // Listen to all events (INSERT, UPDATE, DELETE)
+          schema: 'public',
+          table: 'prices',
+        },
+        (payload) => {
+          console.log('🔴 Realtime event received:', payload.eventType, payload);
+          
+          // Handle different event types
+          if (payload.eventType === 'INSERT') {
+            const newPriceId = payload.new.id || payload.new._id;
+            console.log('➕ New price added:', newPriceId);
+            
+            // Fetch full price data with relations instead of using raw payload
+            // Realtime payload doesn't include related data (product, location, user)
+            pricesAPI.getById(newPriceId)
+              .then((fullPrice) => {
+                if (!fullPrice) return;
+                
+                console.log('✅ Full price data fetched:', fullPrice);
+                
+                // Add to recent prices if it matches filters
+                setRecentPrices((prev) => {
+                  // Check if already exists
+                  const exists = prev.some((p) => (p.id || p._id) === (fullPrice.id || fullPrice._id));
+                  if (exists) return prev;
+                  
+                  // Add to beginning of list
+                  return [fullPrice, ...prev].slice(0, 100); // Keep max 100 items
+                });
+                
+                // Show toast notification
+                toast.success('Yeni fiyat eklendi!', {
+                  description: fullPrice.product?.name || 'Yeni bir fiyat paylaşıldı',
+                });
+                
+                // Reload nearby cheapest prices
+                if (userLocation) {
+                  const searchRadiusKm = (user as any)?.search_radius || 
+                                        (user as any)?.preferences?.searchRadius || 
+                                        15;
+                  const searchRadiusMeters = searchRadiusKm * 1000;
+                  
+                  searchAPI.getNearbyCheapest(
+                    userLocation.lat, 
+                    userLocation.lng, 
+                    searchRadiusMeters, 
+                    10
+                  ).then((nearby) => {
+                    setNearbyCheapest(nearby);
+                  }).catch((err) => {
+                    console.error('❌ Failed to reload nearby prices:', err);
+                  });
+                }
+              })
+              .catch((err) => {
+                console.error('❌ Failed to fetch full price data:', err);
+                // Fallback: reload all data
+                loadData(true);
+              });
+          } else if (payload.eventType === 'UPDATE') {
+            const updatedPriceId = payload.new.id || payload.new._id;
+            console.log('🔄 Price updated:', updatedPriceId);
+            
+            // Fetch full price data with relations
+            pricesAPI.getById(updatedPriceId)
+              .then((fullPrice) => {
+                if (!fullPrice) return;
+                
+                // Update in recent prices
+                setRecentPrices((prev) =>
+                  prev.map((p) =>
+                    (p.id || p._id) === (fullPrice.id || fullPrice._id) ? fullPrice : p
+                  )
+                );
+                
+                // Update in nearby cheapest
+                setNearbyCheapest((prev) =>
+                  prev.map((p) =>
+                    (p.id || p._id) === (fullPrice.id || fullPrice._id) ? fullPrice : p
+                  )
+                );
+                
+                toast.info('Fiyat güncellendi', {
+                  description: fullPrice.product?.name || 'Bir fiyat güncellendi',
+                });
+              })
+              .catch((err) => {
+                console.error('❌ Failed to fetch updated price data:', err);
+                // Fallback: reload all data
+                loadData(true);
+              });
+          } else if (payload.eventType === 'DELETE') {
+            const deletedPriceId = payload.old.id || payload.old._id;
+            console.log('🗑️ Price deleted:', deletedPriceId);
+            
+            // Remove from recent prices
+            setRecentPrices((prev) =>
+              prev.filter((p) => (p.id || p._id) !== deletedPriceId)
+            );
+            
+            // Remove from nearby cheapest
+            setNearbyCheapest((prev) =>
+              prev.filter((p) => (p.id || p._id) !== deletedPriceId)
+            );
+            
+            toast.info('Fiyat silindi');
+          }
+        }
+      )
+      .subscribe((status) => {
+        console.log('🔴 Realtime subscription status:', status);
+        if (status === 'SUBSCRIBED') {
+          console.log('✅ Realtime subscription active');
+        } else if (status === 'CHANNEL_ERROR') {
+          console.error('❌ Realtime subscription error');
+          toast.error('Gerçek zamanlı güncellemeler bağlanamadı');
+        }
+      });
+    
+    // Cleanup subscription on unmount
+    return () => {
+      console.log('🔴 Cleaning up Realtime subscription...');
+      supabase.removeChannel(channel);
+    };
+  }, [userLocation, user]);
 
   const loadData = async (isRefresh = false) => {
     // Set loading state immediately
@@ -740,7 +876,7 @@ export default function ExploreScreen() {
                       {searchResults.prices.map((item) => (
                         <div
                           key={item.id || item._id}
-                          onClick={() => navigate(`/app/product/${item.product.id || item.product._id}`)}
+                          onClick={() => navigate(`/app/product/${item.product?.id || item.product?._id || ''}`)}
                           className="bg-white rounded-lg p-3 sm:p-4 border border-gray-200 hover:border-green-600 hover:shadow-md cursor-pointer transition-all"
                         >
                           <div className="flex gap-3 sm:gap-4">
@@ -749,7 +885,7 @@ export default function ExploreScreen() {
                                 <>
                                   <img 
                                     src={item.photo} 
-                                    alt={`${item.product.name} - Kullanıcı fotoğrafı`}
+                                    alt={`${item.product?.name || 'Ürün'} - Kullanıcı fotoğrafı`}
                                     className="w-full h-full object-cover"
                                     title="Kullanıcı tarafından yüklenen fotoğraf"
                                     onError={(e) => {
@@ -768,7 +904,7 @@ export default function ExploreScreen() {
                             <div className="flex-1 min-w-0">
                               <div className="flex justify-between items-start mb-1.5 sm:mb-2">
                                 <div className="flex-1 min-w-0">
-                                  <h3 className="text-base sm:text-lg text-gray-900 font-medium truncate">{item.product.name}</h3>
+                                  <h3 className="text-base sm:text-lg text-gray-900 font-medium truncate">{item.product?.name || 'Bilinmeyen Ürün'}</h3>
                                   <p className="text-xl sm:text-2xl text-green-600 font-semibold mt-1">
                                     {formatPrice(item.price)} TL{' '}
                                     <span className="text-xs sm:text-sm text-gray-500 font-normal">/ {item.unit}</span>
@@ -916,15 +1052,15 @@ export default function ExploreScreen() {
                   nearbyCheapest.slice(0, 4).map((item) => (
                     <div
                       key={item.id || item._id}
-                      onClick={() => navigate(`/app/product/${item.product.id || item.product._id}`)}
+                      onClick={() => navigate(`/app/product/${item.product?.id || item.product?._id || ''}`)}
                       className="bg-white rounded-lg p-3 sm:p-4 border border-gray-200 hover:border-green-600 hover:shadow-md cursor-pointer transition-all"
                     >
                       <div className="flex gap-3 sm:gap-4">
                         <div className="w-14 h-14 sm:w-16 sm:h-16 rounded-lg bg-gray-100 flex items-center justify-center flex-shrink-0 overflow-hidden">
-                          {item.product.image ? (
+                          {item.product?.image ? (
                             <img 
                               src={item.product.image} 
-                              alt={item.product.name}
+                              alt={item.product?.name || 'Ürün'}
                               className="w-full h-full object-cover"
                               onError={(e) => {
                                 (e.target as HTMLImageElement).style.display = 'none';
@@ -932,12 +1068,12 @@ export default function ExploreScreen() {
                               }}
                             />
                           ) : null}
-                          <Package className={`w-6 h-6 sm:w-8 sm:h-8 text-gray-400 ${item.product.image ? 'hidden' : ''}`} />
+                          <Package className={`w-6 h-6 sm:w-8 sm:h-8 text-gray-400 ${item.product?.image ? 'hidden' : ''}`} />
                         </div>
                         <div className="flex-1 min-w-0">
                           <div className="flex justify-between items-start mb-1.5 sm:mb-2">
                             <div className="flex-1 min-w-0">
-                              <h3 className="text-base sm:text-lg text-gray-900 font-medium truncate">{item.product.name}</h3>
+                              <h3 className="text-base sm:text-lg text-gray-900 font-medium truncate">{item.product?.name || 'Bilinmeyen Ürün'}</h3>
                               <p className="text-xl sm:text-2xl text-green-600 font-semibold mt-1">
                                 {formatPrice(item.price)} TL{' '}
                                 <span className="text-xs sm:text-sm text-gray-500 font-normal">/ {item.unit}</span>
@@ -992,15 +1128,15 @@ export default function ExploreScreen() {
                   recentPrices.slice(0, 9).map((item) => (
                     <div
                       key={item.id || item._id}
-                      onClick={() => navigate(`/app/product/${item.product.id || item.product._id}`)}
+                      onClick={() => navigate(`/app/product/${item.product?.id || item.product?._id || ''}`)}
                       className="bg-white rounded-lg p-3 sm:p-4 border border-gray-200 hover:border-green-600 hover:shadow-md cursor-pointer transition-all"
                     >
                       <div className="flex gap-3 sm:gap-4">
                         <div className="w-14 h-14 sm:w-16 sm:h-16 rounded-lg bg-gray-100 flex items-center justify-center flex-shrink-0 overflow-hidden">
-                          {item.product.image ? (
+                          {item.product?.image ? (
                             <img 
                               src={item.product.image} 
-                              alt={item.product.name}
+                              alt={item.product?.name || 'Ürün'}
                               className="w-full h-full object-cover"
                               onError={(e) => {
                                 (e.target as HTMLImageElement).style.display = 'none';
@@ -1008,12 +1144,12 @@ export default function ExploreScreen() {
                               }}
                             />
                           ) : null}
-                          <Package className={`w-6 h-6 sm:w-8 sm:h-8 text-gray-400 ${item.product.image ? 'hidden' : ''}`} />
+                          <Package className={`w-6 h-6 sm:w-8 sm:h-8 text-gray-400 ${item.product?.image ? 'hidden' : ''}`} />
                         </div>
                         <div className="flex-1 min-w-0">
                           <div className="flex justify-between items-start mb-1.5 sm:mb-2">
                             <div className="flex-1 min-w-0">
-                              <h3 className="text-base sm:text-lg text-gray-900 font-medium truncate">{item.product.name}</h3>
+                              <h3 className="text-base sm:text-lg text-gray-900 font-medium truncate">{item.product?.name || 'Bilinmeyen Ürün'}</h3>
                               <p className="text-xl sm:text-2xl text-green-600 font-semibold mt-1">
                                 {formatPrice(item.price)} TL{' '}
                                 <span className="text-xs sm:text-sm text-gray-500 font-normal">/ {item.unit}</span>

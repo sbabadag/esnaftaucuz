@@ -7,6 +7,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Avatar, AvatarImage, AvatarFallback } from '../../ui/avatar';
 import { productsAPI, pricesAPI } from '../../../services/supabase-api';
 import { useAuth } from '../../../contexts/AuthContext';
+import { supabase } from '../../../lib/supabase';
 import { toast } from 'sonner';
 
 interface Price {
@@ -54,6 +55,76 @@ export default function ProductDetailScreen() {
       loadProductData();
     }
   }, [id, sortBy]);
+
+  // Supabase Realtime subscription for this product's prices
+  useEffect(() => {
+    if (!id) return;
+    
+    console.log('🔴 Setting up Realtime subscription for product prices:', id);
+    
+    const channel = supabase
+      .channel(`product-prices-${id}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*', // INSERT, UPDATE, DELETE
+          schema: 'public',
+          table: 'prices',
+          filter: `product=eq.${id}`, // Only listen to prices for this product
+        },
+        (payload) => {
+          console.log('🔴 Realtime event for product:', payload.eventType, payload);
+          
+          if (payload.eventType === 'INSERT') {
+            const newPrice = payload.new as any;
+            console.log('➕ New price added for product:', newPrice);
+            
+            // Reload prices to get full data with relations
+            loadProductData();
+            
+            toast.success('Yeni fiyat eklendi!', {
+              description: `${newPrice.price} ₺ / ${newPrice.unit}`,
+            });
+          } else if (payload.eventType === 'UPDATE') {
+            const updatedPriceId = payload.new.id || payload.new._id;
+            console.log('🔄 Price updated:', updatedPriceId);
+            
+            // Fetch full price data with relations and reload all data
+            // Realtime payload doesn't include related data (product, location, user)
+            loadProductData();
+            
+            toast.info('Fiyat güncellendi');
+          } else if (payload.eventType === 'DELETE') {
+            const deletedPriceId = payload.old.id || payload.old._id;
+            console.log('🗑️ Price deleted:', deletedPriceId);
+            
+            // Remove from prices list
+            setPrices((prev) =>
+              prev.filter((p) => (p.id || p._id) !== deletedPriceId)
+            );
+            
+            // Recalculate average and cheapest
+            loadProductData();
+            
+            toast.info('Fiyat silindi');
+          }
+        }
+      )
+      .subscribe((status) => {
+        console.log('🔴 Realtime subscription status for product:', status);
+        if (status === 'SUBSCRIBED') {
+          console.log('✅ Realtime subscription active for product:', id);
+        } else if (status === 'CHANNEL_ERROR') {
+          console.error('❌ Realtime subscription error for product:', id);
+        }
+      });
+    
+    // Cleanup subscription on unmount or product change
+    return () => {
+      console.log('🔴 Cleaning up Realtime subscription for product:', id);
+      supabase.removeChannel(channel);
+    };
+  }, [id]);
 
   const loadProductData = async () => {
     try {
