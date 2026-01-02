@@ -962,30 +962,47 @@ export default function ExploreScreen() {
                                 </div>
                                 {/* Konuma Git Button - Extract coordinates from item or location */}
                                 {(() => {
-                                  // Try to get coordinates from multiple sources
-                                  let lat: number | undefined = item.lat;
-                                  let lng: number | undefined = item.lng;
+                                  // Prioritize coordinates strings over item.lat/lng (more reliable)
+                                  let lat: number | undefined;
+                                  let lng: number | undefined;
                                   
-                                  if (!lat || !lng) {
-                                    const coords = item.location?.coordinates;
-                                    if (coords) {
-                                      if ((coords as any).lat !== undefined && (coords as any).lng !== undefined) {
-                                        lat = (coords as any).lat;
-                                        lng = (coords as any).lng;
-                                      } else if ((coords as any).x !== undefined && (coords as any).y !== undefined) {
-                                        lng = (coords as any).x;
-                                        lat = (coords as any).y;
-                                      } else if (typeof coords === 'string') {
-                                        const match = coords.match(/\(([^,]+),([^)]+)\)/);
-                                        if (match) {
-                                          lng = parseFloat(match[1]);
-                                          lat = parseFloat(match[2]);
-                                        }
+                                  // Priority 1: item.coordinates (if directly set on price)
+                                  let coords = (item as any).coordinates;
+                                  if (coords && typeof coords === 'string') {
+                                    const match = coords.match(/\(([^,]+),([^)]+)\)/);
+                                    if (match) {
+                                      lng = parseFloat(match[1]);
+                                      lat = parseFloat(match[2]);
+                                    }
+                                  }
+                                  
+                                  // Priority 2: location.coordinates
+                                  if ((!lat || !lng || isNaN(lat) || isNaN(lng)) && item.location?.coordinates) {
+                                    coords = item.location.coordinates;
+                                    if ((coords as any).lat !== undefined && (coords as any).lng !== undefined) {
+                                      lat = (coords as any).lat;
+                                      lng = (coords as any).lng;
+                                    } else if ((coords as any).x !== undefined && (coords as any).y !== undefined) {
+                                      // Old format: x = lng, y = lat
+                                      lng = (coords as any).x;
+                                      lat = (coords as any).y;
+                                    } else if (typeof coords === 'string') {
+                                      // PostgreSQL POINT string format: (lng,lat)
+                                      const match = coords.match(/\(([^,]+),([^)]+)\)/);
+                                      if (match) {
+                                        lng = parseFloat(match[1]);
+                                        lat = parseFloat(match[2]);
                                       }
                                     }
                                   }
                                   
-                                  return (lat && lng) ? (
+                                  // Fallback to item.lat/lng if coordinates not available
+                                  if (!lat || !lng || isNaN(lat) || isNaN(lng)) {
+                                    lat = item.lat;
+                                    lng = item.lng;
+                                  }
+                                  
+                                  return (lat && lng && !isNaN(lat) && !isNaN(lng)) ? (
                                     <Button
                                       variant="outline"
                                       size="sm"
@@ -1175,30 +1192,37 @@ export default function ExploreScreen() {
                             </div>
                             {/* Konuma Git Button - Extract coordinates from item or location */}
                             {(() => {
-                              // Try to get coordinates from multiple sources
-                              let lat: number | undefined = item.lat;
-                              let lng: number | undefined = item.lng;
+                              // Prioritize location.coordinates over item.lat/lng (more reliable)
+                              let lat: number | undefined;
+                              let lng: number | undefined;
                               
-                              if (!lat || !lng) {
-                                const coords = item.location?.coordinates;
-                                if (coords) {
-                                  if ((coords as any).lat !== undefined && (coords as any).lng !== undefined) {
-                                    lat = (coords as any).lat;
-                                    lng = (coords as any).lng;
-                                  } else if ((coords as any).x !== undefined && (coords as any).y !== undefined) {
-                                    lng = (coords as any).x;
-                                    lat = (coords as any).y;
-                                  } else if (typeof coords === 'string') {
-                                    const match = coords.match(/\(([^,]+),([^)]+)\)/);
-                                    if (match) {
-                                      lng = parseFloat(match[1]);
-                                      lat = parseFloat(match[2]);
-                                    }
+                              // First, try to parse from location.coordinates
+                              const coords = item.location?.coordinates;
+                              if (coords) {
+                                if ((coords as any).lat !== undefined && (coords as any).lng !== undefined) {
+                                  lat = (coords as any).lat;
+                                  lng = (coords as any).lng;
+                                } else if ((coords as any).x !== undefined && (coords as any).y !== undefined) {
+                                  // Old format: x = lng, y = lat
+                                  lng = (coords as any).x;
+                                  lat = (coords as any).y;
+                                } else if (typeof coords === 'string') {
+                                  // PostgreSQL POINT string format: (lng,lat)
+                                  const match = coords.match(/\(([^,]+),([^)]+)\)/);
+                                  if (match) {
+                                    lng = parseFloat(match[1]);
+                                    lat = parseFloat(match[2]);
                                   }
                                 }
                               }
                               
-                              return (lat && lng) ? (
+                              // Fallback to item.lat/lng if coordinates not available
+                              if (!lat || !lng || isNaN(lat) || isNaN(lng)) {
+                                lat = item.lat;
+                                lng = item.lng;
+                              }
+                              
+                              return (lat && lng && !isNaN(lat) && !isNaN(lng)) ? (
                                 <Button
                                   variant="outline"
                                   size="sm"
@@ -1294,30 +1318,37 @@ export default function ExploreScreen() {
                             </div>
                             {/* Konuma Git Button - Extract coordinates from item or location */}
                             {(() => {
-                              // Try to get coordinates from multiple sources
-                              let lat: number | undefined = item.lat;
-                              let lng: number | undefined = item.lng;
+                              // Prioritize location.coordinates over item.lat/lng (more reliable)
+                              let lat: number | undefined;
+                              let lng: number | undefined;
                               
-                              if (!lat || !lng) {
-                                const coords = item.location?.coordinates;
-                                if (coords) {
-                                  if ((coords as any).lat !== undefined && (coords as any).lng !== undefined) {
-                                    lat = (coords as any).lat;
-                                    lng = (coords as any).lng;
-                                  } else if ((coords as any).x !== undefined && (coords as any).y !== undefined) {
-                                    lng = (coords as any).x;
-                                    lat = (coords as any).y;
-                                  } else if (typeof coords === 'string') {
-                                    const match = coords.match(/\(([^,]+),([^)]+)\)/);
-                                    if (match) {
-                                      lng = parseFloat(match[1]);
-                                      lat = parseFloat(match[2]);
-                                    }
+                              // First, try to parse from location.coordinates
+                              const coords = item.location?.coordinates;
+                              if (coords) {
+                                if ((coords as any).lat !== undefined && (coords as any).lng !== undefined) {
+                                  lat = (coords as any).lat;
+                                  lng = (coords as any).lng;
+                                } else if ((coords as any).x !== undefined && (coords as any).y !== undefined) {
+                                  // Old format: x = lng, y = lat
+                                  lng = (coords as any).x;
+                                  lat = (coords as any).y;
+                                } else if (typeof coords === 'string') {
+                                  // PostgreSQL POINT string format: (lng,lat)
+                                  const match = coords.match(/\(([^,]+),([^)]+)\)/);
+                                  if (match) {
+                                    lng = parseFloat(match[1]);
+                                    lat = parseFloat(match[2]);
                                   }
                                 }
                               }
                               
-                              return (lat && lng) ? (
+                              // Fallback to item.lat/lng if coordinates not available
+                              if (!lat || !lng || isNaN(lat) || isNaN(lng)) {
+                                lat = item.lat;
+                                lng = item.lng;
+                              }
+                              
+                              return (lat && lng && !isNaN(lat) && !isNaN(lng)) ? (
                                 <Button
                                   variant="outline"
                                   size="sm"

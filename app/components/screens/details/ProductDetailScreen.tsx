@@ -441,32 +441,72 @@ export default function ProductDetailScreen() {
               location_id: (item as any).location_id, // Check if location_id exists
             });
             
-            const coordinates = item.location?.coordinates;
-            // Extract lat/lng from coordinates or use direct lat/lng
-            let lat: number | undefined = item.lat;
-            let lng: number | undefined = item.lng;
+            // Extract lat/lng from coordinates - prioritize location.coordinates and item.coordinates over item.lat/lng
+            // because coordinates strings are the source of truth from the database
+            let lat: number | undefined;
+            let lng: number | undefined;
             
-            if (!lat || !lng) {
-              if (coordinates) {
-                if ((coordinates as any).lat !== undefined && (coordinates as any).lng !== undefined) {
-                  lat = (coordinates as any).lat;
-                  lng = (coordinates as any).lng;
-                } else if ((coordinates as any).x !== undefined && (coordinates as any).y !== undefined) {
-                  // Old format: x = lng, y = lat
-                  lng = (coordinates as any).x;
-                  lat = (coordinates as any).y;
-                } else if (typeof coordinates === 'string') {
-                  // PostgreSQL POINT string format: (lng,lat)
-                  const match = coordinates.match(/\(([^,]+),([^)]+)\)/);
-                  if (match) {
-                    lng = parseFloat(match[1]);
-                    lat = parseFloat(match[2]);
-                  }
+            // Priority 1: item.coordinates (if directly set on price)
+            let coordinates = (item as any).coordinates;
+            if (coordinates && typeof coordinates === 'string') {
+              const match = coordinates.match(/\(([^,]+),([^)]+)\)/);
+              if (match) {
+                lng = parseFloat(match[1]);
+                lat = parseFloat(match[2]);
+                console.log('📍 Parsed item.coordinates (PostgreSQL POINT):', { raw: coordinates, lat, lng });
+              }
+            }
+            
+            // Priority 2: location.coordinates (most reliable for location data)
+            if ((!lat || !lng || isNaN(lat) || isNaN(lng)) && item.location?.coordinates) {
+              coordinates = item.location.coordinates;
+              if ((coordinates as any).lat !== undefined && (coordinates as any).lng !== undefined) {
+                lat = (coordinates as any).lat;
+                lng = (coordinates as any).lng;
+                console.log('📍 Using coordinates object:', { lat, lng });
+              } else if ((coordinates as any).x !== undefined && (coordinates as any).y !== undefined) {
+                // Old format: x = lng, y = lat
+                lng = (coordinates as any).x;
+                lat = (coordinates as any).y;
+                console.log('📍 Using coordinates x/y format:', { lat, lng });
+              } else if (typeof coordinates === 'string') {
+                // PostgreSQL POINT string format: (lng,lat)
+                const match = coordinates.match(/\(([^,]+),([^)]+)\)/);
+                if (match) {
+                  lng = parseFloat(match[1]);
+                  lat = parseFloat(match[2]);
+                  console.log('📍 Parsed PostgreSQL POINT string:', { 
+                    raw: coordinates, 
+                    match1: match[1], 
+                    match2: match[2], 
+                    lat, 
+                    lng 
+                  });
                 }
               }
             }
             
-            const hasCoordinates = lat !== undefined && lng !== undefined;
+            // Fallback to item.lat/lng if coordinates not available
+            if (!lat || !lng) {
+              lat = item.lat;
+              lng = item.lng;
+              console.log('📍 Using fallback item.lat/lng:', { lat, lng });
+            }
+            
+            const hasCoordinates = lat !== undefined && lng !== undefined && !isNaN(lat) && !isNaN(lng);
+            
+            if (hasCoordinates) {
+              console.log('✅ Final coordinates for navigation:', { lat, lng, productName: item.product?.name || product.name });
+            } else {
+              console.warn('⚠️ No valid coordinates found for item:', { 
+                itemId: item.id || item._id,
+                hasCoordinates: !!coordinates,
+                hasItemLat: item.lat !== undefined,
+                hasItemLng: item.lng !== undefined,
+                coordinatesType: typeof coordinates,
+                coordinatesValue: coordinates
+              });
+            }
             
             // Get location name - check multiple sources
             let locationName = 'Konum bilgisi yok';
