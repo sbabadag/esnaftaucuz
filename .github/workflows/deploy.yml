@@ -37,6 +37,8 @@ jobs:
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL || '' }}
           VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY || '' }}
           NODE_ENV: production
+          # Custom domain kullanılıyorsa base path'i / yap
+          CUSTOM_DOMAIN: ${{ vars.CUSTOM_DOMAIN || 'false' }}
 
       - name: Setup Pages
         uses: actions/configure-pages@v4

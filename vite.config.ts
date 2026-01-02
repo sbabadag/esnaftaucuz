@@ -5,7 +5,8 @@ import react from '@vitejs/plugin-react'
 
 // https://vitejs.dev/config/
 export default defineConfig({
-  base: process.env.GITHUB_ACTIONS ? '/esnaftaucuz/' : '/',
+  // Use /esnaftaucuz/ for GitHub Pages, / for custom domain
+  base: process.env.GITHUB_ACTIONS && !process.env.CUSTOM_DOMAIN ? '/esnaftaucuz/' : '/',
   plugins: [
     // The React and Tailwind plugins are both required for Make, even if
     // Tailwind is not being actively used – do not remove them
@@ -30,6 +31,8 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     emptyOutDir: true,
+    // Copy public directory (CNAME file) to dist
+    copyPublicDir: true,
     // Ensure environment variables are included in build
     define: {
       // Vite automatically includes VITE_* env vars, but we can explicitly define them
@@ -38,4 +41,5 @@ export default defineConfig({
       'import.meta.env.VITE_API_URL': JSON.stringify(process.env.VITE_API_URL || ''),
     },
   },
+  publicDir: 'public',
 })
