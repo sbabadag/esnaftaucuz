@@ -349,13 +349,15 @@ export default function ProductDetailScreen() {
             return (
               <div key={itemId} className="bg-white rounded-lg p-4 border border-gray-200">
                 <div className="flex gap-4">
-                  <div className="w-16 h-16 rounded-lg bg-gray-100 flex items-center justify-center flex-shrink-0 overflow-hidden">
+                  <div className="w-20 h-20 sm:w-24 sm:h-24 rounded-lg bg-gray-100 flex items-center justify-center flex-shrink-0 overflow-hidden border-2 border-gray-200">
                     {item.photo ? (
                       <img 
                         src={item.photo} 
-                        alt={item.product?.name || product.name}
+                        alt={`${item.product?.name || product.name} - Kullanıcı fotoğrafı`}
                         className="w-full h-full object-cover"
+                        title="Kullanıcı tarafından yüklenen fotoğraf"
                         onError={(e) => {
+                          console.error('User photo failed to load:', item.photo);
                           (e.target as HTMLImageElement).style.display = 'none';
                           (e.target as HTMLImageElement).nextElementSibling?.classList.remove('hidden');
                         }}
@@ -364,7 +366,8 @@ export default function ProductDetailScreen() {
                       <img 
                         src={item.product?.image || product.image} 
                         alt={item.product?.name || product.name}
-                        className="w-full h-full object-cover"
+                        className="w-full h-full object-cover opacity-60"
+                        title="Ürün resmi"
                         onError={(e) => {
                           (e.target as HTMLImageElement).style.display = 'none';
                           (e.target as HTMLImageElement).nextElementSibling?.classList.remove('hidden');
@@ -372,6 +375,11 @@ export default function ProductDetailScreen() {
                       />
                     ) : null}
                     <Package className={`w-8 h-8 text-gray-400 ${(item.photo || item.product?.image || product.image) ? 'hidden' : ''}`} />
+                    {item.photo && (
+                      <div className="absolute top-1 right-1 bg-green-600 text-white text-[10px] px-1.5 py-0.5 rounded-full font-semibold">
+                        📷
+                      </div>
+                    )}
                   </div>
                   <div className="flex-1 min-w-0">
                     <div className="flex justify-between items-start mb-3">
