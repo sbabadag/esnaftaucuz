@@ -81,12 +81,10 @@ function AutoOpenPopups({
 
   useEffect(() => {
     if (prices.length > 0) {
-      // Wait for markers to render
+      // Wait for markers to render, then open all popups
       const timer = setTimeout(() => {
-        // Open first 3 popups
-        const popupsToOpen = Math.min(3, prices.length);
-        for (let i = 0; i < popupsToOpen; i++) {
-          const price = prices[i];
+        // Open all popups for cheapest prices
+        prices.forEach((price) => {
           const priceId = price.id || price._id || '';
           const markerRef = markerRefs.current[priceId];
           if (markerRef?.leafletElement) {
@@ -95,7 +93,7 @@ function AutoOpenPopups({
               marker.openPopup();
             }
           }
-        }
+        });
       }, 1500);
 
       return () => clearTimeout(timer);
@@ -459,7 +457,7 @@ export default function MapScreen() {
                   }}
                 >
                   <Popup 
-                    autoClose={true} 
+                    autoClose={false} 
                     closeOnClick={false} 
                     className="custom-popup"
                   >
