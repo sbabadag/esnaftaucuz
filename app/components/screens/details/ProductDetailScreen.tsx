@@ -528,9 +528,9 @@ export default function ProductDetailScreen() {
                       )}
                     </div>
 
-                    <div className="flex items-center gap-2 mb-3">
-                      <div className="flex items-center gap-4 text-sm text-gray-500 flex-1 min-w-0">
-                        <span className="flex items-center gap-1 min-w-0">
+                    <div className="mb-3">
+                      <div className="flex items-center gap-4 text-sm text-gray-500 mb-2">
+                        <span className="flex items-center gap-1 min-w-0 flex-1">
                           <MapPin className="w-4 h-4 flex-shrink-0" />
                           <span className="truncate">{locationName}</span>
                         </span>
@@ -550,7 +550,7 @@ export default function ProductDetailScreen() {
                         <Button
                           variant="outline"
                           size="sm"
-                          className="flex-shrink-0 text-xs h-8 px-3 border-green-600 text-green-600 hover:bg-green-50"
+                          className="w-full sm:w-auto text-xs h-8 px-3 border-green-600 text-green-600 hover:bg-green-50"
                           onClick={() => {
                             navigate(`/app/map?lat=${lat}&lng=${lng}&focus=true`);
                           }}

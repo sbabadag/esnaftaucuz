@@ -923,9 +923,9 @@ export default function ExploreScreen() {
                                   <Badge className="bg-green-600 ml-2 flex-shrink-0 text-xs">BUGÜN</Badge>
                                 )}
                               </div>
-                              <div className="flex items-center gap-2 mb-1.5 sm:mb-2">
-                                <div className="flex items-center gap-3 sm:gap-4 text-xs sm:text-sm text-gray-500 flex-1 min-w-0">
-                                  <span className="flex items-center gap-1 min-w-0">
+                              <div className="mb-1.5 sm:mb-2">
+                                <div className="flex items-center gap-3 sm:gap-4 text-xs sm:text-sm text-gray-500 mb-1.5 sm:mb-2">
+                                  <span className="flex items-center gap-1 min-w-0 flex-1">
                                     <MapPin className="w-3 h-3 sm:w-4 sm:h-4 flex-shrink-0" />
                                     <span className="truncate">{item.location?.name || 'Konum bilgisi yok'}</span>
                                   </span>
@@ -963,7 +963,7 @@ export default function ExploreScreen() {
                                     <Button
                                       variant="outline"
                                       size="sm"
-                                      className="flex-shrink-0 text-xs h-7 px-2 border-green-600 text-green-600 hover:bg-green-50"
+                                      className="w-full sm:w-auto text-xs h-7 px-2 border-green-600 text-green-600 hover:bg-green-50"
                                       onClick={(e) => {
                                         e.stopPropagation(); // Prevent card click
                                         navigate(`/app/map?lat=${lat}&lng=${lng}&focus=true`);
@@ -1134,9 +1134,9 @@ export default function ExploreScreen() {
                               <Badge className="bg-green-600 ml-2 flex-shrink-0 text-xs">BUGÜN</Badge>
                             )}
                           </div>
-                          <div className="flex items-center gap-2 mb-1.5 sm:mb-2">
-                            <div className="flex items-center gap-3 sm:gap-4 text-xs sm:text-sm text-gray-500 flex-1 min-w-0">
-                              <span className="flex items-center gap-1 min-w-0">
+                          <div className="mb-1.5 sm:mb-2">
+                            <div className="flex items-center gap-3 sm:gap-4 text-xs sm:text-sm text-gray-500 mb-1.5 sm:mb-2">
+                              <span className="flex items-center gap-1 min-w-0 flex-1">
                                 <MapPin className="w-3 h-3 sm:w-4 sm:h-4 flex-shrink-0" />
                                 <span className="truncate">{item.location?.name || 'Konum bilgisi yok'}</span>
                               </span>
@@ -1174,7 +1174,7 @@ export default function ExploreScreen() {
                                 <Button
                                   variant="outline"
                                   size="sm"
-                                  className="flex-shrink-0 text-xs h-7 px-2 border-green-600 text-green-600 hover:bg-green-50"
+                                  className="w-full sm:w-auto text-xs h-7 px-2 border-green-600 text-green-600 hover:bg-green-50"
                                   onClick={(e) => {
                                     e.stopPropagation(); // Prevent card click
                                     navigate(`/app/map?lat=${lat}&lng=${lng}&focus=true`);
@@ -1252,9 +1252,9 @@ export default function ExploreScreen() {
                               <Badge className="bg-green-600 ml-2 flex-shrink-0 text-xs">BUGÜN</Badge>
                             )}
                           </div>
-                          <div className="flex items-center gap-2 mb-1.5 sm:mb-2">
-                            <div className="flex items-center gap-3 sm:gap-4 text-xs sm:text-sm text-gray-500 flex-1 min-w-0">
-                              <span className="flex items-center gap-1 min-w-0">
+                          <div className="mb-1.5 sm:mb-2">
+                            <div className="flex items-center gap-3 sm:gap-4 text-xs sm:text-sm text-gray-500 mb-1.5 sm:mb-2">
+                              <span className="flex items-center gap-1 min-w-0 flex-1">
                                 <MapPin className="w-3 h-3 sm:w-4 sm:h-4 flex-shrink-0" />
                                 <span className="truncate">{item.location?.name || 'Konum bilgisi yok'}</span>
                               </span>
@@ -1292,7 +1292,7 @@ export default function ExploreScreen() {
                                 <Button
                                   variant="outline"
                                   size="sm"
-                                  className="flex-shrink-0 text-xs h-7 px-2 border-green-600 text-green-600 hover:bg-green-50"
+                                  className="w-full sm:w-auto text-xs h-7 px-2 border-green-600 text-green-600 hover:bg-green-50"
                                   onClick={(e) => {
                                     e.stopPropagation(); // Prevent card click
                                     navigate(`/app/map?lat=${lat}&lng=${lng}&focus=true`);
