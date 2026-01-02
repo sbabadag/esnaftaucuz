@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState, useRef, useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { MapPin, Navigation } from 'lucide-react';
 import { Badge } from '../../ui/badge';
@@ -11,6 +11,7 @@ import { useGeolocation } from '../../../../src/hooks/useGeolocation';
 import { useAuth } from '../../../contexts/AuthContext';
 import { toast } from 'sonner';
 import { searchNearbyPlaces } from '../../../utils/places';
+import { isWeb } from '../../../../src/utils/capacitor';
 
 // Fix for default marker icons in React-Leaflet
 delete (L.Icon.Default.prototype as any)._getIconUrl;
@@ -147,7 +148,7 @@ function MapCenter({ center, zoom }: { center: [number, number]; zoom?: number }
   return null;
 }
 
-// Component to handle auto-opening popups (LIMITED for performance)
+// Component to handle auto-opening popups (LIMITED for performance, disabled on web)
 function AutoOpenPopups({ 
   prices, 
   markerRefs, 
@@ -158,6 +159,7 @@ function AutoOpenPopups({
   mapRef: React.MutableRefObject<L.Map | null>;
 }) {
   const map = useMap();
+  const isWebPlatform = isWeb();
   
   useEffect(() => {
     if (mapRef.current) {
@@ -166,6 +168,11 @@ function AutoOpenPopups({
   }, [map, mapRef]);
 
   useEffect(() => {
+    // Disable auto-open popups on web for better performance
+    if (isWebPlatform) {
+      return;
+    }
+    
     if (prices.length > 0 && mapRef.current) {
       // Wait for markers to render, then open LIMITED popups (max 5 for performance)
       const timer = setTimeout(() => {
@@ -210,7 +217,7 @@ function AutoOpenPopups({
 
       return () => clearTimeout(timer);
     }
-  }, [prices, markerRefs]);
+  }, [prices, markerRefs, isWebPlatform]);
 
   return null;
 }
@@ -378,9 +385,10 @@ export default function MapScreen() {
     try {
       setIsLoading(true);
       setMapError(null); // Clear any previous errors
-      // Load prices to find cheapest per product (LIMITED for performance)
+      // Load prices to find cheapest per product (platform-specific limits)
+      const isWebPlatform = isWeb();
       const data = await pricesAPI.getAll({
-        limit: 200, // Reduced from 500 to prevent ANR
+        limit: isWebPlatform ? 500 : 200, // Web can handle more, mobile limited for ANR prevention
         sort: 'cheapest', // Sort by cheapest first
       });
       
@@ -503,19 +511,21 @@ export default function MapScreen() {
                             (user as any)?.preferences?.searchRadius || 
                             15;
       const searchRadiusMeters = searchRadiusKm * 1000;
+      const isWebPlatform = isWeb();
       
       const result = await searchNearbyPlaces(
         latitude,
         longitude,
-        Math.min(searchRadiusMeters, 3000), // Reduced to 3km max for performance
+        Math.min(searchRadiusMeters, isWebPlatform ? 5000 : 3000), // Web can search wider area
         ['store', 'shop', 'establishment', 'supermarket', 'grocery_or_supermarket', 'bakery', 'butcher', 'pharmacy']
       );
       
       if (result.success && result.places) {
-        // Limit businesses to 20 for performance (prevent ANR)
-        const limitedBusinesses = result.places.slice(0, 20);
+        // Platform-specific limits for performance
+        const maxBusinesses = isWebPlatform ? 50 : 20;
+        const limitedBusinesses = result.places.slice(0, maxBusinesses);
         setBusinesses(limitedBusinesses);
-        console.log(`✅ Loaded ${limitedBusinesses.length} nearby businesses (limited for performance)`);
+        console.log(`✅ Loaded ${limitedBusinesses.length} nearby businesses (platform: ${isWebPlatform ? 'web' : 'mobile'})`);
       } else {
         console.warn('⚠️ Failed to load businesses:', result.error);
       }
@@ -716,8 +726,11 @@ export default function MapScreen() {
               }
             })()}
 
-            {/* Price Markers - Only cheapest prices per product (LIMITED for performance) */}
-            {prices.slice(0, 50).map((price) => { // Limit to 50 markers max to prevent ANR
+            {/* Price Markers - Only cheapest prices per product (platform-specific limits) */}
+            {(() => {
+              const isWebPlatform = isWeb();
+              const maxMarkers = isWebPlatform ? 200 : 50; // Web can handle more markers
+              return prices.slice(0, maxMarkers).map((price) => {
               // Validate coordinates before rendering marker
               if (!price.lat || !price.lng) return null;
               
@@ -834,10 +847,14 @@ export default function MapScreen() {
                   </Popup>
                 </Marker>
               );
-            })}
+              });
+            })()}
 
-            {/* Business/Place Markers (LIMITED for performance) */}
-            {showBusinesses && businesses.slice(0, 20).map((business) => { // Limit to 20 businesses max
+            {/* Business/Place Markers (platform-specific limits) */}
+            {showBusinesses && (() => {
+              const isWebPlatform = isWeb();
+              const maxBusinesses = isWebPlatform ? 50 : 20; // Web can handle more businesses
+              return businesses.slice(0, maxBusinesses).map((business) => {
               const lat = business.geometry?.location?.lat;
               const lng = business.geometry?.location?.lng;
               
@@ -933,7 +950,8 @@ export default function MapScreen() {
                   </Popup>
                 </Marker>
               );
-            })}
+              });
+            })()}
 
             <MapCenter center={mapCenter} zoom={mapZoom} />
           </MapContainer>
