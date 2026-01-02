@@ -75,11 +75,19 @@ export default function ProfileScreen() {
         {/* Stats */}
         <div className="grid grid-cols-3 gap-4">
           <div className="text-center">
-            <div className="text-2xl text-green-600">{user?.contributions || 0}</div>
+            <div className="text-2xl text-green-600">
+              {typeof user?.contributions === 'object' 
+                ? user.contributions?.shares || 0 
+                : user?.contributions || 0}
+            </div>
             <div className="text-sm text-gray-600">Paylaşım</div>
           </div>
           <div className="text-center">
-            <div className="text-2xl text-green-600">-</div>
+            <div className="text-2xl text-green-600">
+              {typeof user?.contributions === 'object' 
+                ? user.contributions?.verifications || 0 
+                : 0}
+            </div>
             <div className="text-sm text-gray-600">Doğrulama</div>
           </div>
           <div className="text-center">

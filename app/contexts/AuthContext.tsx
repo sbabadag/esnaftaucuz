@@ -7,7 +7,7 @@ interface User {
   name: string;
   email: string;
   avatar?: string;
-  level: string;
+  level: number | string;
   points: number;
   contributions: {
     shares: number;
@@ -74,7 +74,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             avatar: userMetadata.avatar_url || userMetadata.picture,
             level: 1,
             points: 0,
-            contributions: 0,
+            contributions: {
+              shares: 0,
+              verifications: 0,
+            },
             isGuest: false,
           };
           setUser(fallbackUser);
@@ -165,7 +168,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                 avatar: userMetadata.avatar_url || userMetadata.picture,
                 level: 1,
                 points: 0,
-                contributions: 0,
+                contributions: {
+              shares: 0,
+              verifications: 0,
+            },
                 isGuest: false,
               };
               profile = fallbackUser;
@@ -184,7 +190,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               avatar: userMetadata.avatar_url || userMetadata.picture,
               level: 1,
               points: 0,
-              contributions: 0,
+              contributions: {
+              shares: 0,
+              verifications: 0,
+            },
               isGuest: false,
             };
             profile = fallbackUser;
@@ -210,7 +219,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             avatar: userMetadata.avatar_url || userMetadata.picture,
             level: 1,
             points: 0,
-            contributions: 0,
+            contributions: {
+              shares: 0,
+              verifications: 0,
+            },
             isGuest: false,
           };
           setUser(fallbackUser);
@@ -239,7 +251,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             avatar: userMetadata.avatar_url || userMetadata.picture,
             level: 1,
             points: 0,
-            contributions: 0,
+            contributions: {
+              shares: 0,
+              verifications: 0,
+            },
             isGuest: false,
           };
           setUser(fallbackUser);
