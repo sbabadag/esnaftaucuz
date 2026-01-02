@@ -9,6 +9,7 @@ import { toast } from 'sonner';
 import { productsAPI, locationsAPI, pricesAPI } from '../../../services/supabase-api';
 import { useAuth } from '../../../contexts/AuthContext';
 import { useGeolocation } from '../../../../src/hooks/useGeolocation';
+import { forwardGeocode } from '../../../utils/geocoding';
 
 const steps = ['product', 'price', 'location', 'photo', 'confirm'];
 
@@ -282,22 +283,72 @@ export default function AddPriceScreen() {
 
   const createLocation = async (name: string, lat?: number, lng?: number) => {
     try {
+      let finalLat = lat;
+      let finalLng = lng;
+      
+      // If coordinates are not provided, try to geocode the address text
+      if (!finalLat || !finalLng) {
+        console.log('📍 Coordinates not provided, attempting forward geocoding for:', name);
+        toast.info('Konum tespit ediliyor...', { duration: 2000 });
+        
+        try {
+          const geocodeResult = await forwardGeocode(name);
+          
+          if (geocodeResult.success && geocodeResult.lat && geocodeResult.lng) {
+            finalLat = geocodeResult.lat;
+            finalLng = geocodeResult.lng;
+            console.log('✅ Forward geocoding successful:', { lat: finalLat, lng: finalLng, address: geocodeResult.address });
+            
+            // Update location name with the formatted address if available
+            if (geocodeResult.address && geocodeResult.address !== name) {
+              // Use the formatted address from Google Maps if it's different
+              // But keep the user's input as the primary name
+              console.log('📍 Formatted address from Google Maps:', geocodeResult.address);
+            }
+          } else {
+            console.warn('⚠️ Forward geocoding failed:', geocodeResult.error);
+            toast.warning('Konum tespit edilemedi, varsayılan konum kullanılıyor', {
+              description: geocodeResult.error || 'Koordinatlar bulunamadı',
+              duration: 3000,
+            });
+            // Use default coordinates (Konya center)
+            finalLat = 37.8667;
+            finalLng = 32.4833;
+          }
+        } catch (geocodeError: any) {
+          console.error('❌ Forward geocoding error:', geocodeError);
+          toast.warning('Konum tespit edilemedi, varsayılan konum kullanılıyor', {
+            description: geocodeError.message || 'Geocoding hatası',
+            duration: 3000,
+          });
+          // Use default coordinates (Konya center)
+          finalLat = 37.8667;
+          finalLng = 32.4833;
+        }
+      }
+      
+      console.log('📍 Creating location with coordinates:', { name, lat: finalLat, lng: finalLng });
+      
       const location = await locationsAPI.create({
         name,
         type: 'diğer',
-        lat: lat || 37.8667,
-        lng: lng || 32.4833,
+        lat: finalLat!,
+        lng: finalLng!,
       });
+      
       setFormData({
         ...formData,
         locationId: location.id || location._id, // Support both formats
         locationName: location.name,
-        lat: lat || null,
-        lng: lng || null,
+        lat: finalLat || null,
+        lng: finalLng || null,
       });
+      
+      toast.success('Konum oluşturuldu');
       setCurrentStep(currentStep + 1);
-    } catch (error) {
-      toast.error('Konum oluşturulamadı');
+    } catch (error: any) {
+      console.error('❌ Create location error:', error);
+      toast.error(error.message || 'Konum oluşturulamadı');
     }
   };
 
