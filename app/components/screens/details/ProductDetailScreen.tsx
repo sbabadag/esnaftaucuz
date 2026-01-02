@@ -232,16 +232,47 @@ export default function ProductDetailScreen() {
       </div>
 
       {/* All Product Photos Section */}
-      {prices.some(p => p.photo) && (
-        <div className="bg-white p-4 border-b border-gray-200">
-          <h2 className="text-lg font-semibold mb-3">
-            Bu Ürün İçin Eklenen Tüm Resimler ({prices.filter(p => p.photo).length})
-          </h2>
-          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-            {prices
-              .filter(p => p.photo)
-              .map((item) => {
+      {prices.some(p => p.photo) && (() => {
+        // Get photos sorted by current sort criteria
+        const photosWithPrices = prices.filter(p => p.photo);
+        let sortedPhotos = [...photosWithPrices];
+        
+        // Sort photos based on current sortBy selection
+        switch (sortBy) {
+          case 'cheapest':
+            sortedPhotos.sort((a, b) => a.price - b.price);
+            break;
+          case 'newest':
+            sortedPhotos.sort((a, b) => {
+              const dateA = new Date(a.created_at || a.createdAt || 0).getTime();
+              const dateB = new Date(b.created_at || b.createdAt || 0).getTime();
+              return dateB - dateA; // Newest first
+            });
+            break;
+          case 'verified':
+            sortedPhotos.sort((a, b) => {
+              const aVerified = a.is_verified || a.isVerified ? 1 : 0;
+              const bVerified = b.is_verified || b.isVerified ? 1 : 0;
+              if (aVerified !== bVerified) {
+                return bVerified - aVerified; // Verified first
+              }
+              // If both have same verification status, sort by newest
+              const dateA = new Date(a.created_at || a.createdAt || 0).getTime();
+              const dateB = new Date(b.created_at || b.createdAt || 0).getTime();
+              return dateB - dateA;
+            });
+            break;
+        }
+        
+        return (
+          <div className="bg-white p-4 border-b border-gray-200">
+            <h2 className="text-lg font-semibold mb-3">
+              Bu Ürün İçin Eklenen Tüm Resimler ({photosWithPrices.length})
+            </h2>
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+              {sortedPhotos.map((item) => {
                 const itemId = item.id || item._id || '';
+                const isVerified = item.is_verified || item.isVerified || false;
                 return (
                   <div key={itemId} className="relative group">
                     <img
@@ -253,15 +284,23 @@ export default function ProductDetailScreen() {
                       }}
                     />
                     <div className="absolute bottom-0 left-0 right-0 bg-black bg-opacity-50 text-white text-xs p-2 rounded-b-lg">
-                      <div className="font-semibold">{formatPrice(item.price)} ₺</div>
-                      <div className="text-xs opacity-90">{item.location?.name}</div>
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <div className="font-semibold">{formatPrice(item.price)} ₺</div>
+                          <div className="text-xs opacity-90">{item.location?.name}</div>
+                        </div>
+                        {isVerified && (
+                          <CheckCircle2 className="w-4 h-4 text-green-400 flex-shrink-0" />
+                        )}
+                      </div>
                     </div>
                   </div>
                 );
               })}
+            </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* Filters */}
       <div className="bg-white p-4 border-b border-gray-200">
