@@ -607,6 +607,12 @@ export const pricesAPI = {
 
       // Direct query (timeout handled by Supabase client's custom fetch)
       const { data, error } = await query;
+      
+      // Debug: Log raw data to see location structure
+      if (data && data.length > 0) {
+        console.log('🔍 Raw price data sample (first item):', JSON.stringify(data[0], null, 2));
+        console.log('📍 Location in raw data:', data[0].location);
+      }
 
       if (error) {
         console.error('❌ Supabase query error:', error);
@@ -687,6 +693,18 @@ export const pricesAPI = {
       }
 
       console.log('✅ Prices fetched:', filteredData?.length || 0);
+      
+      // Debug: Log location data for first few prices
+      if (filteredData.length > 0) {
+        console.log('📍 Sample price location data:', filteredData.slice(0, 3).map((p: any) => ({
+          id: p.id,
+          location: p.location,
+          locationName: p.location?.name,
+          locationId: p.location?.id,
+          hasLocation: !!p.location,
+        })));
+      }
+      
       return filteredData;
     } catch (error: any) {
       console.error('❌ Get prices error:', error);

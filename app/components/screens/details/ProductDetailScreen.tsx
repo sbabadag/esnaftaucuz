@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, MapPin, Clock, CheckCircle2, ThumbsUp, Flag, Package } from 'lucide-react';
+import { ArrowLeft, MapPin, Clock, CheckCircle2, ThumbsUp, Flag, Package, Navigation } from 'lucide-react';
 import { Button } from '../../ui/button';
 import { Badge } from '../../ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../ui/select';
@@ -37,6 +37,8 @@ interface Price {
   _id?: string;
   createdAt?: string;
   isVerified?: boolean;
+  lat?: number;
+  lng?: number;
 }
 
 export default function ProductDetailScreen() {
@@ -136,6 +138,19 @@ export default function ProductDetailScreen() {
 
       // Load prices
       const priceData = await pricesAPI.getByProduct(id!, sortBy);
+      console.log('📊 ProductDetailScreen - Prices loaded:', priceData);
+      console.log('📍 Location data check:', priceData.map((p: any) => ({
+        id: p.id,
+        location: p.location,
+        locationName: p.location?.name,
+        locationCity: p.location?.city,
+        locationDistrict: p.location?.district,
+        locationId: p.location?.id,
+        hasLocation: !!p.location,
+        lat: p.lat,
+        lng: p.lng,
+        locationCoordinates: p.location?.coordinates,
+      })));
       setPrices(priceData);
 
       // Calculate average price
@@ -411,11 +426,67 @@ export default function ProductDetailScreen() {
             const createdAt = item.created_at || item.createdAt || '';
             const isVerified = item.is_verified || item.isVerified || false;
             const userId = item.user?.id || item.user?._id || '';
+            // Debug: Log location data
+            console.log('🔍 Price item location check:', {
+              itemId,
+              location: item.location,
+              locationName: item.location?.name,
+              locationId: item.location?.id,
+              locationCity: item.location?.city,
+              locationDistrict: item.location?.district,
+              locationType: item.location?.type,
+              coordinates: item.location?.coordinates,
+              directLat: item.lat,
+              directLng: item.lng,
+              location_id: (item as any).location_id, // Check if location_id exists
+            });
+            
             const coordinates = item.location?.coordinates;
-            const hasCoordinates = coordinates && (
-              (coordinates as any).x !== undefined || 
-              (coordinates as any).lat !== undefined
-            );
+            // Extract lat/lng from coordinates or use direct lat/lng
+            let lat: number | undefined = item.lat;
+            let lng: number | undefined = item.lng;
+            
+            if (!lat || !lng) {
+              if (coordinates) {
+                if ((coordinates as any).lat !== undefined && (coordinates as any).lng !== undefined) {
+                  lat = (coordinates as any).lat;
+                  lng = (coordinates as any).lng;
+                } else if ((coordinates as any).x !== undefined && (coordinates as any).y !== undefined) {
+                  // Old format: x = lng, y = lat
+                  lng = (coordinates as any).x;
+                  lat = (coordinates as any).y;
+                } else if (typeof coordinates === 'string') {
+                  // PostgreSQL POINT string format: (lng,lat)
+                  const match = coordinates.match(/\(([^,]+),([^)]+)\)/);
+                  if (match) {
+                    lng = parseFloat(match[1]);
+                    lat = parseFloat(match[2]);
+                  }
+                }
+              }
+            }
+            
+            const hasCoordinates = lat !== undefined && lng !== undefined;
+            
+            // Get location name - check multiple sources
+            let locationName = 'Konum bilgisi yok';
+            if (item.location) {
+              // Check if location object exists
+              if (item.location.name && item.location.name.trim() !== '') {
+                locationName = item.location.name;
+              } else if (item.location.city || item.location.district) {
+                locationName = [item.location.city, item.location.district].filter(Boolean).join(' / ') || 'Konum bilgisi yok';
+              } else if (item.location.type) {
+                locationName = item.location.type;
+              } else if (item.location.id) {
+                locationName = `Konum ID: ${item.location.id}`;
+              }
+            } else if ((item as any).location_id) {
+              // If location object is missing but location_id exists, show location_id
+              locationName = `Konum ID: ${(item as any).location_id}`;
+            }
+            
+            console.log('📍 Final location name:', locationName);
             
             return (
               <div key={itemId} className="bg-white rounded-lg p-4 border border-gray-200">
@@ -448,7 +519,7 @@ export default function ProductDetailScreen() {
                           {formatPrice(item.price)} TL{' '}
                           <span className="text-sm text-gray-500 font-normal">/ {item.unit}</span>
                         </div>
-                        <div className="text-sm text-gray-600 mt-1">{item.location?.name || 'Bilinmeyen konum'}</div>
+                        <div className="text-sm text-gray-600 mt-1">{locationName}</div>
                       </div>
                       {isOld(createdAt) ? (
                         <Badge variant="secondary" className="ml-2 flex-shrink-0">Eski fiyat</Badge>
@@ -457,20 +528,36 @@ export default function ProductDetailScreen() {
                       )}
                     </div>
 
-                    <div className="flex items-center gap-4 text-sm text-gray-500 mb-3">
-                      <span className="flex items-center gap-1">
-                        <MapPin className="w-4 h-4" />
-                        {hasCoordinates ? 'Konum mevcut' : 'Konum yok'}
-                      </span>
-                      <span className="flex items-center gap-1">
-                        <Clock className="w-4 h-4" />
-                        {formatTimeAgo(createdAt)}
-                      </span>
-                      {isVerified && (
-                        <span className="flex items-center gap-1 text-green-600">
-                          <CheckCircle2 className="w-4 h-4" />
-                          Doğrulanmış
+                    <div className="flex items-center justify-between gap-2 mb-3">
+                      <div className="flex items-center gap-4 text-sm text-gray-500">
+                        <span className="flex items-center gap-1">
+                          <MapPin className="w-4 h-4" />
+                          <span>{locationName}</span>
                         </span>
+                        <span className="flex items-center gap-1">
+                          <Clock className="w-4 h-4" />
+                          {formatTimeAgo(createdAt)}
+                        </span>
+                        {isVerified && (
+                          <span className="flex items-center gap-1 text-green-600">
+                            <CheckCircle2 className="w-4 h-4" />
+                            Doğrulanmış
+                          </span>
+                        )}
+                      </div>
+                      {/* Konuma Git Button */}
+                      {hasCoordinates && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="flex-shrink-0 text-xs h-8 px-3 border-green-600 text-green-600 hover:bg-green-50"
+                          onClick={() => {
+                            navigate(`/app/map?lat=${lat}&lng=${lng}&focus=true`);
+                          }}
+                        >
+                          <Navigation className="w-3 h-3 mr-1" />
+                          Konuma Git
+                        </Button>
                       )}
                     </div>
 

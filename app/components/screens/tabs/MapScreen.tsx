@@ -1,4 +1,5 @@
 import { useEffect, useState, useRef } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { MapPin, Navigation } from 'lucide-react';
 import { Badge } from '../../ui/badge';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '../../ui/sheet';
@@ -48,11 +49,15 @@ const createPriceIcon = (price: string) => {
 };
 
 // Component to center map on user location
-function MapCenter({ center }: { center: [number, number] }) {
+function MapCenter({ center, zoom }: { center: [number, number]; zoom?: number }) {
   const map = useMap();
   useEffect(() => {
-    map.setView(center, map.getZoom());
-  }, [center, map]);
+    if (zoom !== undefined) {
+      map.setView(center, zoom);
+    } else {
+      map.setView(center, map.getZoom());
+    }
+  }, [center, zoom, map]);
   return null;
 }
 
@@ -139,6 +144,7 @@ interface Price {
 export default function MapScreen() {
   const { getCurrentPosition } = useGeolocation();
   const { user } = useAuth();
+  const [searchParams] = useSearchParams();
   const [userLocation, setUserLocation] = useState<[number, number] | null>(null);
   const [prices, setPrices] = useState<Price[]>([]);
   const [selectedPrice, setSelectedPrice] = useState<Price | null>(null);
@@ -149,6 +155,26 @@ export default function MapScreen() {
   const [mapZoom, setMapZoom] = useState(13);
   const markerRefs = useRef<Record<string, any>>({});
   const mapRef = useRef<L.Map | null>(null);
+
+  // Check for focus location from URL params
+  useEffect(() => {
+    const focusLat = searchParams.get('lat');
+    const focusLng = searchParams.get('lng');
+    const shouldFocus = searchParams.get('focus') === 'true';
+    
+    if (shouldFocus && focusLat && focusLng) {
+      const lat = parseFloat(focusLat);
+      const lng = parseFloat(focusLng);
+      
+      if (!isNaN(lat) && !isNaN(lng)) {
+        console.log('📍 Focusing on location from URL:', lat, lng);
+        setMapCenter([lat, lng]);
+        setMapZoom(16); // Zoom in closer for focus
+        // Clear URL params after focusing
+        window.history.replaceState({}, '', '/app/map');
+      }
+    }
+  }, [searchParams]);
 
   useEffect(() => {
     loadUserLocation();
@@ -501,7 +527,7 @@ export default function MapScreen() {
               );
             })}
 
-            <MapCenter center={mapCenter} />
+            <MapCenter center={mapCenter} zoom={mapZoom} />
           </MapContainer>
         )}
       </div>

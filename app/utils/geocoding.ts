@@ -18,7 +18,8 @@ function isMobile(): boolean {
 }
 
 /**
- * Reverse geocoding using Google Maps API (primary) or OpenStreetMap (fallback)
+ * Reverse geocoding using Google Maps API ONLY
+ * OpenStreetMap fallback removed - Google Maps API key is required
  */
 export async function reverseGeocode(
   latitude: number,
@@ -26,30 +27,29 @@ export async function reverseGeocode(
 ): Promise<GeocodingResult> {
   const googleApiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
   
-  // Try Google Maps first if API key is available
-  if (googleApiKey) {
-    try {
-      const result = await reverseGeocodeGoogle(latitude, longitude, googleApiKey);
-      if (result.success) {
-        return result;
-      }
-      console.log('⚠️ Google Maps geocoding failed, trying OpenStreetMap...');
-    } catch (error) {
-      console.error('Google Maps geocoding error:', error);
-      console.log('⚠️ Falling back to OpenStreetMap...');
-    }
-  } else {
-    console.log('⚠️ Google Maps API key not found, using OpenStreetMap...');
-  }
-  
-  // Fallback to OpenStreetMap (works better on web, may have CORS issues on mobile)
-  try {
-    return await reverseGeocodeOSM(latitude, longitude);
-  } catch (error) {
-    console.error('OpenStreetMap geocoding error:', error);
+  // Google Maps API key is required
+  if (!googleApiKey || googleApiKey.trim() === '') {
+    console.error('❌ Google Maps API key not found! Please add VITE_GOOGLE_MAPS_API_KEY to .env file');
     return {
       success: false,
-      error: 'Adres bulunamadı',
+      error: 'Google Maps API key bulunamadı. Lütfen .env dosyasına VITE_GOOGLE_MAPS_API_KEY ekleyin.',
+    };
+  }
+  
+  // Use Google Maps API
+  try {
+    const result = await reverseGeocodeGoogle(latitude, longitude, googleApiKey);
+    if (result.success) {
+      console.log('✅ Google Maps geocoding successful');
+      return result;
+    }
+    console.error('❌ Google Maps geocoding failed:', result.error);
+    return result;
+  } catch (error: any) {
+    console.error('❌ Google Maps geocoding error:', error);
+    return {
+      success: false,
+      error: error.message || 'Google Maps API hatası',
     };
   }
 }

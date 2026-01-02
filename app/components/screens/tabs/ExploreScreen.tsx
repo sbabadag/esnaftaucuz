@@ -46,6 +46,8 @@ interface Price {
   _id?: string;
   createdAt?: string;
   isVerified?: boolean;
+  lat?: number;
+  lng?: number;
 }
 
 interface Product {
@@ -914,15 +916,57 @@ export default function ExploreScreen() {
                                   <Badge className="bg-green-600 ml-2 flex-shrink-0 text-xs">BUGÜN</Badge>
                                 )}
                               </div>
-                              <div className="flex items-center gap-3 sm:gap-4 text-xs sm:text-sm text-gray-500">
-                                <span className="flex items-center gap-1">
-                                  <MapPin className="w-3 h-3 sm:w-4 sm:h-4" />
-                                  <span className="truncate">{item.location.name}</span>
-                                </span>
-                                <span className="flex items-center gap-1">
-                                  <Clock className="w-3 h-3 sm:w-4 sm:h-4" />
-                                  {formatTimeAgo(item.created_at || item.createdAt || '')}
-                                </span>
+                              <div className="flex items-center justify-between gap-2 mb-1.5 sm:mb-2">
+                                <div className="flex items-center gap-3 sm:gap-4 text-xs sm:text-sm text-gray-500">
+                                  <span className="flex items-center gap-1">
+                                    <MapPin className="w-3 h-3 sm:w-4 sm:h-4" />
+                                    <span className="truncate">{item.location?.name || 'Konum bilgisi yok'}</span>
+                                  </span>
+                                  <span className="flex items-center gap-1">
+                                    <Clock className="w-3 h-3 sm:w-4 sm:h-4" />
+                                    {formatTimeAgo(item.created_at || item.createdAt || '')}
+                                  </span>
+                                </div>
+                                {/* Konuma Git Button - Extract coordinates from item or location */}
+                                {(() => {
+                                  // Try to get coordinates from multiple sources
+                                  let lat: number | undefined = item.lat;
+                                  let lng: number | undefined = item.lng;
+                                  
+                                  if (!lat || !lng) {
+                                    const coords = item.location?.coordinates;
+                                    if (coords) {
+                                      if ((coords as any).lat !== undefined && (coords as any).lng !== undefined) {
+                                        lat = (coords as any).lat;
+                                        lng = (coords as any).lng;
+                                      } else if ((coords as any).x !== undefined && (coords as any).y !== undefined) {
+                                        lng = (coords as any).x;
+                                        lat = (coords as any).y;
+                                      } else if (typeof coords === 'string') {
+                                        const match = coords.match(/\(([^,]+),([^)]+)\)/);
+                                        if (match) {
+                                          lng = parseFloat(match[1]);
+                                          lat = parseFloat(match[2]);
+                                        }
+                                      }
+                                    }
+                                  }
+                                  
+                                  return (lat && lng) ? (
+                                    <Button
+                                      variant="outline"
+                                      size="sm"
+                                      className="flex-shrink-0 text-xs h-7 px-2 border-green-600 text-green-600 hover:bg-green-50"
+                                      onClick={(e) => {
+                                        e.stopPropagation(); // Prevent card click
+                                        navigate(`/app/map?lat=${lat}&lng=${lng}&focus=true`);
+                                      }}
+                                    >
+                                      <Navigation className="w-3 h-3 mr-1" />
+                                      Konuma Git
+                                    </Button>
+                                  ) : null;
+                                })()}
                               </div>
                               {item.user && (
                                 <div className="flex items-center gap-2 mt-1.5 sm:mt-2">
@@ -1083,15 +1127,57 @@ export default function ExploreScreen() {
                               <Badge className="bg-green-600 ml-2 flex-shrink-0 text-xs">BUGÜN</Badge>
                             )}
                           </div>
-                          <div className="flex items-center gap-3 sm:gap-4 text-xs sm:text-sm text-gray-500">
-                            <span className="flex items-center gap-1">
-                              <MapPin className="w-3 h-3 sm:w-4 sm:h-4" />
-                              <span className="truncate">{item.location.name}</span>
-                            </span>
-                            <span className="flex items-center gap-1">
-                              <Clock className="w-3 h-3 sm:w-4 sm:h-4" />
-                              {formatTimeAgo(item.created_at || item.createdAt || '')}
-                            </span>
+                          <div className="flex items-center justify-between gap-2 mb-1.5 sm:mb-2">
+                            <div className="flex items-center gap-3 sm:gap-4 text-xs sm:text-sm text-gray-500">
+                              <span className="flex items-center gap-1">
+                                <MapPin className="w-3 h-3 sm:w-4 sm:h-4" />
+                                <span className="truncate">{item.location?.name || 'Konum bilgisi yok'}</span>
+                              </span>
+                              <span className="flex items-center gap-1">
+                                <Clock className="w-3 h-3 sm:w-4 sm:h-4" />
+                                {formatTimeAgo(item.created_at || item.createdAt || '')}
+                              </span>
+                            </div>
+                            {/* Konuma Git Button - Extract coordinates from item or location */}
+                            {(() => {
+                              // Try to get coordinates from multiple sources
+                              let lat: number | undefined = item.lat;
+                              let lng: number | undefined = item.lng;
+                              
+                              if (!lat || !lng) {
+                                const coords = item.location?.coordinates;
+                                if (coords) {
+                                  if ((coords as any).lat !== undefined && (coords as any).lng !== undefined) {
+                                    lat = (coords as any).lat;
+                                    lng = (coords as any).lng;
+                                  } else if ((coords as any).x !== undefined && (coords as any).y !== undefined) {
+                                    lng = (coords as any).x;
+                                    lat = (coords as any).y;
+                                  } else if (typeof coords === 'string') {
+                                    const match = coords.match(/\(([^,]+),([^)]+)\)/);
+                                    if (match) {
+                                      lng = parseFloat(match[1]);
+                                      lat = parseFloat(match[2]);
+                                    }
+                                  }
+                                }
+                              }
+                              
+                              return (lat && lng) ? (
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  className="flex-shrink-0 text-xs h-7 px-2 border-green-600 text-green-600 hover:bg-green-50"
+                                  onClick={(e) => {
+                                    e.stopPropagation(); // Prevent card click
+                                    navigate(`/app/map?lat=${lat}&lng=${lng}&focus=true`);
+                                  }}
+                                >
+                                  <Navigation className="w-3 h-3 mr-1" />
+                                  Konuma Git
+                                </Button>
+                              ) : null;
+                            })()}
                           </div>
                           {item.user && (
                             <div className="flex items-center gap-2 mt-1.5 sm:mt-2">
@@ -1159,15 +1245,57 @@ export default function ExploreScreen() {
                               <Badge className="bg-green-600 ml-2 flex-shrink-0 text-xs">BUGÜN</Badge>
                             )}
                           </div>
-                          <div className="flex items-center gap-3 sm:gap-4 text-xs sm:text-sm text-gray-500 mb-1.5 sm:mb-2">
-                            <span className="flex items-center gap-1">
-                              <MapPin className="w-3 h-3 sm:w-4 sm:h-4" />
-                              <span className="truncate">{item.location.name}</span>
-                            </span>
-                            <span className="flex items-center gap-1">
-                              <Clock className="w-3 h-3 sm:w-4 sm:h-4" />
-                              {formatTimeAgo(item.created_at || item.createdAt || '')}
-                            </span>
+                          <div className="flex items-center justify-between gap-2 mb-1.5 sm:mb-2">
+                            <div className="flex items-center gap-3 sm:gap-4 text-xs sm:text-sm text-gray-500">
+                              <span className="flex items-center gap-1">
+                                <MapPin className="w-3 h-3 sm:w-4 sm:h-4" />
+                                <span className="truncate">{item.location?.name || 'Konum bilgisi yok'}</span>
+                              </span>
+                              <span className="flex items-center gap-1">
+                                <Clock className="w-3 h-3 sm:w-4 sm:h-4" />
+                                {formatTimeAgo(item.created_at || item.createdAt || '')}
+                              </span>
+                            </div>
+                            {/* Konuma Git Button - Extract coordinates from item or location */}
+                            {(() => {
+                              // Try to get coordinates from multiple sources
+                              let lat: number | undefined = item.lat;
+                              let lng: number | undefined = item.lng;
+                              
+                              if (!lat || !lng) {
+                                const coords = item.location?.coordinates;
+                                if (coords) {
+                                  if ((coords as any).lat !== undefined && (coords as any).lng !== undefined) {
+                                    lat = (coords as any).lat;
+                                    lng = (coords as any).lng;
+                                  } else if ((coords as any).x !== undefined && (coords as any).y !== undefined) {
+                                    lng = (coords as any).x;
+                                    lat = (coords as any).y;
+                                  } else if (typeof coords === 'string') {
+                                    const match = coords.match(/\(([^,]+),([^)]+)\)/);
+                                    if (match) {
+                                      lng = parseFloat(match[1]);
+                                      lat = parseFloat(match[2]);
+                                    }
+                                  }
+                                }
+                              }
+                              
+                              return (lat && lng) ? (
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  className="flex-shrink-0 text-xs h-7 px-2 border-green-600 text-green-600 hover:bg-green-50"
+                                  onClick={(e) => {
+                                    e.stopPropagation(); // Prevent card click
+                                    navigate(`/app/map?lat=${lat}&lng=${lng}&focus=true`);
+                                  }}
+                                >
+                                  <Navigation className="w-3 h-3 mr-1" />
+                                  Konuma Git
+                                </Button>
+                              ) : null;
+                            })()}
                           </div>
                           {item.user && (
                             <div className="flex items-center gap-2 mb-1.5 sm:mb-2">
