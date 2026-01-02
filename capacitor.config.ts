@@ -4,13 +4,13 @@ const config: CapacitorConfig = {
   appId: 'com.esnaftaucuz.app',
   appName: 'esnaftaucuz',
   webDir: 'dist',
-  server: {
-    androidScheme: 'http', // Changed to http to allow HTTP API calls
-    iosScheme: 'http', // Changed to http to allow HTTP API calls
-    // For development, you can use:
-    // url: 'http://192.168.3.13:5173',
-    // cleartext: true
-  },
+  // Production: No server.url = use bundled files from assets/public
+  // androidScheme defaults to 'https' which uses capacitor://localhost
+  // Development: Uncomment below to use dev server
+  // server: {
+  //   url: 'http://192.168.3.13:5173',
+  //   cleartext: true
+  // },
   plugins: {
     Camera: {
       permissions: {

@@ -115,7 +115,15 @@ export default function ExploreScreen() {
           
           // Reverse geocoding silently (no toast) using unified geocoding utility
           try {
-            const result = await reverseGeocode(latitude, longitude);
+            // Add timeout for geocoding (8 seconds for auto-fetch)
+            const geocodePromise = reverseGeocode(latitude, longitude);
+            const timeoutPromise = new Promise<{ success: false; error: string }>((resolve) => {
+              setTimeout(() => {
+                resolve({ success: false, error: 'Zaman aşımı' });
+              }, 8000);
+            });
+            
+            const result = await Promise.race([geocodePromise, timeoutPromise]);
             
             if (mounted) {
               if (result.success && result.address) {
@@ -124,13 +132,15 @@ export default function ExploreScreen() {
               } else {
                 // Fallback: use coordinates with a user-friendly message
                 setCurrentLocation('Mevcut Konum');
-                console.log('⚠️ Auto geocoding failed, using fallback');
+                console.log('⚠️ Auto geocoding failed:', result.error || 'Bilinmeyen hata');
+                console.log('📍 Using coordinates for filtering:', { lat: latitude, lng: longitude });
               }
             }
           } catch (geocodeError: any) {
             console.error('Auto geocoding error:', geocodeError);
             if (mounted) {
               setCurrentLocation('Mevcut Konum');
+              console.log('📍 Using coordinates for filtering:', { lat: latitude, lng: longitude });
             }
           }
         }
@@ -386,7 +396,15 @@ export default function ExploreScreen() {
         
         // Reverse geocoding using unified geocoding utility (Google Maps or OpenStreetMap)
         try {
-          const result = await reverseGeocode(latitude, longitude);
+          // Add timeout for geocoding (10 seconds)
+          const geocodePromise = reverseGeocode(latitude, longitude);
+          const timeoutPromise = new Promise<{ success: false; error: string }>((resolve) => {
+            setTimeout(() => {
+              resolve({ success: false, error: 'Zaman aşımı' });
+            }, 10000);
+          });
+          
+          const result = await Promise.race([geocodePromise, timeoutPromise]);
           
           if (result.success && result.address) {
             setCurrentLocation(result.address);
@@ -396,19 +414,21 @@ export default function ExploreScreen() {
             // Reload data with new location
             loadData();
           } else {
-            // Fallback: use coordinates with a user-friendly message
+            // Fallback: show coordinates or friendly message
+            const coordText = `${latitude.toFixed(4)}, ${longitude.toFixed(4)}`;
             setCurrentLocation('Mevcut Konum');
             toast.info('Konum tespit edildi', {
-              description: 'Adres bilgisi yüklenemedi. Konum ayarlarından manuel olarak ayarlayabilirsiniz.',
+              description: 'Adres bilgisi yüklenemedi, ancak konumunuz kaydedildi.',
             });
             // Reload data with new location even if geocoding failed
             loadData();
           }
         } catch (geocodeError: any) {
           console.error('Geocoding error:', geocodeError);
+          // Even if geocoding fails, we still have coordinates
           setCurrentLocation('Mevcut Konum');
-          toast.warning('Konum alındı', {
-            description: 'Adres bilgisi şu an için kullanılamıyor.',
+          toast.info('Konum tespit edildi', {
+            description: 'Koordinatlar kaydedildi. Fiyatlar konumunuza göre filtrelenecek.',
           });
           // Reload data with new location even if geocoding failed
           loadData();
@@ -418,7 +438,17 @@ export default function ExploreScreen() {
       }
     } catch (error: any) {
       console.error('Location error:', error);
-      toast.error('Konum alınamadı: ' + (error.message || 'Bilinmeyen hata'));
+      const errorMessage = error.message || 'Bilinmeyen hata';
+      
+      if (errorMessage.includes('permission') || errorMessage.includes('izin')) {
+        toast.error('Konum izni gerekli', {
+          description: 'Lütfen ayarlardan konum iznini açın.',
+        });
+      } else {
+        toast.error('Konum alınamadı', {
+          description: errorMessage,
+        });
+      }
     } finally {
       setIsGettingLocation(false);
     }

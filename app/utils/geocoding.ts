@@ -1,12 +1,20 @@
 /**
  * Geocoding utility functions
- * Supports both Google Maps Geocoding API and OpenStreetMap Nominatim as fallback
+ * Uses Google Maps Geocoding API (primary) and OpenStreetMap (fallback)
  */
 
 interface GeocodingResult {
   success: boolean;
   address?: string;
   error?: string;
+}
+
+/**
+ * Detect if we're on mobile (Capacitor)
+ */
+function isMobile(): boolean {
+  return typeof window !== 'undefined' && 
+    (window as any).Capacitor?.isNativePlatform() === true;
 }
 
 /**
@@ -30,9 +38,11 @@ export async function reverseGeocode(
       console.error('Google Maps geocoding error:', error);
       console.log('⚠️ Falling back to OpenStreetMap...');
     }
+  } else {
+    console.log('⚠️ Google Maps API key not found, using OpenStreetMap...');
   }
   
-  // Fallback to OpenStreetMap
+  // Fallback to OpenStreetMap (works better on web, may have CORS issues on mobile)
   try {
     return await reverseGeocodeOSM(latitude, longitude);
   } catch (error) {
@@ -116,29 +126,9 @@ async function reverseGeocodeGoogle(
 }
 
 /**
- * Reverse geocoding using OpenStreetMap Nominatim API
+ * Parse OpenStreetMap response and extract address
  */
-async function reverseGeocodeOSM(
-  latitude: number,
-  longitude: number
-): Promise<GeocodingResult> {
-  // Add delay to respect rate limits
-  await new Promise(resolve => setTimeout(resolve, 1000));
-  
-  const url = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${latitude}&lon=${longitude}&zoom=18&addressdetails=1&accept-language=tr`;
-  
-  const response = await fetch(url, {
-    headers: {
-      'User-Agent': 'esnaftaucuz-app/1.0',
-    },
-  });
-  
-  if (!response.ok) {
-    throw new Error(`OpenStreetMap API error: ${response.status}`);
-  }
-  
-  const data = await response.json();
-  
+function parseOSMResponse(data: any): GeocodingResult {
   if (data.error) {
     return {
       success: false,
@@ -214,5 +204,65 @@ async function reverseGeocodeOSM(
     success: false,
     error: 'Adres bulunamadı',
   };
+}
+
+/**
+ * Reverse geocoding using OpenStreetMap Nominatim API
+ */
+async function reverseGeocodeOSM(
+  latitude: number,
+  longitude: number
+): Promise<GeocodingResult> {
+  // Add delay to respect rate limits
+  await new Promise(resolve => setTimeout(resolve, 1000));
+  
+  const url = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${latitude}&lon=${longitude}&zoom=18&addressdetails=1&accept-language=tr`;
+  
+  // Check if we're on mobile (Capacitor)
+  const isMobile = typeof window !== 'undefined' && 
+    (window as any).Capacitor?.isNativePlatform();
+  
+  try {
+    // On mobile, try to use fetch without CORS mode (WebView should handle it)
+    // On web, use CORS mode
+    const fetchOptions: RequestInit = {
+      headers: {
+        'User-Agent': 'esnaftaucuz-app/1.0',
+      },
+    };
+    
+    // Don't set CORS mode on mobile - WebView should handle it natively
+    // On web, we need CORS mode
+    if (!isMobile) {
+      fetchOptions.mode = 'cors';
+    }
+    // On mobile, don't set mode at all - let WebView handle it
+    
+    const response = await fetch(url, fetchOptions);
+    
+    if (!response.ok) {
+      throw new Error(`OpenStreetMap API error: ${response.status}`);
+    }
+    
+    const data = await response.json();
+    return parseOSMResponse(data);
+  } catch (error: any) {
+    // Handle CORS and network errors
+    const errorMessage = error.message || 'Bilinmeyen hata';
+    console.error('OpenStreetMap geocoding error:', errorMessage);
+    
+    // Check if it's a CORS error
+    if (errorMessage.includes('CORS') || errorMessage.includes('Failed to fetch') || errorMessage.includes('NetworkError')) {
+      return {
+        success: false,
+        error: 'CORS hatası: Mobil uygulamada OpenStreetMap API\'sine erişilemiyor. Google Maps API key gerekli.',
+      };
+    }
+    
+    return {
+      success: false,
+      error: errorMessage,
+    };
+  }
 }
 

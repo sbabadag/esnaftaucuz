@@ -214,11 +214,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             setUser(profile);
             localStorage.setItem('user', JSON.stringify(profile));
             console.log('✅ User profile loaded:', profile.email);
-            if (!cachedUser) {
-              setIsLoading(false); // Set loading false if we didn't have cached user
-            }
+            setIsLoading(false); // Always set loading false when profile is loaded
           } else {
             console.log('✅ User profile already cached, using cached version');
+            setIsLoading(false); // Set loading false even for cached user
           }
         } else {
           console.warn('⚠️ No profile found and could not create one');
