@@ -64,39 +64,63 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     // Load user profile helper with timeout protection
     const loadUserProfile = async (session: any, event: string, shouldCleanUrl: boolean = false) => {
-      // Safety timeout - force loading to false after 15 seconds
-      // This is a backup timeout in case Promise.race doesn't work
+      // Create fallback user helper
+      const createFallbackUser = () => {
+        if (!session?.user) return null;
+        const userMetadata = session.user.user_metadata || {};
+        return {
+          id: session.user.id,
+          email: session.user.email || '',
+          name: userMetadata.name || userMetadata.full_name || session.user.email?.split('@')[0] || 'Kullanıcı',
+          avatar: userMetadata.avatar_url || userMetadata.picture,
+          level: 1,
+          points: 0,
+          contributions: {
+            shares: 0,
+            verifications: 0,
+          },
+          isGuest: false,
+        };
+      };
+
+      // Safety timeout - force loading to false after 8 seconds (reduced from 15)
       const profileTimeout = setTimeout(() => {
         console.warn('⚠️ Profile load safety timeout - forcing loading to false');
-        // Even on timeout, try to set user from session if available
-        if (session?.user) {
-          const userMetadata = session.user.user_metadata || {};
-          const fallbackUser = {
-            id: session.user.id,
-            email: session.user.email || '',
-            name: userMetadata.name || userMetadata.full_name || session.user.email?.split('@')[0] || 'Kullanıcı',
-            avatar: userMetadata.avatar_url || userMetadata.picture,
-            level: 1,
-            points: 0,
-            contributions: {
-              shares: 0,
-              verifications: 0,
-            },
-            isGuest: false,
-          };
+        const fallbackUser = createFallbackUser();
+        if (fallbackUser) {
           setUser(fallbackUser);
           localStorage.setItem('user', JSON.stringify(fallbackUser));
           console.log('⚠️ Using fallback user due to safety timeout');
         }
         setIsLoading(false);
-      }, 15000); // 15 seconds safety timeout
+      }, 8000); // 8 seconds safety timeout (reduced from 15)
 
       try {
         console.log('🔄 Loading user profile for:', session.user.email);
         setToken(session.access_token);
         localStorage.setItem('authToken', session.access_token);
         
-        // Get user profile with explicit timeout using Promise.race
+        // Check localStorage first for faster initial render
+        let storedUser: string | null = null;
+        let cachedUser: any = null;
+        try {
+          storedUser = localStorage.getItem('user');
+          if (storedUser) {
+            cachedUser = JSON.parse(storedUser);
+            if (cachedUser && cachedUser.id === session.user.id) {
+              console.log('⚡ Using cached user from localStorage for faster render');
+              setUser(cachedUser);
+              setIsLoading(false); // Allow navigation immediately
+              // Continue loading in background to get fresh data
+            }
+          }
+        } catch (e) {
+          // Invalid JSON, continue with fetch
+          storedUser = null;
+          cachedUser = null;
+        }
+        
+        // Get user profile with explicit timeout using Promise.race (reduced from 10s to 5s)
         const profilePromise = supabase
           .from('users')
           .select('*')
@@ -104,7 +128,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           .single();
         
         const timeoutPromise = new Promise((_, reject) => {
-          setTimeout(() => reject(new Error('Profile fetch timeout after 10 seconds')), 10000);
+          setTimeout(() => reject(new Error('Profile fetch timeout after 5 seconds')), 5000);
         });
         
         let profile: any = null;
@@ -135,7 +159,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           console.log('⚠️ Profile not found, creating new profile for OAuth user...');
           const userMetadata = session.user.user_metadata || {};
           
-          // Create profile with timeout
+          // Show fallback user immediately for better UX
+          const fallbackUser = createFallbackUser();
+          if (fallbackUser) {
+            console.log('⚡ Showing fallback user immediately while creating profile...');
+            setUser(fallbackUser);
+            localStorage.setItem('user', JSON.stringify(fallbackUser));
+            setIsLoading(false); // Allow navigation to proceed
+            profile = fallbackUser; // Set profile so we can update it later
+          }
+          
+          // Create profile in background (reduced timeout from 10s to 5s)
           const createPromise = supabase
             .from('users')
             .insert({
@@ -150,68 +184,42 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             .single();
           
           const createTimeoutPromise = new Promise((_, reject) => {
-            setTimeout(() => reject(new Error('Profile creation timeout after 10 seconds')), 10000);
+            setTimeout(() => reject(new Error('Profile creation timeout after 5 seconds')), 5000);
           });
           
-          try {
-            const createResult = await Promise.race([createPromise, createTimeoutPromise]);
-            const result = createResult as { data: any; error: any };
-            
-            if (result.error) {
-              console.error('❌ Failed to create profile:', result.error);
-              console.error('Create error details:', {
-                code: result.error.code,
-                message: result.error.message,
-                details: result.error.details,
-              });
-              // Create fallback user from session data
-              const fallbackUser = {
-                id: session.user.id,
-                email: session.user.email || '',
-                name: userMetadata.name || userMetadata.full_name || session.user.email?.split('@')[0] || 'Kullanıcı',
-                avatar: userMetadata.avatar_url || userMetadata.picture,
-                level: 1,
-                points: 0,
-                contributions: {
-              shares: 0,
-              verifications: 0,
-            },
-                isGuest: false,
-              };
-              profile = fallbackUser;
-              console.log('⚠️ Using fallback user due to profile creation failure');
-            } else {
-              profile = result.data;
-              console.log('✅ Profile created for OAuth user');
-            }
-          } catch (createTimeoutError: any) {
-            console.error('❌ Profile creation timeout:', createTimeoutError);
-            // Create fallback user from session data
-            const fallbackUser = {
-              id: session.user.id,
-              email: session.user.email || '',
-              name: userMetadata.name || userMetadata.full_name || session.user.email?.split('@')[0] || 'Kullanıcı',
-              avatar: userMetadata.avatar_url || userMetadata.picture,
-              level: 1,
-              points: 0,
-              contributions: {
-              shares: 0,
-              verifications: 0,
-            },
-              isGuest: false,
-            };
-            profile = fallbackUser;
-            console.log('⚠️ Using fallback user due to profile creation timeout');
-          }
+          // Create profile in background - don't block UI
+          Promise.race([createPromise, createTimeoutPromise])
+            .then((createResult: any) => {
+              const result = createResult as { data: any; error: any };
+              if (!result.error && result.data) {
+                console.log('✅ Profile created for OAuth user');
+                // Update user with fresh profile data
+                setUser(result.data);
+                localStorage.setItem('user', JSON.stringify(result.data));
+              } else {
+                console.error('❌ Failed to create profile:', result.error);
+              }
+            })
+            .catch((createTimeoutError: any) => {
+              console.error('❌ Profile creation timeout:', createTimeoutError);
+              // Fallback user already shown, no need to do anything
+            });
         }
         
         clearTimeout(profileTimeout);
         
         if (profile) {
-          setUser(profile);
-          localStorage.setItem('user', JSON.stringify(profile));
-          console.log('✅ User profile loaded:', profile.email);
-          console.log('✅ User state set:', { id: profile.id, email: profile.email, name: profile.name });
+          // Only update if we don't already have a cached user, or if this is a fresh profile
+          if (!cachedUser || profile.id !== cachedUser.id) {
+            setUser(profile);
+            localStorage.setItem('user', JSON.stringify(profile));
+            console.log('✅ User profile loaded:', profile.email);
+            if (!cachedUser) {
+              setIsLoading(false); // Set loading false if we didn't have cached user
+            }
+          } else {
+            console.log('✅ User profile already cached, using cached version');
+          }
         } else {
           console.warn('⚠️ No profile found and could not create one');
           // Even if profile creation failed, create a fallback user
@@ -284,22 +292,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (isOAuthCallback) {
         console.log('🔐 OAuth callback detected, skipping initial auth check - waiting for onAuthStateChange');
         // Don't set loading to false yet - wait for onAuthStateChange
-        // Set a longer timeout for OAuth callback
+        // Set a timeout for OAuth callback (reduced from 30s to 15s)
         setTimeout(() => {
           if (isLoading && isOAuthCallback) {
             console.warn('⚠️ OAuth callback timeout - forcing loading to false');
             setIsLoading(false);
             setIsOAuthCallback(false);
           }
-        }, 30000); // 30 second timeout for OAuth
+        }, 15000); // 15 second timeout for OAuth (reduced from 30)
         return;
       }
 
-      // Safety timeout - force loading to false after 15 seconds (increased from 10)
+      // Safety timeout - force loading to false after 8 seconds (reduced from 15)
       const safetyTimeout = setTimeout(() => {
         console.warn('⚠️ Auth initialization timeout - forcing loading to false');
         setIsLoading(false);
-      }, 15000);
+      }, 8000);
 
       try {
         const { data: { session }, error: sessionError } = await supabase.auth.getSession();
@@ -367,12 +375,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       
       let stateChangeTimeout: NodeJS.Timeout | null = null;
       
-      // Only set timeout if we actually need to process this event
+      // Only set timeout if we actually need to process this event (reduced from 25s to 12s)
       if (needsProcessing) {
         stateChangeTimeout = setTimeout(() => {
           console.warn('⚠️ Auth state change timeout - forcing loading to false');
           setIsLoading(false);
-        }, 25000);
+        }, 12000);
       }
       
       try {
@@ -397,8 +405,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               if (window.location.pathname !== '/') {
                 window.history.replaceState({}, document.title, '/');
               }
-              // Force a small delay to ensure state is updated before navigation
-              await new Promise(resolve => setTimeout(resolve, 200));
+              // Minimal delay for state update (reduced from 200ms to 50ms)
+              await new Promise(resolve => setTimeout(resolve, 50));
               // Force a re-render by updating state
               setIsLoading(false);
             }
