@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { Search, Bell, Filter, MapPin, Clock, CheckCircle2, Package, RefreshCw } from 'lucide-react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
+import { Search, Bell, Filter, MapPin, Clock, CheckCircle2, Package, RefreshCw, X } from 'lucide-react';
 import { Button } from '../../ui/button';
 import { Input } from '../../ui/input';
 import { Badge } from '../../ui/badge';
@@ -54,7 +54,14 @@ interface Product {
 
 export default function ExploreScreen() {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState<{
+    products: Product[];
+    prices: Price[];
+    locations: any[];
+  } | null>(null);
+  const [isSearching, setIsSearching] = useState(false);
   const [trendProducts, setTrendProducts] = useState<Product[]>([]);
   const [nearbyCheapest, setNearbyCheapest] = useState<Price[]>([]);
   const [recentPrices, setRecentPrices] = useState<Price[]>([]);
@@ -72,6 +79,15 @@ export default function ExploreScreen() {
     withPhoto: false,
     verified: false,
   });
+
+  // Check for search query in URL on mount
+  useEffect(() => {
+    const urlQuery = searchParams.get('search');
+    if (urlQuery) {
+      setSearchQuery(urlQuery);
+      performSearch(urlQuery);
+    }
+  }, []);
 
   useEffect(() => {
     console.log('🔄 ExploreScreen mounted, loading data...');
@@ -271,16 +287,40 @@ export default function ExploreScreen() {
     return date.toDateString() === today.toDateString();
   };
 
-  const handleSearch = async () => {
-    if (!searchQuery.trim()) return;
+  const performSearch = async (query: string) => {
+    if (!query.trim()) {
+      setSearchResults(null);
+      setSearchParams({});
+      return;
+    }
     
     try {
-      const results = await searchAPI.search(searchQuery, 'all');
-      // Navigate to search results or show in a modal
-      navigate(`/app/explore?search=${encodeURIComponent(searchQuery)}`);
-    } catch (error) {
-      toast.error('Arama yapılırken bir hata oluştu');
+      setIsSearching(true);
+      const results = await searchAPI.search(query, 'all');
+      setSearchResults(results);
+      setSearchParams({ search: query });
+    } catch (error: any) {
+      console.error('Search error:', error);
+      toast.error(error.message || 'Arama yapılırken bir hata oluştu');
+      setSearchResults(null);
+    } finally {
+      setIsSearching(false);
     }
+  };
+
+  const handleSearch = async () => {
+    if (!searchQuery.trim()) {
+      setSearchResults(null);
+      setSearchParams({});
+      return;
+    }
+    await performSearch(searchQuery);
+  };
+
+  const clearSearch = () => {
+    setSearchQuery('');
+    setSearchResults(null);
+    setSearchParams({});
   };
 
   return (
@@ -620,6 +660,8 @@ export default function ExploreScreen() {
                 )}
               </div>
             </section>
+              </>
+            )}
           </>
         )}
       </div>
