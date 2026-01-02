@@ -92,6 +92,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             verifications: 0,
           },
           isGuest: false,
+          preferences: {
+            notifications: true,
+            searchRadius: 15, // Default search radius
+          },
+          search_radius: 15, // Legacy column for backward compatibility
         };
       };
 
@@ -232,10 +237,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         
         if (profile) {
           // Ensure preferences and search_radius are properly set
+          // Priority: preferences.searchRadius (newer) > search_radius (legacy) > default
+          const preferencesRadius = profile.preferences?.searchRadius;
+          const legacyRadius = profile.search_radius;
+          const finalSearchRadius = preferencesRadius !== undefined 
+            ? preferencesRadius 
+            : (legacyRadius !== undefined ? legacyRadius : 15);
+          
           const userData = {
             ...profile,
-            preferences: profile.preferences || {},
-            search_radius: profile.search_radius || profile.preferences?.searchRadius || 15,
+            preferences: {
+              ...(profile.preferences || {}),
+              searchRadius: finalSearchRadius, // Ensure preferences.searchRadius is always set
+            },
+            search_radius: finalSearchRadius, // Keep legacy column for backward compatibility
           };
           
           // Only update if we don't already have a cached user, or if this is a fresh profile
@@ -320,6 +335,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               verifications: 0,
             },
             isGuest: false,
+            preferences: {
+              notifications: true,
+              searchRadius: 15, // Default search radius
+            },
+            search_radius: 15, // Legacy column for backward compatibility
           };
           setUser(fallbackUser);
           localStorage.setItem('user', JSON.stringify(fallbackUser));
@@ -666,10 +686,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       
       if (profile) {
         // Ensure preferences and search_radius are properly set
+        // Priority: preferences.searchRadius (newer) > search_radius (legacy) > default
+        const preferencesRadius = profile.preferences?.searchRadius;
+        const legacyRadius = profile.search_radius;
+        const finalSearchRadius = preferencesRadius !== undefined 
+          ? preferencesRadius 
+          : (legacyRadius !== undefined ? legacyRadius : 15);
+        
         const userData = {
           ...profile,
-          preferences: profile.preferences || {},
-          search_radius: profile.search_radius || profile.preferences?.searchRadius || 15,
+          preferences: {
+            ...(profile.preferences || {}),
+            searchRadius: finalSearchRadius, // Ensure preferences.searchRadius is always set
+          },
+          search_radius: finalSearchRadius, // Keep legacy column for backward compatibility
         };
         setUser(userData);
         localStorage.setItem('user', JSON.stringify(userData));
