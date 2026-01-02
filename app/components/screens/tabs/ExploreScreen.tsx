@@ -370,30 +370,41 @@ export default function ExploreScreen() {
                             15;
       const searchRadiusMeters = searchRadiusKm * 1000;
       
-      // Get user's current location or fallback to Konya
-      const userLat = userLocation?.lat || 37.8667;
-      const userLng = userLocation?.lng || 32.4833;
+      // Only load nearby prices if user location is available
+      // Don't use fallback coordinates - only show nearby prices when we have real user location
+      const userLat = userLocation?.lat;
+      const userLng = userLocation?.lng;
       
-      console.log('📍 Using location for filtering:', JSON.stringify({ lat: userLat, lng: userLng, radiusKm: searchRadiusKm }));
+      console.log('📍 Using location for filtering:', JSON.stringify({ 
+        lat: userLat, 
+        lng: userLng, 
+        radiusKm: searchRadiusKm,
+        hasUserLocation: !!(userLat && userLng)
+      }));
       
-      // Load recent prices with location filter
-      const recentPromise = pricesAPI.getAll({
-        sort: 'newest',
-        limit: 100, // Load more to filter by location
-        todayOnly: true,
-        lat: userLat,
-        lng: userLng,
-        radius: searchRadiusMeters,
-      }).catch((err) => {
-        console.error('❌ Failed to load recent prices:', err);
-        return [];
-      });
+      // Load recent prices with location filter (only if user location is available)
+      const recentPromise = (userLat && userLng) 
+        ? pricesAPI.getAll({
+            sort: 'newest',
+            limit: 100, // Load more to filter by location
+            todayOnly: true,
+            lat: userLat,
+            lng: userLng,
+            radius: searchRadiusMeters,
+          }).catch((err) => {
+            console.error('❌ Failed to load recent prices:', err);
+            return [];
+          })
+        : Promise.resolve([]);
       
-      // Load nearby cheapest with user's preferred radius and location
-      const nearbyPromise = searchAPI.getNearbyCheapest(userLat, userLng, searchRadiusMeters, 10).catch((err) => {
-        console.error('❌ Failed to load nearby prices:', err);
-        return [];
-      });
+      // Load nearby cheapest ONLY if user location is available
+      // This ensures we only show prices within the user's search radius
+      const nearbyPromise = (userLat && userLng)
+        ? searchAPI.getNearbyCheapest(userLat, userLng, searchRadiusMeters, 10).catch((err) => {
+            console.error('❌ Failed to load nearby prices:', err);
+            return [];
+          })
+        : Promise.resolve([]);
 
       // Wait for all promises (with individual error handling)
       const [trending, recent, nearby] = await Promise.allSettled([
@@ -1095,7 +1106,8 @@ export default function ExploreScreen() {
               </div>
             </section>
 
-            {/* Nearby Cheap */}
+            {/* Nearby Cheap - Only show if user location is available */}
+            {userLocation && (
             <section>
               <h2 className="text-base sm:text-lg mb-2 sm:mb-3 text-gray-900 font-semibold">Sana Yakın En Ucuz</h2>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -1212,6 +1224,7 @@ export default function ExploreScreen() {
                 )}
               </div>
             </section>
+            )}
 
             {/* Recent Prices */}
             <section>
