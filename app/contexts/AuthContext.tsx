@@ -275,6 +275,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               verifications: 0,
             },
             isGuest: false,
+            preferences: {
+              notifications: true,
+              searchRadius: 15,
+            },
+            search_radius: 15,
           };
           setUser(fallbackUser);
           localStorage.setItem('user', JSON.stringify(fallbackUser));
