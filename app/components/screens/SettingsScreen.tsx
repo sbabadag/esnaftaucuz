@@ -55,14 +55,22 @@ export default function SettingsScreen() {
       return;
     }
 
-    // Validate radius is in allowed values
+    // Validate radius is in allowed values and within database constraint (1-1000)
     if (!RADIUS_OPTIONS.includes(searchRadius)) {
       toast.error('Geçersiz arama genişliği değeri');
+      return;
+    }
+    
+    // Double-check constraint: 1 <= searchRadius <= 1000
+    if (typeof searchRadius !== 'number' || searchRadius < 1 || searchRadius > 1000) {
+      console.error('❌ Invalid searchRadius value:', searchRadius);
+      toast.error('Arama genişliği 1-1000 km arasında olmalıdır');
       return;
     }
 
     try {
       setIsSaving(true);
+      console.log('💾 Saving search radius:', searchRadius);
       await usersAPI.update(user.id, {
         preferences: {
           searchRadius: searchRadius,

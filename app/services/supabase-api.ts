@@ -45,6 +45,7 @@ export const authAPI = {
           id: authData.user.id,
           email: authData.user.email!,
           name,
+          search_radius: 15, // Default search radius (ensures constraint is satisfied)
         })
         .select()
         .single();
@@ -1248,7 +1249,14 @@ export const usersAPI = {
         
         // Also store searchRadius at root level for easier access
         if (data.preferences.searchRadius !== undefined) {
-          updateData.search_radius = data.preferences.searchRadius;
+          // Validate searchRadius is within allowed range (1-1000 km)
+          const searchRadius = data.preferences.searchRadius;
+          if (typeof searchRadius === 'number' && searchRadius >= 1 && searchRadius <= 1000) {
+            updateData.search_radius = Math.round(searchRadius); // Ensure integer
+          } else {
+            console.error('❌ Invalid searchRadius value:', searchRadius);
+            throw new Error(`Geçersiz arama genişliği değeri: ${searchRadius}. Değer 1-1000 km arasında olmalıdır.`);
+          }
         }
       }
       
