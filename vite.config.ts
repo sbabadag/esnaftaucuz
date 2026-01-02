@@ -42,7 +42,7 @@ export default defineConfig({
       // Google Maps API Key - use env var if available, otherwise use fallback for GitHub Pages
       // Note: This key is protected by referrer restrictions in Google Cloud Console
       'import.meta.env.VITE_GOOGLE_MAPS_API_KEY': JSON.stringify(
-        process.env.VITE_GOOGLE_MAPS_API_KEY || 'AIzaSyCGRGdSA0IZHxgGI4PCv00kQ8xJ5dpx7Gc'
+        process.env.VITE_GOOGLE_MAPS_API_KEY?.trim() || 'AIzaSyCGRGdSA0IZHxgGI4PCv00kQ8xJ5dpx7Gc'
       ),
     },
   },

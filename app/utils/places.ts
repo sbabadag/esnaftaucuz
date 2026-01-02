@@ -50,10 +50,10 @@ export async function searchNearbyPlaces(
   const googleApiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
   
   if (!googleApiKey || googleApiKey.trim() === '') {
-    console.error('❌ Google Maps API key not found!');
+    console.error('❌ Google Maps API key not found! Please check vite.config.ts');
     return {
       success: false,
-      error: 'Google Maps API key bulunamadı',
+      error: 'Google Maps API key bulunamadı. Lütfen yöneticiye bildirin.',
     };
   }
 
