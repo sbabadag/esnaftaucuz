@@ -1321,37 +1321,77 @@ export const searchAPI = {
       
       console.log('✅ Nearby prices fetched:', prices?.length || 0);
 
-      // Client-side geospatial filtering
-      const radiusKm = radius / 1000;
-      const nearbyPrices = (prices || []).filter((price: any) => {
-        // Try normalized lat/lng first (from pricesAPI.getAll normalization)
-        let priceLat: number | undefined;
-        let priceLng: number | undefined;
+      // Normalize coordinates first (same logic as pricesAPI.getAll)
+      const normalizedPrices = (prices || []).map((price: any) => {
+        let latVal: number | undefined = price.lat;
+        let lngVal: number | undefined = price.lng;
         
-        if (price.lat && price.lng) {
-          // Use normalized coordinates
-          priceLat = typeof price.lat === 'number' ? price.lat : parseFloat(String(price.lat));
-          priceLng = typeof price.lng === 'number' ? price.lng : parseFloat(String(price.lng));
-        } else if (price.location?.coordinates) {
-          // Fallback to location.coordinates
+        // Check price.coordinates (direct on price object)
+        if ((!latVal || !lngVal) && price.coordinates) {
+          const coords = price.coordinates;
+          if (typeof coords === 'string') {
+            // PostgreSQL POINT string format: (lng,lat)
+            const match = coords.match(/\(([^,]+),([^)]+)\)/);
+            if (match) {
+              lngVal = parseFloat(match[1]);
+              latVal = parseFloat(match[2]);
+            }
+          } else if (typeof coords === 'object') {
+            if (typeof coords.lat === 'number' && typeof coords.lng === 'number') {
+              latVal = coords.lat;
+              lngVal = coords.lng;
+            } else if (typeof coords.x === 'number' && typeof coords.y === 'number') {
+              latVal = coords.y; // PostgreSQL POINT stores as (lng, lat)
+              lngVal = coords.x;
+            }
+          }
+        }
+        
+        // Then check location coordinates
+        if ((!latVal || !lngVal) && price.location?.coordinates) {
           const coords = price.location.coordinates;
-          priceLat = coords.lat || coords.y;
-          priceLng = coords.lng || coords.x;
+          if (typeof coords === 'string') {
+            // PostgreSQL POINT string format: (lng,lat)
+            const match = coords.match(/\(([^,]+),([^)]+)\)/);
+            if (match) {
+              lngVal = parseFloat(match[1]);
+              latVal = parseFloat(match[2]);
+            }
+          } else if (typeof coords === 'object') {
+            if (typeof coords.lat === 'number' && typeof coords.lng === 'number') {
+              latVal = coords.lat;
+              lngVal = coords.lng;
+            } else if (typeof coords.x === 'number' && typeof coords.y === 'number') {
+              latVal = coords.y; // PostgreSQL POINT stores as (lng, lat)
+              lngVal = coords.x;
+            }
+          }
         }
         
         // Also check if coordinates are in location object directly
-        if (!priceLat && price.location?.lat) {
-          priceLat = typeof price.location.lat === 'number' ? price.location.lat : parseFloat(String(price.location.lat));
+        if (!latVal && price.location?.lat) {
+          latVal = typeof price.location.lat === 'number' ? price.location.lat : parseFloat(String(price.location.lat));
         }
-        if (!priceLng && price.location?.lng) {
-          priceLng = typeof price.location.lng === 'number' ? price.location.lng : parseFloat(String(price.location.lng));
+        if (!lngVal && price.location?.lng) {
+          lngVal = typeof price.location.lng === 'number' ? price.location.lng : parseFloat(String(price.location.lng));
         }
         
-        if (!priceLat || !priceLng || isNaN(priceLat) || isNaN(priceLng)) {
+        // Add normalized coordinates to price object
+        if (typeof latVal === 'number' && typeof lngVal === 'number' && !isNaN(latVal) && !isNaN(lngVal)) {
+          return { ...price, lat: latVal, lng: lngVal };
+        }
+        return price;
+      });
+      
+      // Client-side geospatial filtering
+      const radiusKm = radius / 1000;
+      const nearbyPrices = normalizedPrices.filter((price: any) => {
+        // Use normalized lat/lng
+        if (!price.lat || !price.lng || isNaN(price.lat) || isNaN(price.lng)) {
           return false;
         }
         
-        const distance = calculateDistance(lat, lng, priceLat, priceLng);
+        const distance = calculateDistance(lat, lng, price.lat, price.lng);
         const isWithinRadius = distance <= radiusKm;
         
         if (isWithinRadius) {
@@ -1361,7 +1401,7 @@ export const searchAPI = {
         return isWithinRadius;
       });
       
-      console.log(`📍 Filtered ${nearbyPrices.length} prices within ${radiusKm} km radius from ${nearbyPrices.length} total`);
+      console.log(`📍 Filtered ${nearbyPrices.length} prices within ${radiusKm} km radius from ${normalizedPrices.length} total`);
 
       // Group by product and get cheapest
       const cheapestByProduct: Record<string, any> = {};
