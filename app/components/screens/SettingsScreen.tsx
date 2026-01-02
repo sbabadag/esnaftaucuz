@@ -76,8 +76,30 @@ export default function SettingsScreen() {
       
       toast.success('Arama genişliği kaydedildi');
     } catch (error: any) {
-      console.error('Save search radius error:', error);
-      toast.error('Ayar kaydedilirken bir hata oluştu');
+      console.error('❌ Save search radius error:', error);
+      console.error('Error details:', {
+        message: error.message,
+        code: error.code,
+        details: error.details,
+        hint: error.hint,
+      });
+      
+      // Show more specific error message
+      let errorMessage = 'Ayar kaydedilirken bir hata oluştu';
+      if (error.message) {
+        if (error.message.includes('row-level security') || error.message.includes('RLS')) {
+          errorMessage = 'Yetki hatası. Lütfen tekrar giriş yapın.';
+        } else if (error.message.includes('permission') || error.message.includes('denied')) {
+          errorMessage = 'Bu işlem için yetkiniz yok. Lütfen tekrar giriş yapın.';
+        } else {
+          errorMessage = error.message;
+        }
+      }
+      
+      toast.error(errorMessage, {
+        description: error.details || error.hint || 'Lütfen tekrar deneyin.',
+        duration: 5000,
+      });
     } finally {
       setIsSaving(false);
     }

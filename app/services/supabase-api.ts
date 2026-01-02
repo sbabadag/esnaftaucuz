@@ -1223,15 +1223,35 @@ export const usersAPI = {
     };
   }) => {
     try {
+      // First, get current user data to merge preferences
+      const { data: currentUser, error: fetchError } = await supabase
+        .from('users')
+        .select('preferences')
+        .eq('id', id)
+        .single();
+
+      if (fetchError && fetchError.code !== 'PGRST116') { // PGRST116 = no rows returned
+        console.error('Error fetching current user:', fetchError);
+        // Continue anyway - might be first time setting preferences
+      }
+
       const updateData: any = {};
       if (data.name) updateData.name = data.name;
+      
       if (data.preferences) {
-        updateData.preferences = data.preferences;
+        // Merge with existing preferences to avoid overwriting other settings
+        const existingPreferences = currentUser?.preferences || {};
+        updateData.preferences = {
+          ...existingPreferences,
+          ...data.preferences,
+        };
+        
         // Also store searchRadius at root level for easier access
         if (data.preferences.searchRadius !== undefined) {
           updateData.search_radius = data.preferences.searchRadius;
         }
       }
+      
       if (data.location) {
         if (data.location.city) updateData.city = data.location.city;
         if (data.location.district) updateData.district = data.location.district;
@@ -1240,6 +1260,8 @@ export const usersAPI = {
         }
       }
 
+      console.log('📝 Updating user:', { id, updateData });
+
       const { data: updated, error } = await supabase
         .from('users')
         .update(updateData)
@@ -1247,10 +1269,21 @@ export const usersAPI = {
         .select()
         .single();
 
-      if (error) throw error;
+      if (error) {
+        console.error('❌ Supabase update error:', error);
+        console.error('Error details:', {
+          code: error.code,
+          message: error.message,
+          details: error.details,
+          hint: error.hint,
+        });
+        throw error;
+      }
+      
+      console.log('✅ User updated successfully:', updated);
       return updated;
     } catch (error: any) {
-      console.error('Update user error:', error);
+      console.error('❌ Update user error:', error);
       throw new Error(error.message || 'Kullanıcı güncellenemedi');
     }
   },

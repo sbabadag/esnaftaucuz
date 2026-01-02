@@ -249,9 +249,12 @@ export default function ExploreScreen() {
                 
                 // Reload nearby cheapest prices
                 if (userLocation) {
-                  const searchRadiusKm = (user as any)?.search_radius || 
-                                        (user as any)?.preferences?.searchRadius || 
-                                        15;
+                  // Priority: preferences.searchRadius (newer) > search_radius (legacy) > default
+                  const searchRadiusKm = (user as any)?.preferences?.searchRadius !== undefined
+                                        ? (user as any).preferences.searchRadius
+                                        : (user as any)?.search_radius !== undefined
+                                        ? (user as any).search_radius
+                                        : 15;
                   const searchRadiusMeters = searchRadiusKm * 1000;
                   
                   searchAPI.getNearbyCheapest(
@@ -365,10 +368,22 @@ export default function ExploreScreen() {
       });
       
       // Get user's search radius preference (default: 15 km = 15000 meters)
-      const searchRadiusKm = (user as any)?.search_radius || 
-                            (user as any)?.preferences?.searchRadius || 
-                            15;
+      // Priority: preferences.searchRadius (newer) > search_radius (legacy) > default
+      const preferencesRadius = (user as any)?.preferences?.searchRadius;
+      const legacyRadius = (user as any)?.search_radius;
+      const searchRadiusKm = preferencesRadius !== undefined
+                            ? preferencesRadius
+                            : legacyRadius !== undefined
+                            ? legacyRadius
+                            : 15;
       const searchRadiusMeters = searchRadiusKm * 1000;
+      
+      console.log('🔍 Search radius calculation:', {
+        preferencesRadius,
+        legacyRadius,
+        finalRadius: searchRadiusKm,
+        user: user ? { id: user.id, hasPreferences: !!(user as any).preferences } : null,
+      });
       
       // Only load nearby prices if user location is available
       // Don't use fallback coordinates - only show nearby prices when we have real user location
