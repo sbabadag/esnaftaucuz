@@ -4,6 +4,7 @@ import { ArrowLeft, MapPin, Clock, CheckCircle2, ThumbsUp, Flag, Package } from 
 import { Button } from '../../ui/button';
 import { Badge } from '../../ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../ui/select';
+import { Avatar, AvatarImage, AvatarFallback } from '../../ui/avatar';
 import { productsAPI, pricesAPI } from '../../../services/supabase-api';
 import { useAuth } from '../../../contexts/AuthContext';
 import { toast } from 'sonner';
@@ -392,6 +393,18 @@ export default function ProductDetailScreen() {
                         </span>
                       )}
                     </div>
+
+                    {item.user && (
+                      <div className="flex items-center gap-2 mb-3">
+                        <Avatar className="w-6 h-6">
+                          <AvatarImage src={item.user.avatar} />
+                          <AvatarFallback className="bg-green-600 text-white text-xs">
+                            {item.user.name?.charAt(0)?.toUpperCase() || 'U'}
+                          </AvatarFallback>
+                        </Avatar>
+                        <span className="text-sm text-gray-600">{item.user.name}</span>
+                      </div>
+                    )}
 
                     <div className="flex gap-2">
                       <Button

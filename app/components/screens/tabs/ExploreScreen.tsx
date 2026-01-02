@@ -7,6 +7,7 @@ import { Badge } from '../../ui/badge';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from '../../ui/sheet';
 import { Checkbox } from '../../ui/checkbox';
 import { Label } from '../../ui/label';
+import { Avatar, AvatarImage, AvatarFallback } from '../../ui/avatar';
 import { productsAPI, pricesAPI, searchAPI } from '../../../services/supabase-api';
 import { toast } from 'sonner';
 
@@ -600,6 +601,17 @@ export default function ExploreScreen() {
                                   {formatTimeAgo(item.created_at || item.createdAt || '')}
                                 </span>
                               </div>
+                              {item.user && (
+                                <div className="flex items-center gap-2 mt-1.5 sm:mt-2">
+                                  <Avatar className="w-5 h-5 sm:w-6 sm:h-6">
+                                    <AvatarImage src={item.user.avatar} />
+                                    <AvatarFallback className="bg-green-600 text-white text-xs">
+                                      {item.user.name?.charAt(0)?.toUpperCase() || 'U'}
+                                    </AvatarFallback>
+                                  </Avatar>
+                                  <span className="text-xs sm:text-sm text-gray-600">{item.user.name}</span>
+                                </div>
+                              )}
                               {(item.is_verified || item.isVerified) && (
                                 <div className="flex items-center gap-1.5 sm:gap-2 mt-1.5 sm:mt-2 text-xs sm:text-sm text-green-600">
                                   <CheckCircle2 className="w-3 h-3 sm:w-4 sm:h-4" />
@@ -758,6 +770,17 @@ export default function ExploreScreen() {
                               {formatTimeAgo(item.created_at || item.createdAt || '')}
                             </span>
                           </div>
+                          {item.user && (
+                            <div className="flex items-center gap-2 mt-1.5 sm:mt-2">
+                              <Avatar className="w-5 h-5 sm:w-6 sm:h-6">
+                                <AvatarImage src={item.user.avatar} />
+                                <AvatarFallback className="bg-green-600 text-white text-xs">
+                                  {item.user.name?.charAt(0)?.toUpperCase() || 'U'}
+                                </AvatarFallback>
+                              </Avatar>
+                              <span className="text-xs sm:text-sm text-gray-600">{item.user.name}</span>
+                            </div>
+                          )}
                           {(item.is_verified || item.isVerified) && (
                             <div className="flex items-center gap-1.5 sm:gap-2 mt-1.5 sm:mt-2 text-xs sm:text-sm text-green-600">
                               <CheckCircle2 className="w-3 h-3 sm:w-4 sm:h-4" />
@@ -823,6 +846,17 @@ export default function ExploreScreen() {
                               {formatTimeAgo(item.created_at || item.createdAt || '')}
                             </span>
                           </div>
+                          {item.user && (
+                            <div className="flex items-center gap-2 mb-1.5 sm:mb-2">
+                              <Avatar className="w-5 h-5 sm:w-6 sm:h-6">
+                                <AvatarImage src={item.user.avatar} />
+                                <AvatarFallback className="bg-green-600 text-white text-xs">
+                                  {item.user.name?.charAt(0)?.toUpperCase() || 'U'}
+                                </AvatarFallback>
+                              </Avatar>
+                              <span className="text-xs sm:text-sm text-gray-600">{item.user.name}</span>
+                            </div>
+                          )}
                           {(item.is_verified || item.isVerified) && (
                             <div className="flex items-center gap-1.5 sm:gap-2 text-xs sm:text-sm text-green-600">
                               <CheckCircle2 className="w-3 h-3 sm:w-4 sm:h-4" />
