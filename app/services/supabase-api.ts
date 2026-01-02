@@ -1,0 +1,1309 @@
+/**
+ * Supabase Direct API Service
+ * 
+ * This service replaces the backend API and uses Supabase directly.
+ * No backend server needed - everything runs client-side with Supabase.
+ */
+
+import { supabase } from '../lib/supabase';
+import { v4 as uuidv4 } from 'uuid';
+
+// ============================================================================
+// AUTH API - Using Supabase Auth
+// ============================================================================
+
+export const authAPI = {
+  register: async (email: string, password: string, name: string) => {
+    try {
+      // Create user in Supabase Auth
+      const { data: authData, error: authError } = await supabase.auth.signUp({
+        email,
+        password,
+        options: {
+          data: {
+            name,
+          },
+        },
+      });
+
+      if (authError) {
+        // Handle specific Supabase errors
+        if (authError.message.includes('leaked') || authError.message.includes('compromised')) {
+          throw new Error('Bu şifre güvenlik açığına uğramış. Lütfen daha güçlü bir şifre seçin.');
+        }
+        if (authError.message.includes('already registered')) {
+          throw new Error('Bu email adresi zaten kayıtlı. Lütfen giriş yapın.');
+        }
+        throw authError;
+      }
+      if (!authData.user) throw new Error('User creation failed');
+
+      // Create user profile in public.users
+      const { data: profileData, error: profileError } = await supabase
+        .from('users')
+        .insert({
+          id: authData.user.id,
+          email: authData.user.email!,
+          name,
+        })
+        .select()
+        .single();
+
+      if (profileError) {
+        console.error('Profile creation error:', profileError);
+        // Note: Cannot delete auth user from frontend (requires admin API)
+        // The auth user will remain but profile creation failed
+        // User can try registering again with same email (will get "already registered" error)
+        if (profileError.code === '42501') {
+          throw new Error('Profil oluşturulamadı: Yetki hatası. Lütfen daha sonra tekrar deneyin.');
+        }
+        throw new Error('Profil oluşturulamadı: ' + (profileError.message || 'Bilinmeyen hata'));
+      }
+
+      // If no session from signUp, try to sign in to get session
+      let session = authData.session;
+      if (!session) {
+        console.log('⚠️ No session from signUp, attempting signIn...');
+        const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({
+          email,
+          password,
+        });
+        if (signInError) {
+          console.error('SignIn after signUp error:', signInError);
+          // Continue anyway - session will be handled by onAuthStateChange
+        } else {
+          session = signInData.session;
+          console.log('✅ Session obtained from signIn');
+        }
+      }
+
+      // Store session in localStorage
+      if (session?.access_token) {
+        localStorage.setItem('authToken', session.access_token);
+        console.log('✅ Token stored in localStorage');
+      }
+
+      // Store user in localStorage
+      localStorage.setItem('user', JSON.stringify(profileData));
+      console.log('✅ User stored in localStorage');
+
+      return {
+        user: {
+          id: profileData.id,
+          email: profileData.email,
+          name: profileData.name,
+          avatar: profileData.avatar,
+          level: profileData.level,
+          points: profileData.points,
+          contributions: profileData.contributions,
+        },
+        token: session?.access_token || null,
+        session: session,
+      };
+    } catch (error: any) {
+      console.error('Registration error:', error);
+      throw new Error(error.message || 'Kayıt başarısız');
+    }
+  },
+
+  login: async (email: string, password: string) => {
+    try {
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email,
+        password,
+      });
+
+      if (error) {
+        // Handle specific Supabase errors
+        if (error.message.includes('Invalid login credentials')) {
+          throw new Error('Email veya şifre hatalı');
+        }
+        if (error.message.includes('Email not confirmed')) {
+          throw new Error('Email adresinizi doğrulamanız gerekiyor');
+        }
+        throw error;
+      }
+      if (!data.user || !data.session) throw new Error('Login failed');
+
+      // Get user profile
+      const { data: profile, error: profileError } = await supabase
+        .from('users')
+        .select('*')
+        .eq('id', data.user.id)
+        .single();
+
+      if (profileError) {
+        console.error('Profile fetch error:', profileError);
+        throw new Error('Kullanıcı profili bulunamadı');
+      }
+
+      return {
+        user: {
+          id: profile.id,
+          email: profile.email,
+          name: profile.name,
+          avatar: profile.avatar,
+          level: profile.level,
+          points: profile.points,
+          contributions: profile.contributions,
+        },
+        token: data.session.access_token,
+        session: data.session,
+      };
+    } catch (error: any) {
+      console.error('Login error:', error);
+      throw new Error(error.message || 'Giriş başarısız');
+    }
+  },
+
+  googleLogin: async () => {
+    try {
+      console.log('🔐 Starting Google OAuth...');
+      console.log('📍 Current origin:', window.location.origin);
+      console.log('📍 Current href:', window.location.href);
+      
+      // Detect if we're on mobile (Capacitor)
+      const isMobile = typeof window !== 'undefined' && 
+        (window as any).Capacitor?.isNativePlatform();
+      
+      // OAuth options
+      const oauthOptions: any = {
+        queryParams: {
+          access_type: 'offline',
+          prompt: 'consent',
+        },
+      };
+      
+      if (isMobile) {
+        // On mobile, explicitly use custom URL scheme for OAuth redirect
+        // This ensures the callback goes to the app, not to localhost
+        oauthOptions.redirectTo = 'com.esnaftaucuz.app://';
+        console.log('📱 Mobile detected, using custom URL scheme:', oauthOptions.redirectTo);
+      } else {
+        // On web, use the current origin
+        oauthOptions.redirectTo = `${window.location.origin}/`;
+        console.log('🌐 Web detected, using redirectTo:', oauthOptions.redirectTo);
+      }
+      
+      // Supabase handles the redirect automatically
+      const { data, error } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: oauthOptions,
+      });
+
+      if (error) {
+        console.error('❌ Google OAuth error:', error);
+        throw error;
+      }
+      
+      console.log('✅ Google OAuth redirect URL:', data.url);
+      // OAuth redirects, so we return the URL
+      return { redirectUrl: data.url };
+    } catch (error: any) {
+      console.error('Google login error:', error);
+      if (error.message?.includes('redirect_uri_mismatch')) {
+        throw new Error('Google OAuth yapılandırması hatalı. Lütfen geliştirici ile iletişime geçin.');
+      }
+      throw new Error(error.message || 'Google ile giriş başarısız');
+    }
+  },
+
+  guestLogin: async () => {
+    try {
+      // Create guest user profile (without auth.users entry)
+      const guestId = uuidv4();
+      
+      const { data: guestUser, error: createError } = await supabase
+        .from('users')
+        .insert({
+          id: guestId,
+          name: 'Misafir Kullanıcı',
+          email: `guest_${Date.now()}@guest.com`,
+          is_guest: true,
+        })
+        .select()
+        .single();
+
+      if (createError) throw createError;
+      if (!guestUser) throw new Error('Guest user creation failed');
+
+      return {
+        user: {
+          id: guestUser.id,
+          name: guestUser.name,
+          email: guestUser.email,
+          avatar: guestUser.avatar,
+          level: guestUser.level,
+          points: guestUser.points,
+          contributions: guestUser.contributions,
+          isGuest: true,
+        },
+        token: guestUser.id, // Use guest ID as token
+        session: {
+          access_token: guestUser.id,
+          expires_in: 3600,
+          token_type: 'Bearer',
+          user: { id: guestUser.id, email: guestUser.email },
+        },
+      };
+    } catch (error: any) {
+      console.error('Guest login error:', error);
+      throw new Error(error.message || 'Misafir girişi başarısız');
+    }
+  },
+
+  getCurrentUser: async () => {
+    try {
+      const { data: { user }, error } = await supabase.auth.getUser();
+      
+      if (error || !user) {
+        // Check if it's a guest user (UUID token)
+        const token = localStorage.getItem('authToken');
+        if (token && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(token)) {
+          const { data: guestUser } = await supabase
+            .from('users')
+            .select('*')
+            .eq('id', token)
+            .eq('is_guest', true)
+            .single();
+          
+          if (guestUser) {
+            return { user: guestUser };
+          }
+        }
+        throw error || new Error('User not found');
+      }
+
+      const { data: profile } = await supabase
+        .from('users')
+        .select('*')
+        .eq('id', user.id)
+        .single();
+
+      return { user: profile || user };
+    } catch (error: any) {
+      console.error('Get current user error:', error);
+      throw error;
+    }
+  },
+
+  logout: async () => {
+    try {
+      await supabase.auth.signOut();
+      localStorage.removeItem('authToken');
+      localStorage.removeItem('user');
+    } catch (error) {
+      console.error('Logout error:', error);
+    }
+  },
+};
+
+// ============================================================================
+// PRODUCTS API - Using Supabase Database
+// ============================================================================
+
+export const productsAPI = {
+  getAll: async (search?: string, category?: string) => {
+    try {
+      let query = supabase
+        .from('products')
+        .select('*')
+        .eq('is_active', true);
+
+      if (search) {
+        query = query.ilike('name', `%${search}%`);
+      }
+      if (category) {
+        query = query.eq('category', category);
+      }
+
+      const { data, error } = await query.order('name', { ascending: true });
+
+      if (error) throw error;
+      return data || [];
+    } catch (error: any) {
+      console.error('Get products error:', error);
+      throw new Error(error.message || 'Ürünler yüklenemedi');
+    }
+  },
+
+  getTrending: async () => {
+    try {
+      console.log('🔍 Fetching trending products...');
+      console.log('🌐 Supabase URL:', import.meta.env.VITE_SUPABASE_URL?.substring(0, 30) + '...');
+      console.log('🔑 Supabase Key:', import.meta.env.VITE_SUPABASE_ANON_KEY ? 'Set' : 'MISSING');
+      
+      // Check if Supabase is configured
+      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+      if (!supabaseUrl) {
+        console.warn('⚠️ Supabase not configured, returning empty array');
+        return [];
+      }
+      
+      // Test connection first with a simple query
+      console.log('🧪 Testing Supabase connection...');
+      const startTime = Date.now();
+      
+      // Direct query without Promise.race (timeout handled by Supabase client's custom fetch)
+      const { data, error } = await supabase
+        .from('products')
+        .select('id, name, category, image')
+        .eq('is_active', true)
+        .order('search_count', { ascending: false })
+        .limit(6);
+      
+      const endTime = Date.now();
+      console.log(`⏱️ Query completed in ${endTime - startTime}ms`);
+
+      if (error) {
+        console.error('❌ Supabase error:', error);
+        console.error('Error code:', error.code);
+        console.error('Error message:', error.message);
+        console.error('Error details:', error.details);
+        console.error('Error hint:', error.hint);
+        // Return empty array instead of throwing
+        return [];
+      }
+      
+      console.log('✅ Trending products fetched:', data?.length || 0);
+      return data || [];
+    } catch (error: any) {
+      console.error('❌ Get trending products exception:', error);
+      console.error('Error name:', error.name);
+      console.error('Error message:', error.message);
+      // Return empty array instead of throwing to prevent app from hanging
+      return [];
+    }
+  },
+
+  getById: async (id: string) => {
+    try {
+      // Get product
+      const { data: product, error: productError } = await supabase
+        .from('products')
+        .select('*')
+        .eq('id', id)
+        .single();
+
+      if (productError) throw productError;
+      if (!product) throw new Error('Product not found');
+
+      // Increment search count
+      await supabase
+        .from('products')
+        .update({ search_count: (product.search_count || 0) + 1 })
+        .eq('id', id);
+
+      return product;
+    } catch (error: any) {
+      console.error('Get product error:', error);
+      throw new Error(error.message || 'Ürün bulunamadı');
+    }
+  },
+
+  create: async (name: string, category?: string, defaultUnit?: string) => {
+    try {
+      console.log('Creating product:', { name, category, defaultUnit });
+      const { data, error } = await supabase
+        .from('products')
+        .insert({
+          name: name.trim(),
+          category: category || 'Diğer',
+          default_unit: defaultUnit || 'adet',
+          is_active: true,
+        })
+        .select()
+        .single();
+
+      if (error) {
+        console.error('Product creation error:', error);
+        throw new Error(`Ürün oluşturulamadı: ${error.message}`);
+      }
+      if (!data) {
+        throw new Error('Ürün oluşturulamadı: Yeni ürün döndürülmedi');
+      }
+      console.log('Product created successfully:', data.id);
+      return data;
+    } catch (error: any) {
+      console.error('Create product error:', error);
+      throw new Error(error.message || 'Ürün oluşturulamadı');
+    }
+  },
+};
+
+// ============================================================================
+// LOCATIONS API - Using Supabase Database
+// ============================================================================
+
+export const locationsAPI = {
+  getAll: async (filters?: {
+    type?: string;
+    city?: string;
+    district?: string;
+    lat?: number;
+    lng?: number;
+    radius?: number;
+  }) => {
+    try {
+      let query = supabase.from('locations').select('*');
+
+      if (filters?.type) {
+        query = query.eq('type', filters.type);
+      }
+      if (filters?.city) {
+        query = query.eq('city', filters.city);
+      }
+      if (filters?.district) {
+        query = query.eq('district', filters.district);
+      }
+
+      // Note: Geospatial filtering would require PostGIS functions
+      // For now, we'll fetch all and filter client-side if needed
+      const { data, error } = await query.order('name', { ascending: true });
+
+      if (error) throw error;
+
+      // Client-side geospatial filtering if coordinates provided
+      if (filters?.lat && filters?.lng && filters?.radius && data) {
+        const radiusKm = filters.radius / 1000;
+        return data.filter((loc: any) => {
+          if (!loc.coordinates) return false;
+          const coords = loc.coordinates;
+          const lat = coords.lat || coords.y || 0;
+          const lng = coords.lng || coords.x || 0;
+          const distance = calculateDistance(filters.lat!, filters.lng!, lat, lng);
+          return distance <= radiusKm;
+        });
+      }
+
+      return data || [];
+    } catch (error: any) {
+      console.error('Get locations error:', error);
+      throw new Error(error.message || 'Konumlar yüklenemedi');
+    }
+  },
+
+  getById: async (id: string) => {
+    try {
+      const { data, error } = await supabase
+        .from('locations')
+        .select('*')
+        .eq('id', id)
+        .single();
+
+      if (error) throw error;
+      if (!data) throw new Error('Location not found');
+      return data;
+    } catch (error: any) {
+      console.error('Get location error:', error);
+      throw new Error(error.message || 'Konum bulunamadı');
+    }
+  },
+
+  create: async (data: {
+    name: string;
+    type: string;
+    address?: string;
+    lat: number;
+    lng: number;
+    city?: string;
+    district?: string;
+  }) => {
+    try {
+      const { data: location, error } = await supabase
+        .from('locations')
+        .insert({
+          name: data.name,
+          type: data.type,
+          address: data.address,
+          coordinates: `(${data.lng},${data.lat})`, // PostgreSQL POINT format
+          city: data.city,
+          district: data.district,
+        })
+        .select()
+        .single();
+
+      if (error) throw error;
+      return location;
+    } catch (error: any) {
+      console.error('Create location error:', error);
+      throw new Error(error.message || 'Konum oluşturulamadı');
+    }
+  },
+};
+
+// ============================================================================
+// PRICES API - Using Supabase Database + Storage
+// ============================================================================
+
+export const pricesAPI = {
+  getAll: async (filters?: {
+    product?: string;
+    location?: string;
+    city?: string;
+    district?: string;
+    verified?: boolean;
+    todayOnly?: boolean;
+    withPhoto?: boolean;
+    sort?: 'newest' | 'cheapest' | 'expensive' | 'verified';
+    limit?: number;
+    lat?: number;
+    lng?: number;
+    radius?: number;
+  }) => {
+    try {
+      console.log('🔍 Fetching prices with filters:', filters);
+      let query = supabase
+        .from('prices')
+        .select(`
+          *,
+          product:products(id, name, category, default_unit, image),
+          location:locations(id, name, type, address, coordinates, city, district),
+          user:users(id, name, avatar, level)
+        `)
+        .eq('is_active', true);
+
+      if (filters?.product) {
+        query = query.eq('product_id', filters.product);
+      }
+      if (filters?.location) {
+        query = query.eq('location_id', filters.location);
+      }
+      if (filters?.verified) {
+        query = query.eq('is_verified', filters.verified);
+      }
+      if (filters?.withPhoto) {
+        query = query.not('photo', 'is', null);
+      }
+      if (filters?.todayOnly) {
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        query = query.gte('created_at', today.toISOString());
+      }
+
+      // Apply sorting
+      switch (filters?.sort) {
+        case 'cheapest':
+          query = query.order('price', { ascending: true });
+          break;
+        case 'expensive':
+          query = query.order('price', { ascending: false });
+          break;
+        case 'verified':
+          query = query.order('is_verified', { ascending: false });
+          query = query.order('verification_count', { ascending: false });
+          break;
+        case 'newest':
+        default:
+          query = query.order('created_at', { ascending: false });
+          break;
+      }
+
+      if (filters?.limit) {
+        query = query.limit(filters.limit);
+      } else {
+        query = query.limit(500); // Default limit
+      }
+
+      // Direct query (timeout handled by Supabase client's custom fetch)
+      const { data, error } = await query;
+
+      if (error) {
+        console.error('❌ Supabase query error:', error);
+        console.error('Error code:', error.code);
+        console.error('Error message:', error.message);
+        // Return empty array instead of throwing
+        return [];
+      }
+
+      // Normalize coordinates for frontend consumption
+      const normalizedData = (data || []).map((price: any) => {
+        let latVal: number | undefined;
+        let lngVal: number | undefined;
+
+        // First check if price has direct coordinates
+        if (price.coordinates) {
+          const coords = price.coordinates;
+          if (typeof coords === 'string') {
+            // PostgreSQL POINT string format: (lng,lat)
+            const match = coords.match(/\(([^,]+),([^)]+)\)/);
+            if (match) {
+              lngVal = parseFloat(match[1]);
+              latVal = parseFloat(match[2]);
+            }
+          } else if (typeof coords === 'object') {
+            if (typeof coords.lat === 'number' && typeof coords.lng === 'number') {
+              latVal = coords.lat;
+              lngVal = coords.lng;
+            } else if (typeof coords.x === 'number' && typeof coords.y === 'number') {
+              latVal = coords.y; // PostgreSQL POINT stores as (lng, lat)
+              lngVal = coords.x;
+            }
+          }
+        }
+
+        // Then check location coordinates
+        if ((!latVal || !lngVal) && price.location?.coordinates) {
+          const coords = price.location.coordinates;
+          if (typeof coords === 'string') {
+            // PostgreSQL POINT string format: (lng,lat)
+            const match = coords.match(/\(([^,]+),([^)]+)\)/);
+            if (match) {
+              lngVal = parseFloat(match[1]);
+              latVal = parseFloat(match[2]);
+            }
+          } else if (typeof coords === 'object') {
+            if (typeof coords.lat === 'number' && typeof coords.lng === 'number') {
+              latVal = coords.lat;
+              lngVal = coords.lng;
+            } else if (typeof coords.x === 'number' && typeof coords.y === 'number') {
+              latVal = coords.y; // PostgreSQL POINT stores as (lng, lat)
+              lngVal = coords.x;
+            }
+          }
+        }
+
+        // Add normalized coordinates to price object
+        if (typeof latVal === 'number' && typeof lngVal === 'number' && !isNaN(latVal) && !isNaN(lngVal)) {
+          return { ...price, lat: latVal, lng: lngVal };
+        }
+        return price;
+      });
+
+      console.log(`📍 Normalized ${normalizedData.filter((p: any) => p.lat && p.lng).length} prices with coordinates`);
+
+      // Client-side geospatial filtering if coordinates provided
+      let filteredData = normalizedData;
+      if (filters?.lat && filters?.lng && filters?.radius) {
+        const radiusKm = filters.radius / 1000;
+        filteredData = filteredData.filter((price: any) => {
+          // Use normalized lat/lng if available
+          if (price.lat && price.lng) {
+            const distance = calculateDistance(filters.lat!, filters.lng!, price.lat, price.lng);
+            return distance <= radiusKm;
+          }
+          return false;
+        });
+      }
+
+      console.log('✅ Prices fetched:', filteredData?.length || 0);
+      return filteredData;
+    } catch (error: any) {
+      console.error('❌ Get prices error:', error);
+      console.error('Error details:', {
+        message: error.message,
+        code: error.code,
+        details: error.details,
+        hint: error.hint,
+      });
+      // Return empty array instead of throwing to prevent app from hanging
+      return [];
+    }
+  },
+
+  getByProduct: async (productId: string, sort: 'newest' | 'cheapest' | 'expensive' | 'verified' = 'cheapest') => {
+    return pricesAPI.getAll({ product: productId, sort });
+  },
+
+  getById: async (id: string) => {
+    try {
+      const { data, error } = await supabase
+        .from('prices')
+        .select(`
+          *,
+          product:products(id, name, category, default_unit, image),
+          location:locations(id, name, type, address, coordinates, city, district),
+          user:users(id, name, avatar, level)
+        `)
+        .eq('id', id)
+        .single();
+
+      if (error) throw error;
+      if (!data) throw new Error('Price not found');
+      return data;
+    } catch (error: any) {
+      console.error('Get price error:', error);
+      throw new Error(error.message || 'Fiyat bulunamadı');
+    }
+  },
+
+  create: async (data: {
+    product: string;
+    price: number;
+    unit: string;
+    location: string;
+    lat?: number;
+    lng?: number;
+    photo?: File;
+  }) => {
+    // Add overall timeout for the entire operation
+    const overallTimeout = new Promise((_, reject) => {
+      setTimeout(() => reject(new Error('İşlem zaman aşımına uğradı. Lütfen tekrar deneyin.')), 30000); // 30 second timeout
+    });
+
+    const createOperation = async () => {
+      try {
+        console.log('🚀 Starting price creation...');
+        
+        // Get current user
+        console.log('👤 Getting user...');
+        const { data: { user: authUser } } = await supabase.auth.getUser();
+        const token = localStorage.getItem('authToken');
+        
+        let userId: string | null = null;
+        
+        if (authUser) {
+          userId = authUser.id;
+          console.log('✅ Authenticated user found:', userId);
+        } else if (token && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(token)) {
+          // Guest user
+          userId = token;
+          console.log('✅ Guest user found:', userId);
+        }
+
+        if (!userId) {
+          throw new Error('Giriş yapmanız gerekiyor');
+        }
+
+      // Find or create product
+      console.log('🔍 Finding or creating product...');
+      // data.product can be either an ID (UUID) or a product name
+      let productId = data.product;
+      
+      // Check if it's a UUID (ID format)
+      const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(data.product);
+      console.log('Product is UUID:', isUUID, 'Value:', data.product);
+      
+      let existingProduct = null;
+      if (isUUID) {
+        // Search by ID
+        console.log('Searching product by ID...');
+        const { data: product, error: productError } = await supabase
+          .from('products')
+          .select('id')
+          .eq('id', data.product)
+          .maybeSingle();
+        if (productError) {
+          console.error('Product search error:', productError);
+        }
+        existingProduct = product;
+      } else {
+        // Search by name (case-insensitive)
+        console.log('Searching product by name...');
+        const { data: product, error: productError } = await supabase
+          .from('products')
+          .select('id')
+          .ilike('name', data.product.trim())
+          .maybeSingle();
+        if (productError) {
+          console.error('Product search error:', productError);
+        }
+        existingProduct = product;
+      }
+
+      if (!existingProduct) {
+        console.log('Creating new product:', data.product);
+        const { data: newProduct, error: createError } = await supabase
+          .from('products')
+          .insert({
+            name: data.product.trim(),
+            default_unit: data.unit,
+            is_active: true,
+          })
+          .select('id')
+          .single();
+
+        if (createError) {
+          console.error('Product creation error:', createError);
+          throw new Error(`Ürün oluşturulamadı: ${createError.message}`);
+        }
+        if (!newProduct) {
+          throw new Error('Ürün oluşturulamadı: Yeni ürün döndürülmedi');
+        }
+        productId = newProduct.id;
+        console.log('Product created with ID:', productId);
+      } else {
+        productId = existingProduct.id;
+        console.log('Using existing product ID:', productId);
+      }
+
+      // Find or create location
+      console.log('🔍 Finding or creating location...');
+      // data.location can be either an ID (UUID) or a location name
+      let locationId = data.location;
+      
+      // Check if it's a UUID (ID format)
+      const isLocationUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(data.location);
+      console.log('Location is UUID:', isLocationUUID, 'Value:', data.location);
+      
+      let existingLocation = null;
+      if (isLocationUUID) {
+        // Search by ID
+        console.log('Searching location by ID...');
+        const { data: location, error: locationError } = await supabase
+          .from('locations')
+          .select('id')
+          .eq('id', data.location)
+          .maybeSingle();
+        if (locationError) {
+          console.error('Location search error:', locationError);
+        }
+        existingLocation = location;
+      } else {
+        // Search by name (case-insensitive)
+        console.log('Searching location by name...');
+        const { data: location, error: locationError } = await supabase
+          .from('locations')
+          .select('id')
+          .ilike('name', data.location.trim())
+          .maybeSingle();
+        if (locationError) {
+          console.error('Location search error:', locationError);
+        }
+        existingLocation = location;
+      }
+
+      if (!existingLocation) {
+        console.log('Creating new location:', data.location);
+        const defaultLat = data.lat || 37.8667;
+        const defaultLng = data.lng || 32.4833;
+        
+        const { data: newLocation, error: createError } = await supabase
+          .from('locations')
+          .insert({
+            name: data.location.trim(),
+            type: 'diğer',
+            coordinates: `(${defaultLng},${defaultLat})`,
+          })
+          .select('id')
+          .single();
+
+        if (createError) {
+          console.error('Location creation error:', createError);
+          throw new Error(`Konum oluşturulamadı: ${createError.message}`);
+        }
+        if (!newLocation) {
+          throw new Error('Konum oluşturulamadı: Yeni konum döndürülmedi');
+        }
+        locationId = newLocation.id;
+        console.log('Location created with ID:', locationId);
+      } else {
+        locationId = existingLocation.id;
+        console.log('Using existing location ID:', locationId);
+      }
+
+      // Upload photo to Supabase Storage if provided
+      let photoUrl: string | null = null;
+      if (data.photo) {
+        try {
+          console.log('Uploading photo to Supabase Storage...');
+          const fileExt = data.photo.name.split('.').pop() || 'jpg';
+          const fileName = `${userId}/${uuidv4()}.${fileExt}`;
+          
+          const { error: uploadError } = await supabase.storage
+            .from('price-photos')
+            .upload(fileName, data.photo, {
+              cacheControl: '3600',
+              upsert: false
+            });
+
+          if (uploadError) {
+            console.error('Photo upload error:', uploadError);
+            // Continue without photo if upload fails (don't block price creation)
+            console.warn('Continuing without photo due to upload error');
+          } else {
+            const { data: urlData } = supabase.storage
+              .from('price-photos')
+              .getPublicUrl(fileName);
+            photoUrl = urlData.publicUrl;
+            console.log('Photo uploaded successfully:', photoUrl);
+          }
+        } catch (photoError: any) {
+          console.error('Photo upload exception:', photoError);
+          // Continue without photo
+        }
+      }
+
+      // Create price
+      const priceData: any = {
+        product_id: productId,
+        price: data.price,
+        unit: data.unit,
+        location_id: locationId,
+        user_id: userId,
+        photo: photoUrl,
+      };
+
+      if (data.lat && data.lng) {
+        priceData.coordinates = `(${data.lng},${data.lat})`;
+      }
+
+      console.log('📝 Creating price with data:', {
+        product_id: priceData.product_id,
+        location_id: priceData.location_id,
+        user_id: priceData.user_id,
+        price: priceData.price,
+        hasPhoto: !!priceData.photo,
+        hasCoordinates: !!(priceData.coordinates),
+      });
+
+      console.log('💾 Inserting price into database...');
+      const { data: priceRecord, error: priceError } = await supabase
+        .from('prices')
+        .insert(priceData)
+        .select(`
+          *,
+          product:products(id, name, category, default_unit, image),
+          location:locations(id, name, type, address, coordinates, city, district),
+          user:users(id, name, avatar, level)
+        `)
+        .single();
+
+      if (priceError) {
+        console.error('Price creation error:', priceError);
+        console.error('Price data:', priceData);
+        throw new Error(`Fiyat oluşturulamadı: ${priceError.message}`);
+      }
+      
+      if (!priceRecord) {
+        throw new Error('Fiyat oluşturulamadı: Yeni fiyat döndürülmedi');
+      }
+      
+      console.log('Price created successfully:', priceRecord.id);
+
+      // Update user points
+      const { data: userProfile } = await supabase
+        .from('users')
+        .select('points, contributions')
+        .eq('id', userId)
+        .single();
+
+      if (userProfile) {
+        const newPoints = (userProfile.points || 0) + 10;
+        const contributions = userProfile.contributions || { shares: 0, verifications: 0 };
+        
+        await supabase
+          .from('users')
+          .update({
+            points: newPoints,
+            contributions: {
+              ...contributions,
+              shares: (contributions.shares || 0) + 1,
+            },
+          })
+          .eq('id', userId);
+      }
+
+        console.log('✅ Price creation completed successfully');
+        return priceRecord;
+      } catch (error: any) {
+        console.error('❌ Create price error:', error);
+        console.error('Error details:', {
+          message: error.message,
+          code: error.code,
+          details: error.details,
+          hint: error.hint,
+        });
+        throw new Error(error.message || 'Fiyat oluşturulamadı');
+      }
+    };
+
+    // Race between operation and timeout
+    return Promise.race([createOperation(), overallTimeout]) as Promise<any>;
+  },
+
+  verify: async (id: string) => {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      const token = localStorage.getItem('authToken');
+      
+      if (!user && !token) {
+        throw new Error('Giriş yapmanız gerekiyor');
+      }
+
+      // Get current price to increment verification_count
+      const { data: currentPrice } = await supabase
+        .from('prices')
+        .select('verification_count')
+        .eq('id', id)
+        .single();
+
+      const { data: price, error } = await supabase
+        .from('prices')
+        .update({
+          is_verified: true,
+          verification_count: (currentPrice?.verification_count || 0) + 1,
+        })
+        .eq('id', id)
+        .select(`
+          *,
+          product:products(id, name, category, default_unit, image),
+          location:locations(id, name, type, address, coordinates, city, district),
+          user:users(id, name, avatar, level)
+        `)
+        .single();
+
+      if (error) throw error;
+      return { message: 'Fiyat doğrulandı', price };
+    } catch (error: any) {
+      console.error('Verify price error:', error);
+      throw new Error(error.message || 'Fiyat doğrulanamadı');
+    }
+  },
+
+  report: async (id: string) => {
+    try {
+      // Get current price to increment report_count
+      const { data: currentPrice } = await supabase
+        .from('prices')
+        .select('report_count')
+        .eq('id', id)
+        .single();
+
+      // Increment report count
+      const { data, error } = await supabase
+        .from('prices')
+        .update({
+          report_count: (currentPrice?.report_count || 0) + 1,
+        })
+        .eq('id', id)
+        .select()
+        .single();
+
+      if (error) throw error;
+      return { message: 'Fiyat raporlandı' };
+    } catch (error: any) {
+      console.error('Report price error:', error);
+      throw new Error(error.message || 'Fiyat raporlanamadı');
+    }
+  },
+};
+
+// ============================================================================
+// USERS API - Using Supabase Database
+// ============================================================================
+
+export const usersAPI = {
+  getById: async (id: string) => {
+    try {
+      const { data, error } = await supabase
+        .from('users')
+        .select('*')
+        .eq('id', id)
+        .single();
+
+      if (error) throw error;
+      if (!data) throw new Error('User not found');
+      return data;
+    } catch (error: any) {
+      console.error('Get user error:', error);
+      throw new Error(error.message || 'Kullanıcı bulunamadı');
+    }
+  },
+
+  getContributions: async (id: string) => {
+    try {
+      const { data, error } = await supabase
+        .from('prices')
+        .select(`
+          *,
+          product:products(id, name, category, default_unit, image),
+          location:locations(id, name, type, address, coordinates, city, district)
+        `)
+        .eq('user_id', id)
+        .eq('is_active', true)
+        .order('created_at', { ascending: false })
+        .limit(50);
+
+      if (error) throw error;
+      return data || [];
+    } catch (error: any) {
+      console.error('Get contributions error:', error);
+      throw new Error(error.message || 'Katkılar yüklenemedi');
+    }
+  },
+
+  update: async (id: string, data: {
+    name?: string;
+    location?: {
+      city?: string;
+      district?: string;
+      coordinates?: { lat: number; lng: number };
+    };
+    preferences?: {
+      notifications?: boolean;
+    };
+  }) => {
+    try {
+      const updateData: any = {};
+      if (data.name) updateData.name = data.name;
+      if (data.preferences) updateData.preferences = data.preferences;
+      if (data.location) {
+        if (data.location.city) updateData.city = data.location.city;
+        if (data.location.district) updateData.district = data.location.district;
+        if (data.location.coordinates) {
+          updateData.coordinates = `(${data.location.coordinates.lng},${data.location.coordinates.lat})`;
+        }
+      }
+
+      const { data: updated, error } = await supabase
+        .from('users')
+        .update(updateData)
+        .eq('id', id)
+        .select()
+        .single();
+
+      if (error) throw error;
+      return updated;
+    } catch (error: any) {
+      console.error('Update user error:', error);
+      throw new Error(error.message || 'Kullanıcı güncellenemedi');
+    }
+  },
+};
+
+// ============================================================================
+// SEARCH API - Using Supabase Full-Text Search
+// ============================================================================
+
+export const searchAPI = {
+  search: async (query: string, type: 'all' | 'products' | 'prices' | 'locations' = 'all') => {
+    try {
+      const results: {
+        products: any[];
+        prices: any[];
+        locations: any[];
+      } = {
+        products: [],
+        prices: [],
+        locations: [],
+      };
+
+      if (type === 'all' || type === 'products') {
+        const { data: products } = await supabase
+          .from('products')
+          .select('*')
+          .ilike('name', `%${query}%`)
+          .eq('is_active', true)
+          .limit(10);
+        results.products = products || [];
+      }
+
+      if (type === 'all' || type === 'prices') {
+        const { data: prices } = await supabase
+          .from('prices')
+          .select(`
+            *,
+            product:products(id, name, category, default_unit, image),
+            location:locations(id, name, type, address, coordinates, city, district),
+            user:users(id, name, avatar, level)
+          `)
+          .eq('is_active', true)
+          .limit(20);
+        
+        // Filter by product name match
+        if (prices) {
+          results.prices = prices.filter((p: any) => 
+            p.product?.name?.toLowerCase().includes(query.toLowerCase())
+          );
+        }
+      }
+
+      if (type === 'all' || type === 'locations') {
+        const { data: locations } = await supabase
+          .from('locations')
+          .select('*')
+          .or(`name.ilike.%${query}%,address.ilike.%${query}%,city.ilike.%${query}%,district.ilike.%${query}%`)
+          .limit(10);
+        results.locations = locations || [];
+      }
+
+      return results;
+    } catch (error: any) {
+      console.error('Search error:', error);
+      throw new Error(error.message || 'Arama başarısız');
+    }
+  },
+
+  getNearbyCheapest: async (lat: number, lng: number, radius: number = 5000, limit: number = 10) => {
+    try {
+      console.log('🔍 Fetching nearby cheapest prices...');
+      
+      // Get all prices (geospatial filtering would require PostGIS)
+      // Timeout handled by Supabase client's custom fetch
+      const { data: prices, error } = await supabase
+        .from('prices')
+        .select(`
+          *,
+          product:products(id, name, category, default_unit, image),
+          location:locations(id, name, type, address, coordinates, city, district),
+          user:users(id, name, avatar, level)
+        `)
+        .eq('is_active', true)
+        .gte('created_at', new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()) // Last 24 hours
+        .order('price', { ascending: true })
+        .limit(100);
+
+      if (error) {
+        console.error('❌ Supabase error:', error);
+        throw error;
+      }
+      
+      console.log('✅ Nearby prices fetched:', prices?.length || 0);
+
+      // Client-side geospatial filtering
+      const radiusKm = radius / 1000;
+      const nearbyPrices = (prices || []).filter((price: any) => {
+        if (!price.location?.coordinates) return false;
+        const coords = price.location.coordinates;
+        const priceLat = coords.lat || coords.y || 0;
+        const priceLng = coords.lng || coords.x || 0;
+        const distance = calculateDistance(lat, lng, priceLat, priceLng);
+        return distance <= radiusKm;
+      });
+
+      // Group by product and get cheapest
+      const cheapestByProduct: Record<string, any> = {};
+      nearbyPrices.forEach((price: any) => {
+        const productId = price.product?.id;
+        if (!productId) return;
+        if (!cheapestByProduct[productId] || price.price < cheapestByProduct[productId].price) {
+          cheapestByProduct[productId] = price;
+        }
+      });
+
+      const result = Object.values(cheapestByProduct).slice(0, limit);
+      console.log('✅ Nearby cheapest prices processed:', result.length);
+      return result;
+    } catch (error: any) {
+      console.error('❌ Get nearby cheapest error:', error);
+      console.error('Error details:', {
+        message: error.message,
+        code: error.code,
+        details: error.details,
+        hint: error.hint,
+      });
+      // Return empty array instead of throwing to prevent app from hanging
+      return [];
+    }
+  },
+};
+
+// ============================================================================
+// HELPER FUNCTIONS
+// ============================================================================
+
+function calculateDistance(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const R = 6371; // Earth's radius in km
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(lat1 * Math.PI / 180) *
+      Math.cos(lat2 * Math.PI / 180) *
+      Math.sin(dLon / 2) *
+      Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+}
+

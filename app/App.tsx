@@ -1,0 +1,192 @@
+import React, { useState, useEffect } from 'react';
+import { BrowserRouter, Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom';
+import { Toaster } from './components/ui/sonner';
+import { AuthProvider, useAuth } from './contexts/AuthContext';
+import SplashScreen from './components/screens/SplashScreen';
+import OnboardingScreen from './components/screens/OnboardingScreen';
+import LocationPermissionScreen from './components/screens/LocationPermissionScreen';
+import LoginScreen from './components/screens/LoginScreen';
+import MainApp from './components/screens/MainApp';
+import { App as CapacitorApp } from '@capacitor/app';
+import { supabase } from './lib/supabase';
+
+// Protected route wrapper - redirects to login if not authenticated
+function ProtectedRoute({ children }: { children: React.ReactNode }) {
+  const { user, isLoading } = useAuth();
+
+  if (isLoading) {
+    return <div className="min-h-screen bg-background flex items-center justify-center">
+      <div className="text-gray-500">Yükleniyor...</div>
+    </div>;
+  }
+
+  if (!user) {
+    return <Navigate to="/login" replace />;
+  }
+
+  return <>{children}</>;
+}
+
+// App routes component (needs to be inside AuthProvider)
+function AppRoutes() {
+  const { user, isLoading } = useAuth(); // useAuth handles HMR cases internally
+  const location = useLocation();
+  const navigate = useNavigate();
+  const [hasSeenOnboarding, setHasSeenOnboarding] = useState(false);
+  const [hasLocationPermission, setHasLocationPermission] = useState(false);
+
+  // Handle OAuth callback redirect - if user is logged in and on root, redirect to explore
+  useEffect(() => {
+    console.log('🔍 AppRoutes useEffect - user:', user ? user.email : 'null', 'isLoading:', isLoading, 'pathname:', location.pathname);
+    if (user && !isLoading) {
+      // If user is logged in and on root or login page, redirect to explore
+      if (location.pathname === '/' || location.pathname === '/login') {
+        console.log('✅ User logged in, redirecting to /app/explore');
+        navigate('/app/explore', { replace: true });
+      }
+    }
+  }, [user, isLoading, location.pathname, navigate]);
+
+  // If user is already logged in, redirect to main app
+  // Also handle OAuth callback - if we're on root with a user, redirect to explore
+  if (user && !isLoading) {
+    console.log('✅ AppRoutes: User is logged in, rendering main app routes');
+    // If we're on root path and user is logged in, redirect to explore
+    if (location.pathname === '/') {
+      console.log('✅ AppRoutes: Redirecting from root to /app/explore');
+      return <Navigate to="/app/explore" replace />;
+    }
+    
+    return (
+      <Routes>
+        <Route path="/app/*" element={<MainApp />} />
+        <Route path="*" element={<Navigate to="/app/explore" replace />} />
+      </Routes>
+    );
+  }
+  
+  // Debug log for when user is not logged in
+  if (!isLoading && !user) {
+    console.log('⚠️ AppRoutes: No user, showing auth flow');
+  }
+
+  // If still loading auth state, show loading
+  if (isLoading) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <div className="text-gray-500">Yükleniyor...</div>
+      </div>
+    );
+  }
+
+  // If not authenticated, show auth flow
+  return (
+    <Routes>
+      <Route path="/" element={<SplashScreen />} />
+      <Route 
+        path="/onboarding" 
+        element={<OnboardingScreen onComplete={() => setHasSeenOnboarding(true)} />} 
+      />
+      <Route 
+        path="/location" 
+        element={<LocationPermissionScreen onAllow={() => setHasLocationPermission(true)} />} 
+      />
+      <Route 
+        path="/login" 
+        element={<LoginScreen onLogin={() => {}} />} 
+      />
+      <Route path="/app/*" element={<ProtectedRoute><MainApp /></ProtectedRoute>} />
+      <Route path="*" element={<Navigate to="/" replace />} />
+    </Routes>
+  );
+}
+
+function App() {
+  useEffect(() => {
+    // Handle deep links and OAuth callbacks on mobile
+    const isMobile = typeof window !== 'undefined' && 
+      (window as any).Capacitor?.isNativePlatform();
+    
+    if (isMobile) {
+      // Listen for app URL open events (deep links)
+      const listener = CapacitorApp.addListener('appUrlOpen', (event) => {
+        console.log('🔗 App opened with URL:', event.url);
+        
+        // Parse the URL to extract OAuth callback parameters
+        try {
+          // Fix URL format if needed (com.esnaftaucuz.app:?code=... -> com.esnaftaucuz.app://?code=...)
+          let urlString = event.url;
+          if (urlString.includes('com.esnaftaucuz.app:?') && !urlString.includes('://')) {
+            urlString = urlString.replace('com.esnaftaucuz.app:', 'com.esnaftaucuz.app://');
+            console.log('🔧 Fixed URL format:', urlString);
+          }
+          
+          const url = new URL(urlString);
+          
+          // Check for PKCE flow code parameter in query string
+          const code = url.searchParams.get('code');
+          const error = url.searchParams.get('error') || url.searchParams.get('error_description');
+          
+          // Check for implicit flow access_token in hash fragment
+          const hash = url.hash.substring(1);
+          const hashParams = new URLSearchParams(hash);
+          const accessToken = hashParams.get('access_token');
+          const hashError = hashParams.get('error');
+          
+          if (code) {
+            // PKCE flow - code parameter in query string
+            console.log('🔐 OAuth PKCE callback detected in deep link (code parameter)');
+            // Exchange the code for a session manually
+            // Supabase client needs to exchange the code for access token
+            supabase.auth.exchangeCodeForSession(code)
+              .then(({ data, error }) => {
+                if (error) {
+                  console.error('❌ Failed to exchange code for session:', error);
+                  window.location.hash = `error=${encodeURIComponent(error.message || 'Failed to exchange code')}`;
+                } else {
+                  console.log('✅ Code exchanged for session successfully');
+                  // Session is now set, AuthContext will handle the rest via onAuthStateChange
+                  // Clean up URL
+                  window.history.replaceState({}, document.title, '/');
+                }
+              })
+              .catch((err) => {
+                console.error('❌ Error exchanging code for session:', err);
+                window.location.hash = `error=${encodeURIComponent(err.message || 'Unknown error')}`;
+              });
+          } else if (accessToken) {
+            // Implicit flow - access_token in hash fragment
+            console.log('🔐 OAuth implicit callback detected in deep link (access_token)');
+            window.location.hash = hash;
+          } else if (error || hashError) {
+            console.error('❌ OAuth error in deep link:', error || hashError);
+            // Show error to user
+            window.location.hash = `error=${encodeURIComponent(error || hashError || 'Unknown error')}`;
+          } else {
+            console.log('⚠️ No OAuth parameters found in deep link URL');
+          }
+        } catch (e) {
+          console.error('❌ Failed to parse deep link URL:', e);
+          console.error('URL was:', event.url);
+        }
+      });
+      
+      return () => {
+        listener.remove();
+      };
+    }
+  }, []);
+
+  return (
+    <AuthProvider>
+      <BrowserRouter>
+        <div className="min-h-screen bg-background">
+          <AppRoutes />
+          <Toaster />
+        </div>
+      </BrowserRouter>
+    </AuthProvider>
+  );
+}
+
+export default App;

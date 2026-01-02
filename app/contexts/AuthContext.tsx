@@ -1,0 +1,581 @@
+import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import { authAPI } from '../services/supabase-api';
+import { supabase } from '../lib/supabase';
+
+interface User {
+  id: string;
+  name: string;
+  email: string;
+  avatar?: string;
+  level: string;
+  points: number;
+  contributions: {
+    shares: number;
+    verifications: number;
+  };
+  isGuest?: boolean;
+}
+
+interface AuthContextType {
+  user: User | null;
+  token: string | null;
+  isLoading: boolean;
+  register: (email: string, password: string, name: string) => Promise<void>;
+  login: (email: string, password: string) => Promise<void>;
+  googleLogin: () => Promise<void>;
+  guestLogin: () => Promise<void>;
+  logout: () => Promise<void>;
+  refreshUser: () => Promise<void>;
+}
+
+const AuthContext = createContext<AuthContextType | undefined>(undefined);
+
+export function AuthProvider({ children }: { children: ReactNode }) {
+  const [user, setUser] = useState<User | null>(null);
+  const [token, setToken] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+
+  useEffect(() => {
+    // Check for OAuth callback in URL (Supabase adds hash fragments)
+    const hashParams = new URLSearchParams(window.location.hash.substring(1));
+    const accessToken = hashParams.get('access_token');
+    const error = hashParams.get('error');
+    
+    if (error) {
+      console.error('OAuth error in URL:', error);
+      // Clean up URL
+      window.history.replaceState({}, document.title, window.location.pathname);
+      setIsLoading(false);
+      return;
+    }
+    
+    // If OAuth callback detected, keep loading until session is processed
+    const isOAuthCallback = !!accessToken;
+    if (isOAuthCallback) {
+      console.log('🔐 OAuth callback detected in URL');
+      // Keep loading state - will be set to false after profile is loaded
+      // Clean up URL immediately to prevent issues
+      window.history.replaceState({}, document.title, '/');
+    }
+
+    // Load user profile helper with timeout protection
+    const loadUserProfile = async (session: any, event: string, shouldCleanUrl: boolean = false) => {
+      // Safety timeout - force loading to false after 15 seconds
+      // This is a backup timeout in case Promise.race doesn't work
+      const profileTimeout = setTimeout(() => {
+        console.warn('⚠️ Profile load safety timeout - forcing loading to false');
+        // Even on timeout, try to set user from session if available
+        if (session?.user) {
+          const userMetadata = session.user.user_metadata || {};
+          const fallbackUser = {
+            id: session.user.id,
+            email: session.user.email || '',
+            name: userMetadata.name || userMetadata.full_name || session.user.email?.split('@')[0] || 'Kullanıcı',
+            avatar: userMetadata.avatar_url || userMetadata.picture,
+            level: 1,
+            points: 0,
+            contributions: 0,
+            isGuest: false,
+          };
+          setUser(fallbackUser);
+          localStorage.setItem('user', JSON.stringify(fallbackUser));
+          console.log('⚠️ Using fallback user due to safety timeout');
+        }
+        setIsLoading(false);
+      }, 15000); // 15 seconds safety timeout
+
+      try {
+        console.log('🔄 Loading user profile for:', session.user.email);
+        setToken(session.access_token);
+        localStorage.setItem('authToken', session.access_token);
+        
+        // Get user profile with explicit timeout using Promise.race
+        const profilePromise = supabase
+          .from('users')
+          .select('*')
+          .eq('id', session.user.id)
+          .single();
+        
+        const timeoutPromise = new Promise((_, reject) => {
+          setTimeout(() => reject(new Error('Profile fetch timeout after 10 seconds')), 10000);
+        });
+        
+        let profile: any = null;
+        let profileError: any = null;
+        
+        try {
+          const profileResult = await Promise.race([profilePromise, timeoutPromise]);
+          const result = profileResult as { data: any; error: any };
+          profile = result.data;
+          profileError = result.error;
+          
+          if (profileError && profileError.code !== 'PGRST116') {
+            console.error('❌ Profile fetch error:', profileError);
+            console.error('Profile error details:', {
+              code: profileError.code,
+              message: profileError.message,
+              details: profileError.details,
+            });
+          }
+        } catch (timeoutError: any) {
+          console.error('❌ Profile fetch timeout:', timeoutError);
+          profile = null;
+          profileError = { code: 'TIMEOUT', message: 'Profile fetch timed out' };
+        }
+        
+        // If profile doesn't exist (e.g., Google OAuth new user), create it
+        if (!profile && (event === 'SIGNED_IN' || event === 'INITIAL_SESSION')) {
+          console.log('⚠️ Profile not found, creating new profile for OAuth user...');
+          const userMetadata = session.user.user_metadata || {};
+          
+          // Create profile with timeout
+          const createPromise = supabase
+            .from('users')
+            .insert({
+              id: session.user.id,
+              email: session.user.email || '',
+              name: userMetadata.name || userMetadata.full_name || session.user.email?.split('@')[0] || 'Kullanıcı',
+              avatar: userMetadata.avatar_url || userMetadata.picture,
+              google_id: userMetadata.provider === 'google' ? session.user.id : null,
+              is_guest: false,
+            })
+            .select()
+            .single();
+          
+          const createTimeoutPromise = new Promise((_, reject) => {
+            setTimeout(() => reject(new Error('Profile creation timeout after 10 seconds')), 10000);
+          });
+          
+          try {
+            const createResult = await Promise.race([createPromise, createTimeoutPromise]);
+            const result = createResult as { data: any; error: any };
+            
+            if (result.error) {
+              console.error('❌ Failed to create profile:', result.error);
+              console.error('Create error details:', {
+                code: result.error.code,
+                message: result.error.message,
+                details: result.error.details,
+              });
+              // Create fallback user from session data
+              const fallbackUser = {
+                id: session.user.id,
+                email: session.user.email || '',
+                name: userMetadata.name || userMetadata.full_name || session.user.email?.split('@')[0] || 'Kullanıcı',
+                avatar: userMetadata.avatar_url || userMetadata.picture,
+                level: 1,
+                points: 0,
+                contributions: 0,
+                isGuest: false,
+              };
+              profile = fallbackUser;
+              console.log('⚠️ Using fallback user due to profile creation failure');
+            } else {
+              profile = result.data;
+              console.log('✅ Profile created for OAuth user');
+            }
+          } catch (createTimeoutError: any) {
+            console.error('❌ Profile creation timeout:', createTimeoutError);
+            // Create fallback user from session data
+            const fallbackUser = {
+              id: session.user.id,
+              email: session.user.email || '',
+              name: userMetadata.name || userMetadata.full_name || session.user.email?.split('@')[0] || 'Kullanıcı',
+              avatar: userMetadata.avatar_url || userMetadata.picture,
+              level: 1,
+              points: 0,
+              contributions: 0,
+              isGuest: false,
+            };
+            profile = fallbackUser;
+            console.log('⚠️ Using fallback user due to profile creation timeout');
+          }
+        }
+        
+        clearTimeout(profileTimeout);
+        
+        if (profile) {
+          setUser(profile);
+          localStorage.setItem('user', JSON.stringify(profile));
+          console.log('✅ User profile loaded:', profile.email);
+          console.log('✅ User state set:', { id: profile.id, email: profile.email, name: profile.name });
+        } else {
+          console.warn('⚠️ No profile found and could not create one');
+          // Even if profile creation failed, create a fallback user
+          const userMetadata = session.user.user_metadata || {};
+          const fallbackUser = {
+            id: session.user.id,
+            email: session.user.email || '',
+            name: userMetadata.name || userMetadata.full_name || session.user.email?.split('@')[0] || 'Kullanıcı',
+            avatar: userMetadata.avatar_url || userMetadata.picture,
+            level: 1,
+            points: 0,
+            contributions: 0,
+            isGuest: false,
+          };
+          setUser(fallbackUser);
+          localStorage.setItem('user', JSON.stringify(fallbackUser));
+          console.log('⚠️ Using fallback user - profile not available');
+        }
+        
+        setIsLoading(false);
+        
+        // Clean up OAuth callback URL - always go to root after OAuth
+        if (shouldCleanUrl) {
+          // Always redirect to root after OAuth to trigger AppRoutes navigation
+          window.history.replaceState({}, document.title, '/');
+          console.log('🧹 OAuth callback URL cleaned, redirected to root');
+        }
+      } catch (error) {
+        clearTimeout(profileTimeout);
+        console.error('❌ Load user profile error:', error);
+        // Even on error, try to set user from session
+        if (session?.user) {
+          const userMetadata = session.user.user_metadata || {};
+          const fallbackUser = {
+            id: session.user.id,
+            email: session.user.email || '',
+            name: userMetadata.name || userMetadata.full_name || session.user.email?.split('@')[0] || 'Kullanıcı',
+            avatar: userMetadata.avatar_url || userMetadata.picture,
+            level: 1,
+            points: 0,
+            contributions: 0,
+            isGuest: false,
+          };
+          setUser(fallbackUser);
+          localStorage.setItem('user', JSON.stringify(fallbackUser));
+          console.log('⚠️ Using fallback user due to error');
+        }
+        setIsLoading(false);
+      }
+    };
+
+    // Initial session check with timeout
+    const initializeAuth = async () => {
+      // If OAuth callback detected, skip initial auth check
+      // onAuthStateChange will handle it
+      if (isOAuthCallback) {
+        console.log('🔐 OAuth callback detected, skipping initial auth check - waiting for onAuthStateChange');
+        // Don't set loading to false yet - wait for onAuthStateChange
+        return;
+      }
+
+      // Safety timeout - force loading to false after 15 seconds (increased from 10)
+      const safetyTimeout = setTimeout(() => {
+        console.warn('⚠️ Auth initialization timeout - forcing loading to false');
+        setIsLoading(false);
+      }, 15000);
+
+      try {
+        const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+        
+        clearTimeout(safetyTimeout);
+        
+        if (sessionError) {
+          console.error('Session error:', sessionError);
+          setIsLoading(false);
+          return;
+        }
+
+        if (session) {
+          await loadUserProfile(session, 'INITIAL_SESSION', false);
+        } else {
+          // Check for guest user
+          const token = localStorage.getItem('authToken');
+          if (token && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(token)) {
+            try {
+              const { data: guestUser } = await supabase
+                .from('users')
+                .select('*')
+                .eq('id', token)
+                .eq('is_guest', true)
+                .single();
+              
+              if (guestUser) {
+                setUser(guestUser);
+                setIsLoading(false);
+                return;
+              }
+            } catch (guestError) {
+              console.error('Guest user check error:', guestError);
+              // Continue to set loading false
+            }
+          }
+          setIsLoading(false);
+        }
+      } catch (error) {
+        clearTimeout(safetyTimeout);
+        console.error('Auth initialization error:', error);
+        setIsLoading(false);
+      }
+    };
+
+    // Initialize auth
+    initializeAuth();
+
+    // Supabase session listener with timeout protection
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+      console.log('🔄 Auth state changed:', event, session?.user?.email);
+      
+      // Skip processing for routine events when user is already loaded
+      // TOKEN_REFRESHED is normal and doesn't need profile reload if user already exists
+      if (event === 'TOKEN_REFRESHED' && user && session) {
+        console.log('✅ Token refreshed, user already loaded - skipping profile reload');
+        return; // Early return, no processing needed
+      }
+      
+      // Skip timeout for certain events that don't require profile loading
+      // Only set timeout for events that actually need processing
+      const needsProcessing = event === 'SIGNED_IN' || event === 'SIGNED_OUT' || 
+                             (event === 'TOKEN_REFRESHED' && !user) ||
+                             (event === 'USER_UPDATED' && !user);
+      
+      let stateChangeTimeout: NodeJS.Timeout | null = null;
+      
+      // Only set timeout if we actually need to process this event
+      if (needsProcessing) {
+        stateChangeTimeout = setTimeout(() => {
+          console.warn('⚠️ Auth state change timeout - forcing loading to false');
+          setIsLoading(false);
+        }, 25000);
+      }
+      
+      try {
+        if (session) {
+          // Only reload profile if user is not already set or if it's a SIGNED_IN event
+          if (!user || event === 'SIGNED_IN') {
+            setIsLoading(true); // Set loading during profile load
+            const shouldCleanUrl = event === 'SIGNED_IN' || (event === 'TOKEN_REFRESHED' && isOAuthCallback);
+            await loadUserProfile(session, event, shouldCleanUrl);
+            
+            // Profile loaded successfully - ensure URL is clean and trigger navigation
+            if (event === 'SIGNED_IN') {
+              console.log('✅ OAuth login successful, profile loaded');
+              // Clean up URL to root path to trigger AppRoutes navigation
+              if (window.location.pathname !== '/') {
+                window.history.replaceState({}, document.title, '/');
+              }
+              // Force a small delay to ensure state is updated before navigation
+              await new Promise(resolve => setTimeout(resolve, 200));
+              // Force a re-render by updating state
+              setIsLoading(false);
+            }
+          } else {
+            // User already loaded, just clear timeout if set
+            if (stateChangeTimeout) {
+              clearTimeout(stateChangeTimeout);
+            }
+            console.log('✅ User already loaded, skipping profile reload');
+          }
+        } else {
+          // Session is null - check if this is a real logout or just a temporary state
+          // If we just loaded a user profile (SIGNED_IN event), don't clear it immediately
+          if (event === 'SIGNED_OUT') {
+            console.log('🚪 User signed out, clearing auth state');
+            if (stateChangeTimeout) {
+              clearTimeout(stateChangeTimeout);
+            }
+            setToken(null);
+            setUser(null);
+            localStorage.removeItem('authToken');
+            localStorage.removeItem('user');
+            setIsLoading(false);
+            return;
+          }
+          
+          // For other events (like TOKEN_REFRESHED with null session), check for guest user first
+          const token = localStorage.getItem('authToken');
+          if (token && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(token)) {
+            try {
+              const { data: guestUser } = await supabase
+                .from('users')
+                .select('*')
+                .eq('id', token)
+                .eq('is_guest', true)
+                .single();
+              
+              if (guestUser) {
+                if (stateChangeTimeout) {
+                  clearTimeout(stateChangeTimeout);
+                }
+                setUser(guestUser);
+                setIsLoading(false);
+                return;
+              }
+            } catch (guestError) {
+              console.error('Guest user check error:', guestError);
+              // Continue to check if we have a user in state
+            }
+          }
+          
+          // If we have a user in state and localStorage, don't clear it
+          // This might be a temporary session issue
+          const storedUser = localStorage.getItem('user');
+          if (storedUser) {
+            try {
+              const parsedUser = JSON.parse(storedUser);
+              if (parsedUser && parsedUser.id) {
+                console.log('⚠️ Session null but user exists in storage, keeping user state');
+                if (stateChangeTimeout) {
+                  clearTimeout(stateChangeTimeout);
+                }
+                setUser(parsedUser);
+                setIsLoading(false);
+                return;
+              }
+            } catch (e) {
+              console.error('Failed to parse stored user:', e);
+            }
+          }
+          
+          // Only clear auth if we're sure there's no user
+          console.log('⚠️ Session null and no user found, clearing auth state');
+          if (stateChangeTimeout) {
+            clearTimeout(stateChangeTimeout);
+          }
+          setToken(null);
+          setUser(null);
+          localStorage.removeItem('authToken');
+          localStorage.removeItem('user');
+          setIsLoading(false);
+        }
+      } catch (error) {
+        if (stateChangeTimeout) {
+          clearTimeout(stateChangeTimeout);
+        }
+        console.error('❌ Auth state change error:', error);
+        setIsLoading(false);
+      }
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
+
+  const register = async (email: string, password: string, name: string) => {
+    try {
+      console.log('🔄 Starting registration...');
+      const data = await authAPI.register(email, password, name);
+      console.log('✅ Registration API call successful');
+      console.log('📦 User data:', data.user);
+      console.log('🔑 Token:', data.token ? 'Present' : 'Missing');
+      
+      if (data.token) {
+        setToken(data.token);
+        localStorage.setItem('authToken', data.token);
+      }
+      
+      if (data.user) {
+        setUser(data.user);
+        localStorage.setItem('user', JSON.stringify(data.user));
+        console.log('✅ User state updated in AuthContext');
+      } else {
+        console.warn('⚠️ No user data returned from registration');
+      }
+      
+      // Wait a bit for state to update
+      await new Promise(resolve => setTimeout(resolve, 100));
+      console.log('✅ Registration completed');
+    } catch (error) {
+      console.error('Register error:', error);
+      throw error;
+    }
+  };
+
+  const login = async (email: string, password: string) => {
+    try {
+      const data = await authAPI.login(email, password);
+      setToken(data.token);
+      setUser(data.user);
+    } catch (error) {
+      console.error('Login error:', error);
+      throw error;
+    }
+  };
+
+  const googleLogin = async () => {
+    try {
+      const data = await authAPI.googleLogin();
+      // OAuth redirects, so we just return
+      if (data.redirectUrl) {
+        window.location.href = data.redirectUrl;
+      }
+    } catch (error) {
+      console.error('Google login error:', error);
+      throw error;
+    }
+  };
+
+  const guestLogin = async () => {
+    try {
+      const data = await authAPI.guestLogin();
+      setToken(data.token);
+      setUser(data.user);
+    } catch (error) {
+      console.error('Guest login error:', error);
+      throw error;
+    }
+  };
+
+  const logout = async () => {
+    try {
+      console.log('🚪 Logging out...');
+      // Sign out from Supabase
+      await authAPI.logout();
+      // Clear local state
+      setToken(null);
+      setUser(null);
+      // Clear localStorage
+      localStorage.removeItem('authToken');
+      localStorage.removeItem('user');
+      console.log('✅ Logout successful');
+    } catch (error) {
+      console.error('❌ Logout error:', error);
+      // Even if logout fails, clear local state
+      setToken(null);
+      setUser(null);
+      localStorage.removeItem('authToken');
+      localStorage.removeItem('user');
+    }
+  };
+
+  const refreshUser = async () => {
+    try {
+      const data = await authAPI.getCurrentUser();
+      setUser(data.user);
+      localStorage.setItem('user', JSON.stringify(data.user));
+    } catch (error) {
+      console.error('Refresh user error:', error);
+    }
+  };
+
+  return (
+    <AuthContext.Provider value={{ user, token, isLoading, register, login, googleLogin, guestLogin, logout, refreshUser }}>
+      {children}
+    </AuthContext.Provider>
+  );
+}
+
+export function useAuth() {
+  const context = useContext(AuthContext);
+  if (context === undefined) {
+    // During HMR, context might not be available yet - return a safe fallback
+    if (import.meta.env.DEV) {
+      console.warn('useAuth called outside AuthProvider - this might be an HMR issue');
+      // Return a safe fallback during development/HMR
+      return {
+        user: null,
+        token: null,
+        isLoading: true,
+        register: async () => {},
+        login: async () => {},
+        googleLogin: async () => {},
+        guestLogin: async () => {},
+        logout: () => {},
+        refreshUser: async () => {},
+      };
+    }
+    throw new Error('useAuth must be used within an AuthProvider');
+  }
+  return context;
+}
+
