@@ -10,6 +10,7 @@ import { pricesAPI } from '../../../services/supabase-api';
 import { useGeolocation } from '../../../../src/hooks/useGeolocation';
 import { useAuth } from '../../../contexts/AuthContext';
 import { toast } from 'sonner';
+import { searchNearbyPlaces } from '../../../utils/places';
 
 // Fix for default marker icons in React-Leaflet
 delete (L.Icon.Default.prototype as any)._getIconUrl;
@@ -45,6 +46,35 @@ const createPriceIcon = (price: string) => {
     iconSize: [40, 40],
     iconAnchor: [20, 20],
     popupAnchor: [0, -20],
+  });
+};
+
+// Custom marker icon for businesses/places
+const createBusinessIcon = () => {
+  return L.divIcon({
+    className: 'custom-business-marker',
+    html: `
+      <div style="
+        background: #3b82f6;
+        color: white;
+        border-radius: 8px;
+        width: 36px;
+        height: 36px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-weight: bold;
+        font-size: 20px;
+        border: 3px solid white;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+        cursor: pointer;
+      ">
+        🏪
+      </div>
+    `,
+    iconSize: [36, 36],
+    iconAnchor: [18, 18],
+    popupAnchor: [0, -18],
   });
 };
 
@@ -139,6 +169,25 @@ interface Price {
   lng?: number;
 }
 
+interface Business {
+  place_id: string;
+  name: string;
+  vicinity?: string;
+  formatted_address?: string;
+  geometry: {
+    location: {
+      lat: number;
+      lng: number;
+    };
+  };
+  types?: string[];
+  rating?: number;
+  user_ratings_total?: number;
+  opening_hours?: {
+    open_now?: boolean;
+  };
+}
+
 export default function MapScreen() {
   const { getCurrentPosition } = useGeolocation();
   const { user } = useAuth();
@@ -149,6 +198,9 @@ export default function MapScreen() {
   const [productPhotos, setProductPhotos] = useState<Price[]>([]);
   const [isLoadingPhotos, setIsLoadingPhotos] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+  const [businesses, setBusinesses] = useState<Business[]>([]);
+  const [isLoadingBusinesses, setIsLoadingBusinesses] = useState(false);
+  const [showBusinesses, setShowBusinesses] = useState(true);
   const [mapCenter, setMapCenter] = useState<[number, number]>([37.8667, 32.4833]); // Default: Konya
   const [mapZoom, setMapZoom] = useState(13);
   const markerRefs = useRef<Record<string, any>>({});
@@ -178,6 +230,13 @@ export default function MapScreen() {
     loadUserLocation();
     loadPrices();
   }, []);
+
+  // Load nearby businesses when user location is available
+  useEffect(() => {
+    if (userLocation) {
+      loadNearbyBusinesses(userLocation[0], userLocation[1]);
+    }
+  }, [userLocation]);
 
 
   const loadUserLocation = async () => {
@@ -285,6 +344,60 @@ export default function MapScreen() {
     return price.toFixed(2).replace('.', ',');
   };
 
+  const loadProductPhotos = async (productId: string) => {
+    if (!productId) return;
+    
+    try {
+      setIsLoadingPhotos(true);
+      const data = await pricesAPI.getAll({
+        productId,
+        limit: 100,
+      });
+      
+      if (Array.isArray(data)) {
+        // Filter prices that have photos
+        const pricesWithPhotos = data.filter((price: any) => price.photo);
+        setProductPhotos(pricesWithPhotos);
+        console.log(`✅ Loaded ${pricesWithPhotos.length} photos for product ${productId}`);
+      }
+    } catch (error: any) {
+      console.error('Failed to load product photos:', error);
+      toast.error('Fotoğraflar yüklenirken bir hata oluştu');
+    } finally {
+      setIsLoadingPhotos(false);
+    }
+  };
+
+  const loadNearbyBusinesses = async (latitude: number, longitude: number) => {
+    try {
+      setIsLoadingBusinesses(true);
+      
+      // Get user's search radius preference (default: 15 km)
+      const searchRadiusKm = (user as any)?.search_radius || 
+                            (user as any)?.preferences?.searchRadius || 
+                            15;
+      const searchRadiusMeters = searchRadiusKm * 1000;
+      
+      const result = await searchNearbyPlaces(
+        latitude,
+        longitude,
+        Math.min(searchRadiusMeters, 5000), // Max 5km for Places API
+        ['store', 'shop', 'establishment', 'supermarket', 'grocery_or_supermarket', 'bakery', 'butcher', 'pharmacy']
+      );
+      
+      if (result.success && result.places) {
+        setBusinesses(result.places);
+        console.log(`✅ Loaded ${result.places.length} nearby businesses`);
+      } else {
+        console.warn('⚠️ Failed to load businesses:', result.error);
+      }
+    } catch (error: any) {
+      console.error('Failed to load nearby businesses:', error);
+    } finally {
+      setIsLoadingBusinesses(false);
+    }
+  };
+
   const handleCenterOnUser = async () => {
     try {
       const position = await getCurrentPosition();
@@ -326,17 +439,27 @@ export default function MapScreen() {
       `}</style>
       
       {/* Map Header */}
-      <div className="absolute top-0 left-0 right-0 bg-white/95 backdrop-blur-sm p-4 z-[1000] border-b border-gray-200 flex items-center justify-between">
+      <div className="absolute top-0 left-0 right-0 bg-white/95 backdrop-blur-sm p-4 z-[1000] border-b border-gray-200 flex items-center justify-between gap-2">
         <h1 className="text-center font-semibold flex-1">En Düşük Fiyatlı Ürünler</h1>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={handleCenterOnUser}
-          className="ml-2"
-        >
-          <Navigation className="w-4 h-4 mr-1" />
-          Konumum
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            variant={showBusinesses ? "default" : "outline"}
+            size="sm"
+            onClick={() => setShowBusinesses(!showBusinesses)}
+            className="text-xs"
+            title={showBusinesses ? 'İşletmeleri gizle' : 'İşletmeleri göster'}
+          >
+            🏪 {showBusinesses ? 'İşletmeler' : 'İşletmeler'}
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleCenterOnUser}
+          >
+            <Navigation className="w-4 h-4 mr-1" />
+            Konumum
+          </Button>
+        </div>
       </div>
 
       {/* Map Container */}
@@ -519,6 +642,100 @@ export default function MapScreen() {
                       >
                         Detayları Gör
                       </button>
+                    </div>
+                  </Popup>
+                </Marker>
+              );
+            })}
+
+            {/* Business/Place Markers */}
+            {showBusinesses && businesses.map((business) => {
+              const lat = business.geometry.location.lat;
+              const lng = business.geometry.location.lng;
+              
+              if (!lat || !lng) return null;
+              
+              const businessId = `business-${business.place_id}`;
+              
+              return (
+                <Marker
+                  key={businessId}
+                  position={[lat, lng]}
+                  icon={createBusinessIcon()}
+                >
+                  <Popup className="custom-popup">
+                    <div className="min-w-[200px] max-w-[280px]">
+                      {/* Business Name */}
+                      <div className="mb-3 pb-2 border-b border-gray-200">
+                        <div className="font-bold text-lg text-blue-700 mb-1">
+                          🏪 {business.name}
+                        </div>
+                      </div>
+                      
+                      {/* Address */}
+                      {(business.vicinity || business.formatted_address) && (
+                        <div className="mb-3">
+                          <div className="flex items-start gap-2 text-sm text-gray-700">
+                            <MapPin className="w-4 h-4 text-gray-500 mt-0.5 flex-shrink-0" />
+                            <span className="text-xs">
+                              {business.vicinity || business.formatted_address}
+                            </span>
+                          </div>
+                        </div>
+                      )}
+                      
+                      {/* Rating */}
+                      {business.rating && (
+                        <div className="mb-3">
+                          <div className="flex items-center gap-2 text-sm">
+                            <span className="text-yellow-500">⭐</span>
+                            <span className="font-semibold">{business.rating.toFixed(1)}</span>
+                            {business.user_ratings_total && (
+                              <span className="text-xs text-gray-500">
+                                ({business.user_ratings_total} değerlendirme)
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      )}
+                      
+                      {/* Opening Hours */}
+                      {business.opening_hours?.open_now !== undefined && (
+                        <div className="mb-3">
+                          <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-semibold ${
+                            business.opening_hours.open_now
+                              ? 'bg-green-100 text-green-800 border border-green-300'
+                              : 'bg-red-100 text-red-800 border border-red-300'
+                          }`}>
+                            {business.opening_hours.open_now ? '🟢 Açık' : '🔴 Kapalı'}
+                          </span>
+                        </div>
+                      )}
+                      
+                      {/* Types */}
+                      {business.types && business.types.length > 0 && (
+                        <div className="mb-3">
+                          <div className="text-xs text-gray-500">
+                            {business.types.slice(0, 3).map((type, idx) => {
+                              const typeLabels: Record<string, string> = {
+                                'store': 'Mağaza',
+                                'shop': 'Dükkan',
+                                'establishment': 'İşletme',
+                                'supermarket': 'Süpermarket',
+                                'grocery_or_supermarket': 'Market',
+                                'bakery': 'Fırın',
+                                'butcher': 'Kasap',
+                                'pharmacy': 'Eczane',
+                              };
+                              return (
+                                <span key={idx} className="inline-block mr-1">
+                                  {typeLabels[type] || type}
+                                </span>
+                              );
+                            }).join(', ')}
+                          </div>
+                        </div>
+                      )}
                     </div>
                   </Popup>
                 </Marker>
