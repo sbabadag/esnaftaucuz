@@ -30,6 +30,7 @@ interface Price {
   user?: {
     id: string;
     name: string;
+    avatar?: string;
   };
   // Support both formats for backward compatibility
   _id?: string;
@@ -284,14 +285,25 @@ export default function ProductDetailScreen() {
                         (e.target as HTMLImageElement).style.display = 'none';
                       }}
                     />
-                    <div className="absolute bottom-0 left-0 right-0 bg-black bg-opacity-50 text-white text-xs p-2 rounded-b-lg">
-                      <div className="flex items-center justify-between">
-                        <div>
+                    <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 via-black/60 to-transparent text-white text-xs p-2 rounded-b-lg">
+                      <div className="space-y-1">
+                        <div className="flex items-center justify-between">
                           <div className="font-semibold">{formatPrice(item.price)} ₺</div>
-                          <div className="text-xs opacity-90">{item.location?.name}</div>
+                          {isVerified && (
+                            <CheckCircle2 className="w-4 h-4 text-green-400 flex-shrink-0" />
+                          )}
                         </div>
-                        {isVerified && (
-                          <CheckCircle2 className="w-4 h-4 text-green-400 flex-shrink-0" />
+                        <div className="text-xs opacity-90">{item.location?.name}</div>
+                        {item.user && (
+                          <div className="flex items-center gap-1.5 pt-1 border-t border-white/20">
+                            <Avatar className="w-4 h-4">
+                              <AvatarImage src={item.user.avatar} />
+                              <AvatarFallback className="bg-green-600 text-white text-[10px]">
+                                {item.user.name?.charAt(0)?.toUpperCase() || 'U'}
+                              </AvatarFallback>
+                            </Avatar>
+                            <span className="text-xs opacity-90 truncate">{item.user.name}</span>
+                          </div>
                         )}
                       </div>
                     </div>
