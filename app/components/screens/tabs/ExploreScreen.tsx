@@ -488,10 +488,188 @@ export default function ExploreScreen() {
           transition: pullDistance === 0 ? 'padding-top 0.2s' : 'none'
         }}
       >
-        {isLoading ? (
-          <div className="text-center py-8 text-gray-500">Yükleniyor...</div>
-        ) : (
+        {/* Search Results */}
+        {searchResults && (
+          <div className="space-y-4">
+            <div className="flex items-center justify-between">
+              <h2 className="text-lg font-semibold">
+                Arama Sonuçları: "{searchQuery}"
+              </h2>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={clearSearch}
+                className="flex items-center gap-2"
+              >
+                <X className="w-4 h-4" />
+                Temizle
+              </Button>
+            </div>
+
+            {isSearching ? (
+              <div className="text-center py-8 text-gray-500">Aranıyor...</div>
+            ) : (
+              <>
+                {/* Products Results */}
+                {searchResults.products.length > 0 && (
+                  <section>
+                    <h3 className="text-base font-semibold mb-3 text-gray-700">
+                      Ürünler ({searchResults.products.length})
+                    </h3>
+                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-2 sm:gap-3">
+                      {searchResults.products.map((product) => (
+                        <div
+                          key={product.id || product._id}
+                          onClick={() => navigate(`/app/product/${product.id || product._id}`)}
+                          className="bg-white rounded-lg p-2 sm:p-3 border border-gray-200 hover:border-green-600 hover:shadow-md cursor-pointer transition-all"
+                        >
+                          <div className="flex flex-col gap-1.5 sm:gap-2">
+                            <div className="w-full h-12 sm:h-16 rounded-lg bg-gray-100 flex items-center justify-center overflow-hidden">
+                              {product.image ? (
+                                <img 
+                                  src={product.image} 
+                                  alt={product.name}
+                                  className="w-full h-full object-cover"
+                                  onError={(e) => {
+                                    (e.target as HTMLImageElement).style.display = 'none';
+                                    (e.target as HTMLImageElement).nextElementSibling?.classList.remove('hidden');
+                                  }}
+                                />
+                              ) : null}
+                              <Package className={`w-4 h-4 sm:w-6 sm:h-6 text-gray-400 ${product.image ? 'hidden' : ''}`} />
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <h4 className="font-medium text-gray-900 truncate text-xs sm:text-sm">{product.name}</h4>
+                              <p className="text-xs text-gray-500 truncate">{product.category}</p>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </section>
+                )}
+
+                {/* Prices Results */}
+                {searchResults.prices.length > 0 && (
+                  <section>
+                    <h3 className="text-base font-semibold mb-3 text-gray-700">
+                      Fiyatlar ({searchResults.prices.length})
+                    </h3>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      {searchResults.prices.map((item) => (
+                        <div
+                          key={item.id || item._id}
+                          onClick={() => navigate(`/app/product/${item.product.id || item.product._id}`)}
+                          className="bg-white rounded-lg p-3 sm:p-4 border border-gray-200 hover:border-green-600 hover:shadow-md cursor-pointer transition-all"
+                        >
+                          <div className="flex gap-3 sm:gap-4">
+                            <div className="w-14 h-14 sm:w-16 sm:h-16 rounded-lg bg-gray-100 flex items-center justify-center flex-shrink-0 overflow-hidden">
+                              {item.product.image ? (
+                                <img 
+                                  src={item.product.image} 
+                                  alt={item.product.name}
+                                  className="w-full h-full object-cover"
+                                  onError={(e) => {
+                                    (e.target as HTMLImageElement).style.display = 'none';
+                                    (e.target as HTMLImageElement).nextElementSibling?.classList.remove('hidden');
+                                  }}
+                                />
+                              ) : null}
+                              <Package className={`w-6 h-6 sm:w-8 sm:h-8 text-gray-400 ${item.product.image ? 'hidden' : ''}`} />
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <div className="flex justify-between items-start mb-1.5 sm:mb-2">
+                                <div className="flex-1 min-w-0">
+                                  <h3 className="text-base sm:text-lg text-gray-900 font-medium truncate">{item.product.name}</h3>
+                                  <p className="text-xl sm:text-2xl text-green-600 font-semibold mt-1">
+                                    {formatPrice(item.price)} TL{' '}
+                                    <span className="text-xs sm:text-sm text-gray-500 font-normal">/ {item.unit}</span>
+                                  </p>
+                                </div>
+                                {isToday(item.created_at || item.createdAt || '') && (
+                                  <Badge className="bg-green-600 ml-2 flex-shrink-0 text-xs">BUGÜN</Badge>
+                                )}
+                              </div>
+                              <div className="flex items-center gap-3 sm:gap-4 text-xs sm:text-sm text-gray-500">
+                                <span className="flex items-center gap-1">
+                                  <MapPin className="w-3 h-3 sm:w-4 sm:h-4" />
+                                  <span className="truncate">{item.location.name}</span>
+                                </span>
+                                <span className="flex items-center gap-1">
+                                  <Clock className="w-3 h-3 sm:w-4 sm:h-4" />
+                                  {formatTimeAgo(item.created_at || item.createdAt || '')}
+                                </span>
+                              </div>
+                              {(item.is_verified || item.isVerified) && (
+                                <div className="flex items-center gap-1.5 sm:gap-2 mt-1.5 sm:mt-2 text-xs sm:text-sm text-green-600">
+                                  <CheckCircle2 className="w-3 h-3 sm:w-4 sm:h-4" />
+                                  <span>Doğrulanmış</span>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </section>
+                )}
+
+                {/* Locations Results */}
+                {searchResults.locations.length > 0 && (
+                  <section>
+                    <h3 className="text-base font-semibold mb-3 text-gray-700">
+                      Yerler ({searchResults.locations.length})
+                    </h3>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      {searchResults.locations.map((location) => (
+                        <div
+                          key={location.id}
+                          onClick={() => navigate(`/app/location/${location.id}`)}
+                          className="bg-white rounded-lg p-3 sm:p-4 border border-gray-200 hover:border-green-600 hover:shadow-md cursor-pointer transition-all"
+                        >
+                          <div className="flex items-start gap-3">
+                            <MapPin className="w-5 h-5 text-green-600 flex-shrink-0 mt-0.5" />
+                            <div className="flex-1 min-w-0">
+                              <h3 className="text-base sm:text-lg font-semibold text-gray-900 mb-1">{location.name}</h3>
+                              <p className="text-sm text-gray-600 mb-1 capitalize">{location.type}</p>
+                              {location.address && (
+                                <p className="text-xs text-gray-500">{location.address}</p>
+                              )}
+                              <p className="text-xs text-gray-500 mt-1">
+                                {location.city}{location.district && `, ${location.district}`}
+                              </p>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </section>
+                )}
+
+                {/* No Results */}
+                {searchResults.products.length === 0 && 
+                 searchResults.prices.length === 0 && 
+                 searchResults.locations.length === 0 && (
+                  <div className="text-center py-12">
+                    <Package className="w-12 h-12 text-gray-400 mx-auto mb-4" />
+                    <p className="text-gray-600 font-medium mb-2">Sonuç bulunamadı</p>
+                    <p className="text-sm text-gray-500">
+                      "{searchQuery}" için arama sonucu bulunamadı. Farklı bir terim deneyin.
+                    </p>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        )}
+
+        {/* Normal Content (when not searching) */}
+        {!searchResults && (
           <>
+            {isLoading ? (
+              <div className="text-center py-8 text-gray-500">Yükleniyor...</div>
+            ) : (
+              <>
             {/* Trend Products */}
             <section>
               <h2 className="text-base sm:text-lg mb-2 sm:mb-3 text-gray-900 font-semibold">Bugün En Çok Bakılanlar</h2>
