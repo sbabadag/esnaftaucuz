@@ -81,11 +81,39 @@ const createBusinessIcon = () => {
 // Component to center map on user location
 function MapCenter({ center, zoom }: { center: [number, number]; zoom?: number }) {
   const map = useMap();
+  const prevCenterRef = useRef<[number, number] | null>(null);
+  const prevZoomRef = useRef<number | undefined>(undefined);
+  
   useEffect(() => {
-    if (zoom !== undefined) {
-      map.setView(center, zoom);
-    } else {
-      map.setView(center, map.getZoom());
+    // Leaflet uses [lat, lng] format for setView
+    const [lat, lng] = center;
+    
+    // Check if center or zoom actually changed
+    const centerChanged = !prevCenterRef.current || 
+      prevCenterRef.current[0] !== lat || 
+      prevCenterRef.current[1] !== lng;
+    const zoomChanged = zoom !== undefined && zoom !== prevZoomRef.current;
+    
+    if (centerChanged || zoomChanged) {
+      console.log('🗺️ MapCenter updating:', { 
+        lat, 
+        lng, 
+        zoom, 
+        currentZoom: map.getZoom(),
+        centerChanged,
+        zoomChanged,
+        prevCenter: prevCenterRef.current,
+        prevZoom: prevZoomRef.current
+      });
+      
+      if (zoom !== undefined) {
+        map.setView([lat, lng], zoom, { animate: true, duration: 0.5 });
+        prevZoomRef.current = zoom;
+      } else {
+        map.setView([lat, lng], map.getZoom(), { animate: true, duration: 0.5 });
+      }
+      
+      prevCenterRef.current = [lat, lng];
     }
   }, [center, zoom, map]);
   return null;
@@ -217,11 +245,16 @@ export default function MapScreen() {
       const lng = parseFloat(focusLng);
       
       if (!isNaN(lat) && !isNaN(lng)) {
-        console.log('📍 Focusing on location from URL:', lat, lng);
+        console.log('📍 Focusing on location from URL:', { lat, lng, rawLat: focusLat, rawLng: focusLng });
+        // Leaflet uses [lat, lng] format
         setMapCenter([lat, lng]);
         setMapZoom(16); // Zoom in closer for focus
-        // Clear URL params after focusing
-        window.history.replaceState({}, '', '/app/map');
+        // Clear URL params after focusing (with a small delay to ensure map updates)
+        setTimeout(() => {
+          window.history.replaceState({}, '', '/app/map');
+        }, 100);
+      } else {
+        console.error('❌ Invalid coordinates from URL:', { focusLat, focusLng, parsedLat: lat, parsedLng: lng });
       }
     }
   }, [searchParams]);

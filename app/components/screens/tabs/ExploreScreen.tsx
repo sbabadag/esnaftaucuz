@@ -992,6 +992,7 @@ export default function ExploreScreen() {
                                       className="w-full sm:w-auto text-xs h-7 px-2 border-green-600 text-green-600 hover:bg-green-50"
                                       onClick={(e) => {
                                         e.stopPropagation(); // Prevent card click
+                                        console.log('🧭 Navigating to map with coordinates:', { lat, lng, productName: item.product?.name });
                                         navigate(`/app/map?lat=${lat}&lng=${lng}&focus=true`);
                                       }}
                                     >
