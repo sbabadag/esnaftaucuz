@@ -39,7 +39,11 @@ export default defineConfig({
       'import.meta.env.VITE_SUPABASE_URL': JSON.stringify(process.env.VITE_SUPABASE_URL || ''),
       'import.meta.env.VITE_SUPABASE_ANON_KEY': JSON.stringify(process.env.VITE_SUPABASE_ANON_KEY || ''),
       'import.meta.env.VITE_API_URL': JSON.stringify(process.env.VITE_API_URL || ''),
-      'import.meta.env.VITE_GOOGLE_MAPS_API_KEY': JSON.stringify(process.env.VITE_GOOGLE_MAPS_API_KEY || ''),
+      // Google Maps API Key - use env var if available, otherwise use fallback for GitHub Pages
+      // Note: This key is protected by referrer restrictions in Google Cloud Console
+      'import.meta.env.VITE_GOOGLE_MAPS_API_KEY': JSON.stringify(
+        process.env.VITE_GOOGLE_MAPS_API_KEY || 'AIzaSyCGRGdSA0IZHxgGI4PCv00kQ8xJ5dpx7Gc'
+      ),
     },
   },
   publicDir: 'public',
