@@ -1085,28 +1085,52 @@ export const pricesAPI = {
       }
 
       // Get current price to increment verification_count
-      const { data: currentPrice } = await supabase
+      const { data: currentPrice, error: fetchError } = await supabase
         .from('prices')
         .select('verification_count')
         .eq('id', id)
-        .single();
+        .maybeSingle();
 
-      const { data: price, error } = await supabase
+      if (fetchError) {
+        console.error('Error fetching current price:', fetchError);
+        throw fetchError;
+      }
+
+      // Update the price
+      const { error: updateError } = await supabase
         .from('prices')
         .update({
           is_verified: true,
           verification_count: (currentPrice?.verification_count || 0) + 1,
         })
-        .eq('id', id)
+        .eq('id', id);
+
+      if (updateError) {
+        console.error('Error updating price:', updateError);
+        throw updateError;
+      }
+
+      // Fetch the updated price with all relations
+      const { data: price, error: selectError } = await supabase
+        .from('prices')
         .select(`
           *,
           product:products(id, name, category, default_unit, image),
           location:locations(id, name, type, address, coordinates, city, district),
           user:users(id, name, avatar, level)
         `)
-        .single();
+        .eq('id', id)
+        .maybeSingle();
 
-      if (error) throw error;
+      if (selectError) {
+        console.error('Error fetching updated price:', selectError);
+        throw selectError;
+      }
+
+      if (!price) {
+        throw new Error('Fiyat bulunamadı');
+      }
+
       return { message: 'Fiyat doğrulandı', price };
     } catch (error: any) {
       console.error('Verify price error:', error);
