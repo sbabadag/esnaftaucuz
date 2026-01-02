@@ -20,3 +20,4 @@ CREATE POLICY "Users can create guest profile" ON public.users
   WITH CHECK (is_guest = true);
 
 
+

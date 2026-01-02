@@ -399,3 +399,4 @@ npx cap open android
 **Son Güncelleme:** 2024
 
 
+

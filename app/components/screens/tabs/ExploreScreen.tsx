@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Search, Bell, Filter, MapPin, Clock, CheckCircle2, Package, RefreshCw, X } from 'lucide-react';
+import { Search, Bell, Filter, MapPin, Clock, CheckCircle2, Package, RefreshCw, X, Navigation } from 'lucide-react';
 import { Button } from '../../ui/button';
 import { Input } from '../../ui/input';
 import { Badge } from '../../ui/badge';
@@ -9,6 +9,9 @@ import { Checkbox } from '../../ui/checkbox';
 import { Label } from '../../ui/label';
 import { Avatar, AvatarImage, AvatarFallback } from '../../ui/avatar';
 import { productsAPI, pricesAPI, searchAPI } from '../../../services/supabase-api';
+import { useGeolocation } from '../../../../src/hooks/useGeolocation';
+import { useAuth } from '../../../contexts/AuthContext';
+import { reverseGeocode } from '../../../utils/geocoding';
 import { toast } from 'sonner';
 
 interface Price {
@@ -55,6 +58,8 @@ interface Product {
 
 export default function ExploreScreen() {
   const navigate = useNavigate();
+  const { getCurrentPosition } = useGeolocation();
+  const { user } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<{
@@ -71,6 +76,8 @@ export default function ExploreScreen() {
   const [pullDistance, setPullDistance] = useState(0);
   const touchStartY = useRef<number | null>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const [currentLocation, setCurrentLocation] = useState<string>('Konya / Selçuklu');
+  const [isGettingLocation, setIsGettingLocation] = useState(false);
   const [filters, setFilters] = useState({
     pazar: false,
     manav: false,
@@ -89,6 +96,159 @@ export default function ExploreScreen() {
       performSearch(urlQuery);
     }
   }, []);
+
+  // Auto-fetch location on mount (only once)
+  useEffect(() => {
+    let mounted = true;
+    
+    const autoGetLocation = async () => {
+      try {
+        const position = await getCurrentPosition();
+        
+        if (position && mounted) {
+          const { latitude, longitude } = position;
+          console.log('📍 Auto-fetching location on mount:', { latitude, longitude });
+          
+          // Reverse geocoding silently (no toast)
+          let locationText = '';
+          let geocodingSuccess = false;
+          
+          try {
+            // Add delay to respect rate limits
+            await new Promise(resolve => setTimeout(resolve, 1000));
+            
+            const response = await fetch(
+              `https://nominatim.openstreetmap.org/reverse?format=json&lat=${latitude}&lon=${longitude}&zoom=18&addressdetails=1&accept-language=tr`,
+              {
+                headers: {
+                  'User-Agent': 'esnaftaucuz-app/1.0',
+                },
+              }
+            );
+            
+            if (response.ok && mounted) {
+              const data = await response.json();
+              console.log('📍 Auto geocoding response:', data);
+              console.log('📍 Address object:', data.address);
+              
+              // Check if API returned an error
+              if (data.error) {
+                console.error('Geocoding API error:', data.error);
+              } else {
+                const address = data.address || {};
+                console.log('📍 Parsing address fields:', {
+                  city: address.city,
+                  town: address.town,
+                  village: address.village,
+                  municipality: address.municipality,
+                  state: address.state,
+                  district: address.district,
+                  suburb: address.suburb,
+                  neighbourhood: address.neighbourhood,
+                  display_name: data.display_name,
+                });
+                
+                // Try multiple strategies to get address
+                
+                // Strategy 1: City / District format
+                const city = address.city || address.town || address.village || address.municipality || address.state;
+                const district = address.suburb || address.neighbourhood || address.district || address.county || address.state_district;
+                const mahalle = address.quarter || address.neighbourhood;
+                
+                if (city) {
+                  if (district && district !== city) {
+                    locationText = `${city} / ${district}`;
+                    geocodingSuccess = true;
+                  } else if (mahalle && mahalle !== city) {
+                    locationText = `${city} / ${mahalle}`;
+                    geocodingSuccess = true;
+                  } else {
+                    locationText = city;
+                    geocodingSuccess = true;
+                  }
+                }
+                
+                // Strategy 2: Parse display_name if city not found
+                if (!geocodingSuccess && data.display_name) {
+                  const parts = data.display_name.split(',').map((p: string) => p.trim());
+                  console.log('📍 Parsing display_name parts:', parts);
+                  
+                  // Filter out common non-location words
+                  const filteredParts = parts.filter((part: string) => {
+                    const lower = part.toLowerCase();
+                    return !lower.includes('türkiye') && 
+                           !lower.includes('turkey') && 
+                           !lower.includes('postal') &&
+                           !lower.match(/^\d+$/); // Exclude pure numbers
+                  });
+                  
+                  if (filteredParts.length >= 2) {
+                    // Take first 2 meaningful parts
+                    locationText = filteredParts.slice(0, 2).join(' / ');
+                    geocodingSuccess = true;
+                  } else if (filteredParts.length === 1) {
+                    locationText = filteredParts[0];
+                    geocodingSuccess = true;
+                  } else if (parts.length >= 2) {
+                    // Fallback to original parts if filtered is empty
+                    locationText = parts.slice(0, 2).join(' / ');
+                    geocodingSuccess = true;
+                  }
+                }
+                
+                // Strategy 3: Try to extract from any available address field
+                if (!geocodingSuccess) {
+                  const allAddressFields = [
+                    address.road,
+                    address.suburb,
+                    address.neighbourhood,
+                    address.village,
+                    address.town,
+                    address.city,
+                    address.state,
+                  ].filter(Boolean);
+                  
+                  if (allAddressFields.length > 0) {
+                    locationText = allAddressFields.slice(0, 2).join(' / ');
+                    geocodingSuccess = true;
+                  }
+                }
+              }
+            } else {
+              console.error('Geocoding API HTTP error:', response.status, response.statusText);
+            }
+          } catch (geocodeError: any) {
+            console.error('Auto geocoding error:', geocodeError);
+          }
+          
+          // Set location text
+          if (mounted) {
+            if (geocodingSuccess && locationText) {
+              setCurrentLocation(locationText);
+              console.log('✅ Auto location set:', locationText);
+            } else {
+              // Fallback: use coordinates with a user-friendly message
+              setCurrentLocation('Mevcut Konum');
+              console.log('⚠️ Auto geocoding failed, using fallback');
+            }
+          }
+        }
+      } catch (error) {
+        console.error('Auto location fetch error:', error);
+        // Silently fail - don't show error on initial load
+        if (mounted) {
+          setCurrentLocation('Mevcut Konum');
+        }
+      }
+    };
+    
+    // Auto-fetch location on mount
+    autoGetLocation();
+    
+    return () => {
+      mounted = false;
+    };
+  }, []); // Only run once on mount
 
   useEffect(() => {
     console.log('🔄 ExploreScreen mounted, loading data...');
@@ -151,8 +311,15 @@ export default function ExploreScreen() {
         return [];
       });
       
-      // Load nearby cheapest with individual timeout
-      const nearbyPromise = searchAPI.getNearbyCheapest(37.8667, 32.4833, 5000, 10).catch((err) => {
+      // Get user's search radius preference (default: 15 km = 15000 meters)
+      const searchRadiusKm = (user as any)?.search_radius || 
+                            (user as any)?.preferences?.searchRadius || 
+                            15;
+      const searchRadiusMeters = searchRadiusKm * 1000;
+      
+      // Load nearby cheapest with user's preferred radius
+      // Using default Konya coordinates if user location not available
+      const nearbyPromise = searchAPI.getNearbyCheapest(37.8667, 32.4833, searchRadiusMeters, 10).catch((err) => {
         console.error('❌ Failed to load nearby prices:', err);
         return [];
       });
@@ -288,6 +455,49 @@ export default function ExploreScreen() {
     return date.toDateString() === today.toDateString();
   };
 
+  const handleGetCurrentLocation = async () => {
+    try {
+      setIsGettingLocation(true);
+      const position = await getCurrentPosition();
+      
+      if (position) {
+        const { latitude, longitude } = position;
+        console.log('📍 Current location:', { latitude, longitude });
+        
+        // Reverse geocoding using unified geocoding utility (Google Maps or OpenStreetMap)
+        try {
+          const result = await reverseGeocode(latitude, longitude);
+          
+          if (result.success && result.address) {
+            setCurrentLocation(result.address);
+            toast.success('Konum alındı', {
+              description: result.address,
+            });
+          } else {
+            // Fallback: use coordinates with a user-friendly message
+            setCurrentLocation('Mevcut Konum');
+            toast.info('Konum tespit edildi', {
+              description: 'Adres bilgisi yüklenemedi. Konum ayarlarından manuel olarak ayarlayabilirsiniz.',
+            });
+          }
+        } catch (geocodeError: any) {
+          console.error('Geocoding error:', geocodeError);
+          setCurrentLocation('Mevcut Konum');
+          toast.warning('Konum alındı', {
+            description: 'Adres bilgisi şu an için kullanılamıyor.',
+          });
+        }
+      } else {
+        toast.error('Konum alınamadı. Lütfen konum iznini kontrol edin.');
+      }
+    } catch (error: any) {
+      console.error('Location error:', error);
+      toast.error('Konum alınamadı: ' + (error.message || 'Bilinmeyen hata'));
+    } finally {
+      setIsGettingLocation(false);
+    }
+  };
+
   const performSearch = async (query: string) => {
     if (!query.trim()) {
       setSearchResults(null);
@@ -361,13 +571,27 @@ export default function ExploreScreen() {
       <div className="bg-white border-b border-gray-200 sticky top-0 z-10">
         <div className="px-4 pt-4 pb-3">
           <div className="flex items-center justify-between mb-3">
-            <div className="flex items-center gap-2 text-sm text-gray-600">
-              <MapPin className="w-4 h-4" />
-              <span>Konya / Selçuklu ▾</span>
+            <div className="flex items-center gap-2 text-sm text-gray-600 flex-1 min-w-0">
+              <MapPin className="w-4 h-4 flex-shrink-0" />
+              <span className="truncate">{currentLocation}</span>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-6 px-2 text-xs flex-shrink-0"
+                onClick={handleGetCurrentLocation}
+                disabled={isGettingLocation}
+                title="Mevcut konumu al"
+              >
+                {isGettingLocation ? (
+                  <RefreshCw className="w-3 h-3 animate-spin" />
+                ) : (
+                  <Navigation className="w-3 h-3" />
+                )}
+              </Button>
             </div>
             <button
               onClick={() => navigate('/app/notifications')}
-              className="p-2 hover:bg-gray-100 rounded-full"
+              className="p-2 hover:bg-gray-100 rounded-full flex-shrink-0"
             >
               <Bell className="w-5 h-5 text-gray-600" />
             </button>
@@ -564,19 +788,26 @@ export default function ExploreScreen() {
                           className="bg-white rounded-lg p-3 sm:p-4 border border-gray-200 hover:border-green-600 hover:shadow-md cursor-pointer transition-all"
                         >
                           <div className="flex gap-3 sm:gap-4">
-                            <div className="w-14 h-14 sm:w-16 sm:h-16 rounded-lg bg-gray-100 flex items-center justify-center flex-shrink-0 overflow-hidden">
-                              {item.product.image ? (
-                                <img 
-                                  src={item.product.image} 
-                                  alt={item.product.name}
-                                  className="w-full h-full object-cover"
-                                  onError={(e) => {
-                                    (e.target as HTMLImageElement).style.display = 'none';
-                                    (e.target as HTMLImageElement).nextElementSibling?.classList.remove('hidden');
-                                  }}
-                                />
+                            <div className="relative w-14 h-14 sm:w-16 sm:h-16 rounded-lg bg-gray-100 flex items-center justify-center flex-shrink-0 overflow-hidden">
+                              {item.photo ? (
+                                <>
+                                  <img 
+                                    src={item.photo} 
+                                    alt={`${item.product.name} - Kullanıcı fotoğrafı`}
+                                    className="w-full h-full object-cover"
+                                    title="Kullanıcı tarafından yüklenen fotoğraf"
+                                    onError={(e) => {
+                                      console.error('User photo failed to load:', item.photo);
+                                      (e.target as HTMLImageElement).style.display = 'none';
+                                      (e.target as HTMLImageElement).nextElementSibling?.classList.remove('hidden');
+                                    }}
+                                  />
+                                  <div className="absolute top-1 right-1 bg-green-600 text-white text-[8px] sm:text-[10px] px-1 sm:px-1.5 py-0.5 rounded-full font-semibold shadow-md">
+                                    📷
+                                  </div>
+                                </>
                               ) : null}
-                              <Package className={`w-6 h-6 sm:w-8 sm:h-8 text-gray-400 ${item.product.image ? 'hidden' : ''}`} />
+                              <Package className={`w-6 h-6 sm:w-8 sm:h-8 text-gray-400 ${item.photo ? 'hidden' : ''}`} />
                             </div>
                             <div className="flex-1 min-w-0">
                               <div className="flex justify-between items-start mb-1.5 sm:mb-2">

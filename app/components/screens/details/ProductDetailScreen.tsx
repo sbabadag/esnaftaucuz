@@ -367,19 +367,8 @@ export default function ProductDetailScreen() {
                           📷
                         </div>
                       </>
-                    ) : (item.product?.image || product.image) ? (
-                      <img 
-                        src={item.product?.image || product.image} 
-                        alt={item.product?.name || product.name}
-                        className="w-full h-full object-cover opacity-60"
-                        title="Ürün resmi"
-                        onError={(e) => {
-                          (e.target as HTMLImageElement).style.display = 'none';
-                          (e.target as HTMLImageElement).nextElementSibling?.classList.remove('hidden');
-                        }}
-                      />
                     ) : null}
-                    <Package className={`w-8 h-8 text-gray-400 ${(item.photo || item.product?.image || product.image) ? 'hidden' : ''}`} />
+                    <Package className={`w-8 h-8 text-gray-400 ${item.photo ? 'hidden' : ''}`} />
                   </div>
                   <div className="flex-1 min-w-0">
                     <div className="flex justify-between items-start mb-3">

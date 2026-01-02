@@ -1,5 +1,12 @@
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ArrowLeft, MapPin, Bell, Lock, Globe, Info, ChevronRight } from 'lucide-react';
+import { ArrowLeft, MapPin, Bell, Lock, Globe, Info, ChevronRight, Search } from 'lucide-react';
+import { Button } from '../ui/button';
+import { Label } from '../ui/label';
+import { Slider } from '../ui/slider';
+import { useAuth } from '../../contexts/AuthContext';
+import { usersAPI } from '../../services/supabase-api';
+import { toast } from 'sonner';
 
 const settingsItems = [
   { icon: MapPin, label: 'Konum ayarları' },
@@ -9,8 +16,78 @@ const settingsItems = [
   { icon: Info, label: 'Hakkında' },
 ];
 
+// Predefined radius values (km)
+const RADIUS_OPTIONS = [1, 5, 10, 15, 20, 50, 100, 1000];
+
 export default function SettingsScreen() {
   const navigate = useNavigate();
+  const { user, refreshUser } = useAuth();
+  const [searchRadius, setSearchRadius] = useState<number>(15);
+  const [isSaving, setIsSaving] = useState(false);
+
+  useEffect(() => {
+    // Load user's search radius preference
+    if (user) {
+      const radius = (user as any).search_radius || 
+                    (user as any).preferences?.searchRadius || 
+                    15; // Default: 15 km
+      // Snap to nearest valid value
+      const nearestRadius = RADIUS_OPTIONS.reduce((prev, curr) => 
+        Math.abs(curr - radius) < Math.abs(prev - radius) ? curr : prev
+      );
+      setSearchRadius(nearestRadius);
+    }
+  }, [user]);
+
+  // Find the index of current radius in options for slider
+  const getRadiusIndex = (radius: number) => {
+    return RADIUS_OPTIONS.indexOf(radius);
+  };
+
+  // Get radius from slider index
+  const getRadiusFromIndex = (index: number) => {
+    return RADIUS_OPTIONS[Math.max(0, Math.min(RADIUS_OPTIONS.length - 1, index))];
+  };
+
+  const handleSaveSearchRadius = async () => {
+    if (!user) {
+      toast.error('Giriş yapmanız gerekiyor');
+      return;
+    }
+
+    // Validate radius is in allowed values
+    if (!RADIUS_OPTIONS.includes(searchRadius)) {
+      toast.error('Geçersiz arama genişliği değeri');
+      return;
+    }
+
+    try {
+      setIsSaving(true);
+      await usersAPI.update(user.id, {
+        preferences: {
+          searchRadius: searchRadius,
+        },
+      });
+      
+      // Refresh user data
+      if (refreshUser) {
+        await refreshUser();
+      }
+      
+      toast.success('Arama genişliği kaydedildi');
+    } catch (error: any) {
+      console.error('Save search radius error:', error);
+      toast.error('Ayar kaydedilirken bir hata oluştu');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleSliderChange = (value: number[]) => {
+    const index = value[0];
+    const newRadius = getRadiusFromIndex(index);
+    setSearchRadius(newRadius);
+  };
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -21,6 +98,65 @@ export default function SettingsScreen() {
             <ArrowLeft className="w-5 h-5" />
           </button>
           <h1 className="text-xl">Ayarlar</h1>
+        </div>
+      </div>
+
+      {/* Search Radius Setting */}
+      <div className="p-4">
+        <div className="bg-white rounded-lg p-4 border border-gray-200">
+          <div className="flex items-center gap-3 mb-4">
+            <Search className="w-5 h-5 text-gray-600" />
+            <h2 className="text-lg font-semibold">Arama Genişliği</h2>
+          </div>
+          <div className="space-y-4">
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <Label htmlFor="searchRadius" className="text-sm text-gray-600">
+                  Yakındaki fiyatları getirirken kullanılacak arama yarıçapı
+                </Label>
+                <span className="text-lg font-semibold text-green-600">{searchRadius} km</span>
+              </div>
+              
+              <div className="px-2 py-4">
+                <Slider
+                  value={[getRadiusIndex(searchRadius)]}
+                  onValueChange={handleSliderChange}
+                  min={0}
+                  max={RADIUS_OPTIONS.length - 1}
+                  step={1}
+                  className="w-full"
+                />
+              </div>
+              
+              {/* Show all options as markers */}
+              <div className="flex justify-between mt-2 px-2">
+                {RADIUS_OPTIONS.map((radius) => (
+                  <button
+                    key={radius}
+                    onClick={() => setSearchRadius(radius)}
+                    className={`text-xs px-2 py-1 rounded transition-colors ${
+                      searchRadius === radius
+                        ? 'bg-green-600 text-white font-semibold'
+                        : 'text-gray-500 hover:text-gray-700'
+                    }`}
+                  >
+                    {radius}
+                  </button>
+                ))}
+              </div>
+              
+              <p className="text-xs text-gray-500 mt-3">
+                Bu ayar, yakındaki en ucuz fiyatları getirirken kullanılır. Varsayılan: 15 km.
+              </p>
+            </div>
+            <Button
+              onClick={handleSaveSearchRadius}
+              disabled={isSaving}
+              className="w-full bg-green-600 hover:bg-green-700"
+            >
+              {isSaving ? 'Kaydediliyor...' : 'Kaydet'}
+            </Button>
+          </div>
         </div>
       </div>
 

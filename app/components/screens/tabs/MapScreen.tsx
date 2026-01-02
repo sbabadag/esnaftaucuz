@@ -3,10 +3,11 @@ import { MapPin, Navigation } from 'lucide-react';
 import { Badge } from '../../ui/badge';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '../../ui/sheet';
 import { Button } from '../../ui/button';
-import { MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet';
+import { MapContainer, TileLayer, Marker, Popup, useMap, Circle } from 'react-leaflet';
 import L from 'leaflet';
 import { pricesAPI } from '../../../services/supabase-api';
 import { useGeolocation } from '../../../../src/hooks/useGeolocation';
+import { useAuth } from '../../../contexts/AuthContext';
 import { toast } from 'sonner';
 
 // Fix for default marker icons in React-Leaflet
@@ -137,6 +138,7 @@ interface Price {
 
 export default function MapScreen() {
   const { getCurrentPosition } = useGeolocation();
+  const { user } = useAuth();
   const [userLocation, setUserLocation] = useState<[number, number] | null>(null);
   const [prices, setPrices] = useState<Price[]>([]);
   const [selectedPrice, setSelectedPrice] = useState<Price | null>(null);
@@ -344,26 +346,60 @@ export default function MapScreen() {
             {/* Auto-open popups component */}
             <AutoOpenPopups prices={prices} markerRefs={markerRefs} mapRef={mapRef} />
             
-            {/* User Location Marker */}
-            {userLocation && (
-              <Marker
-                position={userLocation}
-                icon={L.icon({
-                  iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-blue.png',
-                  shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png',
-                  iconSize: [25, 41],
-                  iconAnchor: [12, 41],
-                  popupAnchor: [1, -34],
-                  shadowSize: [41, 41]
-                })}
-              >
-                <Popup>
-                  <div className="text-center">
-                    <strong>📍 Konumunuz</strong>
-                  </div>
-                </Popup>
-              </Marker>
-            )}
+            {/* User Location Marker and Search Radius Circle */}
+            {userLocation && (() => {
+              // Get user's search radius preference (default: 15 km)
+              const searchRadiusKm = (user as any)?.search_radius || 
+                                    (user as any)?.preferences?.searchRadius || 
+                                    15;
+              const searchRadiusMeters = searchRadiusKm * 1000;
+              
+              return (
+                <>
+                  {/* Search Radius Circle */}
+                  <Circle
+                    center={userLocation}
+                    radius={searchRadiusMeters}
+                    pathOptions={{
+                      color: '#22c55e',
+                      fillColor: '#22c55e',
+                      fillOpacity: 0.1,
+                      weight: 2,
+                      dashArray: '5, 5',
+                    }}
+                  >
+                    <Popup>
+                      <div className="text-center">
+                        <strong>Arama Çevresi</strong>
+                        <br />
+                        <span className="text-sm text-gray-600">{searchRadiusKm} km</span>
+                      </div>
+                    </Popup>
+                  </Circle>
+                  
+                  {/* User Location Marker */}
+                  <Marker
+                    position={userLocation}
+                    icon={L.icon({
+                      iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-blue.png',
+                      shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png',
+                      iconSize: [25, 41],
+                      iconAnchor: [12, 41],
+                      popupAnchor: [1, -34],
+                      shadowSize: [41, 41]
+                    })}
+                  >
+                    <Popup>
+                      <div className="text-center">
+                        <strong>📍 Konumunuz</strong>
+                        <br />
+                        <span className="text-xs text-gray-500">Arama çevresi: {searchRadiusKm} km</span>
+                      </div>
+                    </Popup>
+                  </Marker>
+                </>
+              );
+            })()}
 
             {/* Price Markers - Only cheapest prices per product */}
             {prices.map((price) => {
@@ -545,11 +581,11 @@ export default function MapScreen() {
                 )}
 
                 {/* Photo */}
-                {(selectedPrice.photo || selectedPrice.product?.image) && (
+                {selectedPrice.photo && (
                   <div className="mt-4">
                     <div className="text-sm font-medium text-gray-700 mb-2">Bu Fiyatın Fotoğrafı</div>
                     <img
-                      src={selectedPrice.photo || selectedPrice.product?.image}
+                      src={selectedPrice.photo}
                       alt={selectedPrice.product.name}
                       className="w-full h-48 object-cover rounded-lg border border-gray-200"
                       onError={(e) => {

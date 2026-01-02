@@ -89,3 +89,4 @@ Tarayıcıda `http://localhost:5173` açın ve Google login'i test edin.
 - HTTPS kullanıldığından emin olun (GitHub Pages otomatik sağlar)
 
 
+

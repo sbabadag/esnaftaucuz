@@ -894,13 +894,22 @@ export const pricesAPI = {
 
       // Upload photo to Supabase Storage if provided
       let photoUrl: string | null = null;
+      let photoUploadError: string | null = null;
+      
       if (data.photo) {
         try {
-          console.log('Uploading photo to Supabase Storage...');
+          console.log('📸 Uploading photo to Supabase Storage...', {
+            fileName: data.photo.name,
+            fileSize: data.photo.size,
+            fileType: data.photo.type,
+          });
+          
           const fileExt = data.photo.name.split('.').pop() || 'jpg';
           const fileName = `${userId}/${uuidv4()}.${fileExt}`;
           
-          const { error: uploadError } = await supabase.storage
+          console.log('📤 Uploading to:', fileName);
+          
+          const { data: uploadData, error: uploadError } = await supabase.storage
             .from('price-photos')
             .upload(fileName, data.photo, {
               cacheControl: '3600',
@@ -908,20 +917,42 @@ export const pricesAPI = {
             });
 
           if (uploadError) {
-            console.error('Photo upload error:', uploadError);
-            // Continue without photo if upload fails (don't block price creation)
-            console.warn('Continuing without photo due to upload error');
+            console.error('❌ Photo upload error:', uploadError);
+            console.error('Upload error details:', {
+              message: uploadError.message,
+              statusCode: uploadError.statusCode,
+              error: uploadError.error,
+            });
+            // Store error message but continue with price creation
+            photoUploadError = uploadError.message || 'Bilinmeyen hata';
+            console.warn('⚠️ Continuing without photo due to upload error');
           } else {
+            console.log('✅ Photo uploaded to storage:', uploadData);
+            console.log('📁 Uploaded file path:', uploadData.path);
+            
+            // Get public URL
             const { data: urlData } = supabase.storage
               .from('price-photos')
-              .getPublicUrl(fileName);
+              .getPublicUrl(uploadData.path);
+            
             photoUrl = urlData.publicUrl;
-            console.log('Photo uploaded successfully:', photoUrl);
+            console.log('✅ Photo URL generated:', photoUrl);
+            console.log('🔗 Full photo URL:', photoUrl);
+            
+            // Verify URL is valid
+            if (!photoUrl || photoUrl.includes('undefined') || photoUrl.includes('null')) {
+              console.error('❌ Invalid photo URL generated:', photoUrl);
+              photoUploadError = 'Fotoğraf URL\'i oluşturulamadı';
+            }
           }
         } catch (photoError: any) {
-          console.error('Photo upload exception:', photoError);
-          // Continue without photo
+          console.error('❌ Photo upload exception:', photoError);
+          // Store error message but continue with price creation
+          photoUploadError = photoError.message || 'Bilinmeyen hata';
+          console.warn('⚠️ Continuing without photo due to exception');
         }
+      } else {
+        console.log('ℹ️ No photo provided, skipping photo upload');
       }
 
       // Create price
@@ -944,6 +975,7 @@ export const pricesAPI = {
         user_id: priceData.user_id,
         price: priceData.price,
         hasPhoto: !!priceData.photo,
+        photoUrl: priceData.photo || 'null',
         hasCoordinates: !!(priceData.coordinates),
       });
 
@@ -958,6 +990,14 @@ export const pricesAPI = {
           user:users(id, name, avatar, level)
         `)
         .single();
+      
+      if (priceRecord) {
+        console.log('✅ Price record created:', {
+          id: priceRecord.id,
+          photo: priceRecord.photo || 'null',
+          hasPhoto: !!priceRecord.photo,
+        });
+      }
 
       if (priceError) {
         console.error('Price creation error:', priceError);
@@ -995,7 +1035,12 @@ export const pricesAPI = {
       }
 
         console.log('✅ Price creation completed successfully');
-        return priceRecord;
+        
+        // Return price record with photo upload error info if any
+        return {
+          ...priceRecord,
+          photoUploadError: photoUploadError || undefined,
+        };
       } catch (error: any) {
         console.error('❌ Create price error:', error);
         console.error('Error details:', {
@@ -1132,12 +1177,19 @@ export const usersAPI = {
     };
     preferences?: {
       notifications?: boolean;
+      searchRadius?: number; // in kilometers
     };
   }) => {
     try {
       const updateData: any = {};
       if (data.name) updateData.name = data.name;
-      if (data.preferences) updateData.preferences = data.preferences;
+      if (data.preferences) {
+        updateData.preferences = data.preferences;
+        // Also store searchRadius at root level for easier access
+        if (data.preferences.searchRadius !== undefined) {
+          updateData.search_radius = data.preferences.searchRadius;
+        }
+      }
       if (data.location) {
         if (data.location.city) updateData.city = data.location.city;
         if (data.location.district) updateData.district = data.location.district;

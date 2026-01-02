@@ -105,11 +105,19 @@ export default function AddPriceScreen() {
 
   const handlePhotoSelect = (file: File | null) => {
     if (file) {
+      console.log('📸 Photo selected:', {
+        name: file.name,
+        size: file.size,
+        type: file.type,
+      });
       setFormData({
         ...formData,
         photo: file,
         photoPreview: URL.createObjectURL(file),
       });
+      console.log('✅ Photo added to form data');
+    } else {
+      console.warn('⚠️ No file selected');
     }
   };
 
@@ -142,22 +150,24 @@ export default function AddPriceScreen() {
     try {
       setIsSubmitting(true);
 
-      // Get user location if available
+      // Get coordinates - prefer formData, fallback to geolocation
       let lat = formData.lat;
       let lng = formData.lng;
+      
+      // If coordinates not available from selected location, try to get from browser geolocation
       if (!lat || !lng) {
-        // Try to get from browser geolocation
-        if (navigator.geolocation) {
-          navigator.geolocation.getCurrentPosition(
-            (position) => {
-              lat = position.coords.latitude;
-              lng = position.coords.longitude;
-            },
-            () => {
-              console.log('Geolocation not available');
-            }
-          );
+        try {
+          const position = await getCurrentPosition();
+          if (position) {
+            lat = position.latitude;
+            lng = position.longitude;
+            console.log('📍 Got coordinates from geolocation:', { lat, lng });
+          }
+        } catch (error) {
+          console.log('⚠️ Geolocation not available, continuing without coordinates');
         }
+      } else {
+        console.log('📍 Using coordinates from selected location:', { lat, lng });
       }
 
       console.log('📤 Submitting price:', {
@@ -166,8 +176,12 @@ export default function AddPriceScreen() {
         unit: formData.unit,
         location: formData.locationId,
         hasPhoto: !!formData.photo,
+        photoName: formData.photo?.name,
+        photoSize: formData.photo?.size,
+        photoType: formData.photo?.type,
         lat,
         lng,
+        hasCoordinates: !!(lat && lng),
         user: user?.id,
       });
 
@@ -183,10 +197,18 @@ export default function AddPriceScreen() {
 
       console.log('✅ Price created successfully:', result.id || result._id);
 
-      toast.success('🎉 Teşekkürler!', {
-        description: 'Paylaşımın yayına alındı. +10 katkı puanı kazandın',
-        duration: 3000,
-      });
+      // Show warning if photo upload failed
+      if ((result as any).photoUploadError) {
+        toast.warning('Fiyat kaydedildi ancak fotoğraf yüklenemedi', {
+          description: (result as any).photoUploadError,
+          duration: 5000,
+        });
+      } else {
+        toast.success('🎉 Teşekkürler!', {
+          description: 'Paylaşımın yayına alındı. +10 katkı puanı kazandın',
+          duration: 3000,
+        });
+      }
       
       // Small delay before navigation to ensure toast is visible
       setTimeout(() => {
@@ -430,16 +452,48 @@ export default function AddPriceScreen() {
             <div className="space-y-2 mb-4 max-h-64 overflow-y-auto">
               {locations.map((location) => {
                 const locationId = location.id || (location as any)._id; // Support both formats
+                // Extract coordinates from location
+                let lat: number | null = null;
+                let lng: number | null = null;
+                
+                if ((location as any).coordinates) {
+                  const coords = (location as any).coordinates;
+                  if (typeof coords === 'string') {
+                    // PostgreSQL POINT string format: (lng,lat)
+                    const match = coords.match(/\(([^,]+),([^)]+)\)/);
+                    if (match) {
+                      lng = parseFloat(match[1]);
+                      lat = parseFloat(match[2]);
+                    }
+                  } else if (typeof coords === 'object') {
+                    if (typeof coords.lat === 'number' && typeof coords.lng === 'number') {
+                      lat = coords.lat;
+                      lng = coords.lng;
+                    } else if (typeof coords.x === 'number' && typeof coords.y === 'number') {
+                      lat = coords.y; // PostgreSQL POINT stores as (lng, lat)
+                      lng = coords.x;
+                    }
+                  }
+                }
+                
                 return (
                   <Button
                     key={locationId}
                     variant={formData.locationId === locationId ? 'default' : 'outline'}
                     className={`w-full justify-start ${formData.locationId === locationId ? 'bg-green-600 hover:bg-green-700' : ''}`}
                     onClick={() => {
+                      console.log('📍 Location selected:', {
+                        id: locationId,
+                        name: location.name,
+                        lat,
+                        lng,
+                      });
                       setFormData({
                         ...formData,
                         locationId: locationId,
                         locationName: location.name,
+                        lat: lat || formData.lat,
+                        lng: lng || formData.lng,
                       });
                       setCurrentStep(currentStep + 1);
                     }}

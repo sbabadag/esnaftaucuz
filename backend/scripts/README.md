@@ -97,3 +97,4 @@ Kategoriler: `'Sebze'`, `'Meyve'`, `'Et'`, `'Süt Ürünleri'`, `'Bakliyat'`, `'
 Birimler: `'kg'`, `'adet'`, `'lt'`, `'paket'`
 
 
+
