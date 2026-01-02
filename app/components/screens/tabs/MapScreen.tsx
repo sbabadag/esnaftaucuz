@@ -85,35 +85,63 @@ function MapCenter({ center, zoom }: { center: [number, number]; zoom?: number }
   const prevZoomRef = useRef<number | undefined>(undefined);
   
   useEffect(() => {
-    // Leaflet uses [lat, lng] format for setView
-    const [lat, lng] = center;
-    
-    // Check if center or zoom actually changed
-    const centerChanged = !prevCenterRef.current || 
-      prevCenterRef.current[0] !== lat || 
-      prevCenterRef.current[1] !== lng;
-    const zoomChanged = zoom !== undefined && zoom !== prevZoomRef.current;
-    
-    if (centerChanged || zoomChanged) {
-      console.log('🗺️ MapCenter updating:', { 
-        lat, 
-        lng, 
-        zoom, 
-        currentZoom: map.getZoom(),
-        centerChanged,
-        zoomChanged,
-        prevCenter: prevCenterRef.current,
-        prevZoom: prevZoomRef.current
-      });
-      
-      if (zoom !== undefined) {
-        map.setView([lat, lng], zoom, { animate: true, duration: 0.5 });
-        prevZoomRef.current = zoom;
-      } else {
-        map.setView([lat, lng], map.getZoom(), { animate: true, duration: 0.5 });
+    try {
+      // Validate center coordinates
+      if (!center || !Array.isArray(center) || center.length !== 2) {
+        console.error('❌ Invalid center coordinates:', center);
+        return;
       }
       
-      prevCenterRef.current = [lat, lng];
+      const [lat, lng] = center;
+      
+      // Validate lat/lng are valid numbers
+      if (typeof lat !== 'number' || typeof lng !== 'number' || isNaN(lat) || isNaN(lng)) {
+        console.error('❌ Invalid lat/lng values:', { lat, lng });
+        return;
+      }
+      
+      // Validate lat/lng are within valid ranges
+      if (lat < -90 || lat > 90 || lng < -180 || lng > 180) {
+        console.error('❌ Coordinates out of range:', { lat, lng });
+        return;
+      }
+      
+      // Check if center or zoom actually changed
+      const centerChanged = !prevCenterRef.current || 
+        prevCenterRef.current[0] !== lat || 
+        prevCenterRef.current[1] !== lng;
+      const zoomChanged = zoom !== undefined && zoom !== prevZoomRef.current;
+      
+      if (centerChanged || zoomChanged) {
+        console.log('🗺️ MapCenter updating:', { 
+          lat, 
+          lng, 
+          zoom, 
+          currentZoom: map.getZoom(),
+          centerChanged,
+          zoomChanged,
+        });
+        
+        try {
+          if (zoom !== undefined && zoom >= 0 && zoom <= 20) {
+            map.setView([lat, lng], zoom, { animate: true, duration: 0.5 });
+            prevZoomRef.current = zoom;
+          } else {
+            const currentZoom = map.getZoom();
+            if (currentZoom >= 0 && currentZoom <= 20) {
+              map.setView([lat, lng], currentZoom, { animate: true, duration: 0.5 });
+            } else {
+              map.setView([lat, lng], 13, { animate: true, duration: 0.5 });
+            }
+          }
+          
+          prevCenterRef.current = [lat, lng];
+        } catch (setViewError: any) {
+          console.error('❌ Error setting map view:', setViewError);
+        }
+      }
+    } catch (error: any) {
+      console.error('❌ MapCenter error:', error);
     }
   }, [center, zoom, map]);
   return null;
@@ -234,6 +262,7 @@ export default function MapScreen() {
   const markerRefs = useRef<Record<string, any>>({});
   const mapRef = useRef<L.Map | null>(null);
   const hasFocusFromURL = useRef(false); // Track if we have focus coordinates from URL
+  const [mapError, setMapError] = useState<string | null>(null);
 
   // Check for focus location from URL params FIRST (before loading prices/location)
   useEffect(() => {
@@ -245,7 +274,8 @@ export default function MapScreen() {
       const lat = parseFloat(focusLat);
       const lng = parseFloat(focusLng);
       
-      if (!isNaN(lat) && !isNaN(lng)) {
+      // Validate coordinates are within valid ranges
+      if (!isNaN(lat) && !isNaN(lng) && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180) {
         console.log('📍 Focusing on location from URL:', { lat, lng, rawLat: focusLat, rawLng: focusLng });
         // Leaflet uses [lat, lng] format
         hasFocusFromURL.current = true; // Mark that we have focus from URL
@@ -262,6 +292,7 @@ export default function MapScreen() {
       } else {
         console.error('❌ Invalid coordinates from URL:', { focusLat, focusLng, parsedLat: lat, parsedLng: lng });
         hasFocusFromURL.current = false;
+        setMapError('Geçersiz koordinatlar');
       }
     } else {
       hasFocusFromURL.current = false; // No focus from URL
@@ -532,12 +563,31 @@ export default function MapScreen() {
               <p>Harita yükleniyor...</p>
             </div>
           </div>
+        ) : mapError ? (
+          <div className="flex items-center justify-center h-full bg-gray-100">
+            <div className="text-center p-4">
+              <p className="text-red-600 font-semibold mb-2">Harita yüklenemedi</p>
+              <p className="text-sm text-gray-600 mb-4">{mapError}</p>
+              <Button onClick={() => { setMapError(null); window.location.reload(); }}>
+                Yeniden Dene
+              </Button>
+            </div>
+          </div>
         ) : (
           <MapContainer
             center={mapCenter}
             zoom={mapZoom}
             style={{ height: '100%', width: '100%', zIndex: 1 }}
             scrollWheelZoom={true}
+            whenCreated={(mapInstance) => {
+              try {
+                mapRef.current = mapInstance;
+                console.log('✅ Map instance created successfully');
+              } catch (error: any) {
+                console.error('❌ Error creating map instance:', error);
+                setMapError('Harita oluşturulamadı');
+              }
+            }}
           >
             <TileLayer
               attribution='&copy; <a href="https://www.google.com/maps">Google Maps</a>'
@@ -549,62 +599,91 @@ export default function MapScreen() {
             
             {/* User Location Marker and Search Radius Circle */}
             {userLocation && (() => {
-              // Get user's search radius preference (default: 15 km)
-              const searchRadiusKm = (user as any)?.search_radius || 
-                                    (user as any)?.preferences?.searchRadius || 
-                                    15;
-              const searchRadiusMeters = searchRadiusKm * 1000;
-              
-              return (
-                <>
-                  {/* Search Radius Circle */}
-                  <Circle
-                    center={userLocation}
-                    radius={searchRadiusMeters}
-                    pathOptions={{
-                      color: '#22c55e',
-                      fillColor: '#22c55e',
-                      fillOpacity: 0.1,
-                      weight: 2,
-                      dashArray: '5, 5',
-                    }}
-                  >
-                    <Popup>
-                      <div className="text-center">
-                        <strong>Arama Çevresi</strong>
-                        <br />
-                        <span className="text-sm text-gray-600">{searchRadiusKm} km</span>
-                      </div>
-                    </Popup>
-                  </Circle>
-                  
-                  {/* User Location Marker */}
-                  <Marker
-                    position={userLocation}
-                    icon={L.icon({
-                      iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-blue.png',
-                      shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png',
-                      iconSize: [25, 41],
-                      iconAnchor: [12, 41],
-                      popupAnchor: [1, -34],
-                      shadowSize: [41, 41]
-                    })}
-                  >
-                    <Popup>
-                      <div className="text-center">
-                        <strong>📍 Konumunuz</strong>
-                        <br />
-                        <span className="text-xs text-gray-500">Arama çevresi: {searchRadiusKm} km</span>
-                      </div>
-                    </Popup>
-                  </Marker>
-                </>
-              );
+              try {
+                // Validate userLocation coordinates
+                const [lat, lng] = userLocation;
+                if (!userLocation || !Array.isArray(userLocation) || userLocation.length !== 2) {
+                  console.warn('⚠️ Invalid userLocation format:', userLocation);
+                  return null;
+                }
+                if (typeof lat !== 'number' || typeof lng !== 'number' || isNaN(lat) || isNaN(lng)) {
+                  console.warn('⚠️ Invalid userLocation coordinates:', { lat, lng });
+                  return null;
+                }
+                if (lat < -90 || lat > 90 || lng < -180 || lng > 180) {
+                  console.warn('⚠️ UserLocation coordinates out of range:', { lat, lng });
+                  return null;
+                }
+                
+                // Get user's search radius preference (default: 15 km)
+                const searchRadiusKm = (user as any)?.search_radius || 
+                                      (user as any)?.preferences?.searchRadius || 
+                                      15;
+                const searchRadiusMeters = Math.min(searchRadiusKm * 1000, 1000000); // Max 1000km in meters
+                
+                return (
+                  <>
+                    {/* Search Radius Circle */}
+                    <Circle
+                      center={userLocation}
+                      radius={searchRadiusMeters}
+                      pathOptions={{
+                        color: '#22c55e',
+                        fillColor: '#22c55e',
+                        fillOpacity: 0.1,
+                        weight: 2,
+                        dashArray: '5, 5',
+                      }}
+                    >
+                      <Popup>
+                        <div className="text-center">
+                          <strong>Arama Çevresi</strong>
+                          <br />
+                          <span className="text-sm text-gray-600">{searchRadiusKm} km</span>
+                        </div>
+                      </Popup>
+                    </Circle>
+                    
+                    {/* User Location Marker */}
+                    <Marker
+                      position={userLocation}
+                      icon={L.icon({
+                        iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-blue.png',
+                        shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png',
+                        iconSize: [25, 41],
+                        iconAnchor: [12, 41],
+                        popupAnchor: [1, -34],
+                        shadowSize: [41, 41]
+                      })}
+                    >
+                      <Popup>
+                        <div className="text-center">
+                          <strong>📍 Konumunuz</strong>
+                          <br />
+                          <span className="text-xs text-gray-500">Arama çevresi: {searchRadiusKm} km</span>
+                        </div>
+                      </Popup>
+                    </Marker>
+                  </>
+                );
+              } catch (error: any) {
+                console.error('❌ Error rendering user location marker:', error);
+                return null;
+              }
             })()}
 
             {/* Price Markers - Only cheapest prices per product */}
             {prices.map((price) => {
+              // Validate coordinates before rendering marker
               if (!price.lat || !price.lng) return null;
+              
+              const lat = typeof price.lat === 'number' ? price.lat : parseFloat(String(price.lat));
+              const lng = typeof price.lng === 'number' ? price.lng : parseFloat(String(price.lng));
+              
+              if (isNaN(lat) || isNaN(lng) || lat < -90 || lat > 90 || lng < -180 || lng > 180) {
+                console.warn('⚠️ Skipping invalid price coordinates:', { priceId: price.id, lat, lng });
+                return null;
+              }
               
               const priceText = `${formatPrice(price.price)} ₺`;
               const priceId = price.id || price._id || '';
@@ -617,19 +696,23 @@ export default function MapScreen() {
                       markerRefs.current[priceId] = ref;
                     }
                   }}
-                  position={[price.lat, price.lng]}
+                  position={[lat, lng]}
                   icon={createPriceIcon(priceText)}
                   eventHandlers={{
                     click: (e) => {
-                      // Open popup when marker is clicked
-                      const marker = e.target;
-                      if (marker && marker.isPopupOpen()) {
-                        marker.closePopup();
-                      } else {
-                        marker.openPopup();
+                      try {
+                        // Open popup when marker is clicked
+                        const marker = e.target;
+                        if (marker && marker.isPopupOpen()) {
+                          marker.closePopup();
+                        } else {
+                          marker.openPopup();
+                        }
+                        // Also open bottom sheet with details
+                        setSelectedPrice(price);
+                      } catch (error: any) {
+                        console.error('❌ Error handling marker click:', error);
                       }
-                      // Also open bottom sheet with details
-                      setSelectedPrice(price);
                     },
                   }}
                 >
@@ -704,10 +787,15 @@ export default function MapScreen() {
 
             {/* Business/Place Markers */}
             {showBusinesses && businesses.map((business) => {
-              const lat = business.geometry.location.lat;
-              const lng = business.geometry.location.lng;
+              const lat = business.geometry?.location?.lat;
+              const lng = business.geometry?.location?.lng;
               
-              if (!lat || !lng) return null;
+              // Validate coordinates
+              if (!lat || !lng || typeof lat !== 'number' || typeof lng !== 'number') return null;
+              if (isNaN(lat) || isNaN(lng) || lat < -90 || lat > 90 || lng < -180 || lng > 180) {
+                console.warn('⚠️ Skipping invalid business coordinates:', { businessId: business.place_id, lat, lng });
+                return null;
+              }
               
               const businessId = `business-${business.place_id}`;
               
