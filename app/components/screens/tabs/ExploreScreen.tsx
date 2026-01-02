@@ -116,14 +116,14 @@ export default function ExploreScreen() {
           // Save user coordinates for filtering
           setUserLocation({ lat: latitude, lng: longitude });
           
-          // Reverse geocoding silently (no toast) using unified geocoding utility
+          // Reverse geocoding silently (no toast) using Google Maps API ONLY
           try {
-            // Add timeout for geocoding (8 seconds for auto-fetch)
+            // Add timeout for geocoding (15 seconds for auto-fetch - retry mekanizması için)
             const geocodePromise = reverseGeocode(latitude, longitude);
             const timeoutPromise = new Promise<{ success: false; error: string }>((resolve) => {
               setTimeout(() => {
                 resolve({ success: false, error: 'Zaman aşımı' });
-              }, 8000);
+              }, 15000); // 15 seconds for retries
             });
             
             const result = await Promise.race([geocodePromise, timeoutPromise]);
@@ -137,6 +137,12 @@ export default function ExploreScreen() {
                 setCurrentLocation('Mevcut Konum');
                 console.log('⚠️ Auto geocoding failed:', result.error || 'Bilinmeyen hata');
                 console.log('📍 Using coordinates for filtering:', { lat: latitude, lng: longitude });
+                // Show silent toast only if it's a critical error (not timeout)
+                if (result.error && !result.error.includes('Zaman aşımı')) {
+                  toast.info('Konum tespit edildi', {
+                    description: result.error || 'Adres bilgisi yüklenemedi. Konumunuz kaydedildi.',
+                  });
+                }
               }
             }
           } catch (geocodeError: any) {
@@ -532,14 +538,14 @@ export default function ExploreScreen() {
         // Save user coordinates for filtering
         setUserLocation({ lat: latitude, lng: longitude });
         
-        // Reverse geocoding using unified geocoding utility (Google Maps or OpenStreetMap)
+        // Reverse geocoding using Google Maps API ONLY
         try {
-          // Add timeout for geocoding (10 seconds)
+          // Add timeout for geocoding (20 seconds - retry mekanizması için yeterli süre)
           const geocodePromise = reverseGeocode(latitude, longitude);
           const timeoutPromise = new Promise<{ success: false; error: string }>((resolve) => {
             setTimeout(() => {
-              resolve({ success: false, error: 'Zaman aşımı' });
-            }, 10000);
+              resolve({ success: false, error: 'Zaman aşımı - Google Maps API yanıt vermedi' });
+            }, 20000); // 20 seconds for retries
           });
           
           const result = await Promise.race([geocodePromise, timeoutPromise]);
@@ -552,11 +558,12 @@ export default function ExploreScreen() {
             // Reload data with new location
             loadData();
           } else {
-            // Fallback: show coordinates or friendly message
-            const coordText = `${latitude.toFixed(4)}, ${longitude.toFixed(4)}`;
+            // Show detailed error message
+            const errorMsg = result.error || 'Bilinmeyen hata';
+            console.error('❌ Geocoding failed:', errorMsg);
             setCurrentLocation('Mevcut Konum');
-            toast.info('Konum tespit edildi', {
-              description: 'Adres bilgisi yüklenemedi, ancak konumunuz kaydedildi.',
+            toast.warning('Konum tespit edildi', {
+              description: `Adres bilgisi yüklenemedi: ${errorMsg}. Konumunuz kaydedildi.`,
             });
             // Reload data with new location even if geocoding failed
             loadData();

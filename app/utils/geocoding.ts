@@ -1,20 +1,12 @@
 /**
  * Geocoding utility functions
- * Uses Google Maps Geocoding API (primary) and OpenStreetMap (fallback)
+ * Uses ONLY Google Maps Geocoding API - OpenStreetMap is NOT used
  */
 
 interface GeocodingResult {
   success: boolean;
   address?: string;
   error?: string;
-}
-
-/**
- * Detect if we're on mobile (Capacitor)
- */
-function isMobile(): boolean {
-  return typeof window !== 'undefined' && 
-    (window as any).Capacitor?.isNativePlatform() === true;
 }
 
 /**
@@ -36,22 +28,49 @@ export async function reverseGeocode(
     };
   }
   
-  // Use Google Maps API
-  try {
-    const result = await reverseGeocodeGoogle(latitude, longitude, googleApiKey);
-    if (result.success) {
-      console.log('✅ Google Maps geocoding successful');
-      return result;
+  // Use Google Maps API - Retry up to 3 times on failure
+  const maxRetries = 3;
+  let lastError: any = null;
+  
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      console.log(`🔄 Google Maps geocoding attempt ${attempt}/${maxRetries}...`);
+      const result = await reverseGeocodeGoogle(latitude, longitude, googleApiKey);
+      
+      if (result.success) {
+        console.log('✅ Google Maps geocoding successful');
+        return result;
+      }
+      
+      // If not successful, store error and retry
+      lastError = result.error;
+      console.warn(`⚠️ Google Maps geocoding attempt ${attempt} failed:`, result.error);
+      
+      // Wait before retry (exponential backoff)
+      if (attempt < maxRetries) {
+        const delay = Math.min(1000 * Math.pow(2, attempt - 1), 5000); // Max 5 seconds
+        console.log(`⏳ Waiting ${delay}ms before retry...`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+      }
+    } catch (error: any) {
+      lastError = error;
+      console.error(`❌ Google Maps geocoding attempt ${attempt} error:`, error);
+      
+      // Wait before retry (exponential backoff)
+      if (attempt < maxRetries) {
+        const delay = Math.min(1000 * Math.pow(2, attempt - 1), 5000); // Max 5 seconds
+        console.log(`⏳ Waiting ${delay}ms before retry...`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+      }
     }
-    console.error('❌ Google Maps geocoding failed:', result.error);
-    return result;
-  } catch (error: any) {
-    console.error('❌ Google Maps geocoding error:', error);
-    return {
-      success: false,
-      error: error.message || 'Google Maps API hatası',
-    };
   }
+  
+  // All retries failed - return error (NEVER use OpenStreetMap)
+  console.error('❌ Google Maps geocoding failed after all retries');
+  return {
+    success: false,
+    error: lastError?.message || lastError || 'Google Maps API hatası - Tüm denemeler başarısız oldu',
+  };
 }
 
 /**
@@ -64,13 +83,49 @@ async function reverseGeocodeGoogle(
 ): Promise<GeocodingResult> {
   const url = `https://maps.googleapis.com/maps/api/geocode/json?latlng=${latitude},${longitude}&language=tr&key=${apiKey}`;
   
-  const response = await fetch(url);
+  console.log('🌐 Google Maps API request:', { latitude, longitude, apiKeyLength: apiKey?.length || 0 });
+  
+  let response: Response;
+  try {
+    response = await fetch(url);
+  } catch (fetchError: any) {
+    console.error('❌ Google Maps API fetch error:', fetchError);
+    throw new Error(`Network error: ${fetchError.message || 'Failed to fetch'}`);
+  }
   
   if (!response.ok) {
-    throw new Error(`Google Maps API error: ${response.status}`);
+    const errorText = await response.text().catch(() => 'Unknown error');
+    console.error('❌ Google Maps API HTTP error:', response.status, errorText);
+    throw new Error(`Google Maps API HTTP error: ${response.status} - ${errorText}`);
   }
   
   const data = await response.json();
+  console.log('📥 Google Maps API response:', { status: data.status, resultsCount: data.results?.length || 0 });
+  
+  // Handle API errors
+  if (data.status === 'REQUEST_DENIED') {
+    console.error('❌ Google Maps API: REQUEST_DENIED', data.error_message);
+    return {
+      success: false,
+      error: `API key hatası: ${data.error_message || 'REQUEST_DENIED'}`,
+    };
+  }
+  
+  if (data.status === 'OVER_QUERY_LIMIT') {
+    console.error('❌ Google Maps API: OVER_QUERY_LIMIT');
+    return {
+      success: false,
+      error: 'API kotası aşıldı. Lütfen daha sonra tekrar deneyin.',
+    };
+  }
+  
+  if (data.status === 'ZERO_RESULTS') {
+    console.warn('⚠️ Google Maps API: ZERO_RESULTS');
+    return {
+      success: false,
+      error: 'Bu konum için adres bulunamadı',
+    };
+  }
   
   if (data.status === 'OK' && data.results && data.results.length > 0) {
     const result = data.results[0];
@@ -119,150 +174,12 @@ async function reverseGeocodeGoogle(
     }
   }
   
+  // If we get here, status is not OK
+  console.error('❌ Google Maps API error status:', data.status, data.error_message);
   return {
     success: false,
-    error: data.status || 'Adres bulunamadı',
+    error: data.error_message || data.status || 'Adres bulunamadı',
   };
 }
 
-/**
- * Parse OpenStreetMap response and extract address
- */
-function parseOSMResponse(data: any): GeocodingResult {
-  if (data.error) {
-    return {
-      success: false,
-      error: data.error,
-    };
-  }
-  
-  const address = data.address || {};
-  
-  // Try multiple strategies to get address
-  let locationText = '';
-  
-  // Strategy 1: City / District format
-  const city = address.city || address.town || address.village || address.municipality || address.state;
-  const district = address.suburb || address.neighbourhood || address.district || address.county || address.state_district;
-  const mahalle = address.quarter || address.neighbourhood;
-  
-  if (city) {
-    if (district && district !== city) {
-      locationText = `${city} / ${district}`;
-    } else if (mahalle && mahalle !== city) {
-      locationText = `${city} / ${mahalle}`;
-    } else {
-      locationText = city;
-    }
-  }
-  
-  // Strategy 2: Parse display_name if city not found
-  if (!locationText && data.display_name) {
-    const parts = data.display_name.split(',').map((p: string) => p.trim());
-    const filteredParts = parts.filter((part: string) => {
-      const lower = part.toLowerCase();
-      return !lower.includes('türkiye') && 
-             !lower.includes('turkey') && 
-             !lower.includes('postal') &&
-             !lower.match(/^\d+$/);
-    });
-    
-    if (filteredParts.length >= 2) {
-      locationText = filteredParts.slice(0, 2).join(' / ');
-    } else if (filteredParts.length === 1) {
-      locationText = filteredParts[0];
-    } else if (parts.length >= 2) {
-      locationText = parts.slice(0, 2).join(' / ');
-    }
-  }
-  
-  // Strategy 3: Try to extract from any available address field
-  if (!locationText) {
-    const allAddressFields = [
-      address.road,
-      address.suburb,
-      address.neighbourhood,
-      address.village,
-      address.town,
-      address.city,
-      address.state,
-    ].filter(Boolean);
-    
-    if (allAddressFields.length > 0) {
-      locationText = allAddressFields.slice(0, 2).join(' / ');
-    }
-  }
-  
-  if (locationText) {
-    return {
-      success: true,
-      address: locationText,
-    };
-  }
-  
-  return {
-    success: false,
-    error: 'Adres bulunamadı',
-  };
-}
-
-/**
- * Reverse geocoding using OpenStreetMap Nominatim API
- */
-async function reverseGeocodeOSM(
-  latitude: number,
-  longitude: number
-): Promise<GeocodingResult> {
-  // Add delay to respect rate limits
-  await new Promise(resolve => setTimeout(resolve, 1000));
-  
-  const url = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${latitude}&lon=${longitude}&zoom=18&addressdetails=1&accept-language=tr`;
-  
-  // Check if we're on mobile (Capacitor)
-  const isMobile = typeof window !== 'undefined' && 
-    (window as any).Capacitor?.isNativePlatform();
-  
-  try {
-    // On mobile, try to use fetch without CORS mode (WebView should handle it)
-    // On web, use CORS mode
-    const fetchOptions: RequestInit = {
-      headers: {
-        'User-Agent': 'esnaftaucuz-app/1.0',
-      },
-    };
-    
-    // Don't set CORS mode on mobile - WebView should handle it natively
-    // On web, we need CORS mode
-    if (!isMobile) {
-      fetchOptions.mode = 'cors';
-    }
-    // On mobile, don't set mode at all - let WebView handle it
-    
-    const response = await fetch(url, fetchOptions);
-    
-    if (!response.ok) {
-      throw new Error(`OpenStreetMap API error: ${response.status}`);
-    }
-    
-    const data = await response.json();
-    return parseOSMResponse(data);
-  } catch (error: any) {
-    // Handle CORS and network errors
-    const errorMessage = error.message || 'Bilinmeyen hata';
-    console.error('OpenStreetMap geocoding error:', errorMessage);
-    
-    // Check if it's a CORS error
-    if (errorMessage.includes('CORS') || errorMessage.includes('Failed to fetch') || errorMessage.includes('NetworkError')) {
-      return {
-        success: false,
-        error: 'CORS hatası: Mobil uygulamada OpenStreetMap API\'sine erişilemiyor. Google Maps API key gerekli.',
-      };
-    }
-    
-    return {
-      success: false,
-      error: errorMessage,
-    };
-  }
-}
 
