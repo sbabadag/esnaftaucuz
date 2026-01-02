@@ -923,13 +923,13 @@ export default function ExploreScreen() {
                                   <Badge className="bg-green-600 ml-2 flex-shrink-0 text-xs">BUGÜN</Badge>
                                 )}
                               </div>
-                              <div className="flex items-center justify-between gap-2 mb-1.5 sm:mb-2">
-                                <div className="flex items-center gap-3 sm:gap-4 text-xs sm:text-sm text-gray-500">
-                                  <span className="flex items-center gap-1">
-                                    <MapPin className="w-3 h-3 sm:w-4 sm:h-4" />
+                              <div className="flex items-center gap-2 mb-1.5 sm:mb-2">
+                                <div className="flex items-center gap-3 sm:gap-4 text-xs sm:text-sm text-gray-500 flex-1 min-w-0">
+                                  <span className="flex items-center gap-1 min-w-0">
+                                    <MapPin className="w-3 h-3 sm:w-4 sm:h-4 flex-shrink-0" />
                                     <span className="truncate">{item.location?.name || 'Konum bilgisi yok'}</span>
                                   </span>
-                                  <span className="flex items-center gap-1">
+                                  <span className="flex items-center gap-1 flex-shrink-0">
                                     <Clock className="w-3 h-3 sm:w-4 sm:h-4" />
                                     {formatTimeAgo(item.created_at || item.createdAt || '')}
                                   </span>
@@ -1134,13 +1134,13 @@ export default function ExploreScreen() {
                               <Badge className="bg-green-600 ml-2 flex-shrink-0 text-xs">BUGÜN</Badge>
                             )}
                           </div>
-                          <div className="flex items-center justify-between gap-2 mb-1.5 sm:mb-2">
-                            <div className="flex items-center gap-3 sm:gap-4 text-xs sm:text-sm text-gray-500">
-                              <span className="flex items-center gap-1">
-                                <MapPin className="w-3 h-3 sm:w-4 sm:h-4" />
+                          <div className="flex items-center gap-2 mb-1.5 sm:mb-2">
+                            <div className="flex items-center gap-3 sm:gap-4 text-xs sm:text-sm text-gray-500 flex-1 min-w-0">
+                              <span className="flex items-center gap-1 min-w-0">
+                                <MapPin className="w-3 h-3 sm:w-4 sm:h-4 flex-shrink-0" />
                                 <span className="truncate">{item.location?.name || 'Konum bilgisi yok'}</span>
                               </span>
-                              <span className="flex items-center gap-1">
+                              <span className="flex items-center gap-1 flex-shrink-0">
                                 <Clock className="w-3 h-3 sm:w-4 sm:h-4" />
                                 {formatTimeAgo(item.created_at || item.createdAt || '')}
                               </span>
@@ -1252,13 +1252,13 @@ export default function ExploreScreen() {
                               <Badge className="bg-green-600 ml-2 flex-shrink-0 text-xs">BUGÜN</Badge>
                             )}
                           </div>
-                          <div className="flex items-center justify-between gap-2 mb-1.5 sm:mb-2">
-                            <div className="flex items-center gap-3 sm:gap-4 text-xs sm:text-sm text-gray-500">
-                              <span className="flex items-center gap-1">
-                                <MapPin className="w-3 h-3 sm:w-4 sm:h-4" />
+                          <div className="flex items-center gap-2 mb-1.5 sm:mb-2">
+                            <div className="flex items-center gap-3 sm:gap-4 text-xs sm:text-sm text-gray-500 flex-1 min-w-0">
+                              <span className="flex items-center gap-1 min-w-0">
+                                <MapPin className="w-3 h-3 sm:w-4 sm:h-4 flex-shrink-0" />
                                 <span className="truncate">{item.location?.name || 'Konum bilgisi yok'}</span>
                               </span>
-                              <span className="flex items-center gap-1">
+                              <span className="flex items-center gap-1 flex-shrink-0">
                                 <Clock className="w-3 h-3 sm:w-4 sm:h-4" />
                                 {formatTimeAgo(item.created_at || item.createdAt || '')}
                               </span>

@@ -528,18 +528,18 @@ export default function ProductDetailScreen() {
                       )}
                     </div>
 
-                    <div className="flex items-center justify-between gap-2 mb-3">
-                      <div className="flex items-center gap-4 text-sm text-gray-500">
-                        <span className="flex items-center gap-1">
-                          <MapPin className="w-4 h-4" />
-                          <span>{locationName}</span>
+                    <div className="flex items-center gap-2 mb-3">
+                      <div className="flex items-center gap-4 text-sm text-gray-500 flex-1 min-w-0">
+                        <span className="flex items-center gap-1 min-w-0">
+                          <MapPin className="w-4 h-4 flex-shrink-0" />
+                          <span className="truncate">{locationName}</span>
                         </span>
-                        <span className="flex items-center gap-1">
+                        <span className="flex items-center gap-1 flex-shrink-0">
                           <Clock className="w-4 h-4" />
                           {formatTimeAgo(createdAt)}
                         </span>
                         {isVerified && (
-                          <span className="flex items-center gap-1 text-green-600">
+                          <span className="flex items-center gap-1 text-green-600 flex-shrink-0">
                             <CheckCircle2 className="w-4 h-4" />
                             Doğrulanmış
                           </span>
