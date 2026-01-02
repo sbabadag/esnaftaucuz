@@ -36,18 +36,28 @@ npm run dev
 
 ## 🔒 Güvenlik
 
+### ⚠️ ÖNEMLİ: Geocoding API Kısıtlamaları
+
+**Geocoding API, HTTP referrer kısıtlamaları ile çalışmaz!**
+
+Eğer API anahtarınızda "HTTP referrers (web sites)" kısıtlaması varsa, şu hatayı alırsınız:
+```
+REQUEST_DENIED: API keys with referer restrictions cannot be used with this API.
+```
+
 ### API Key Kısıtlamaları (Önerilen)
 
-1. **HTTP referrer kısıtlaması** (Web için):
-   - API key → **Application restrictions** → **HTTP referrers**
-   - Şu referrer'ları ekleyin:
-     - `http://localhost:5173/*` (development)
-     - `https://esnaftaucuz.com/*` (production)
-     - `https://www.esnaftaucuz.com/*` (production)
+1. **Application restrictions** (Uygulama kısıtlamaları):
+   - **Seçenek 1 (Test için)**: **None** - Hiç kısıtlama yok (sadece test için)
+   - **Seçenek 2 (Production için)**: **IP addresses** - Sadece belirli IP adreslerinden erişim
+     - Development: Kendi IP adresinizi ekleyin
+     - Production: Sunucu IP adreslerini ekleyin
+   - **❌ KULLANMAYIN**: **HTTP referrers** - Geocoding API ile çalışmaz!
 
 2. **API kısıtlaması**:
    - **API restrictions** → **Restrict key**
    - Sadece **Geocoding API**'yi seçin
+   - Bu, API anahtarının sadece Geocoding API için kullanılmasını sağlar
 
 ## 🎯 Nasıl Çalışıyor?
 
