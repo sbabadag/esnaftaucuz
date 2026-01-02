@@ -131,42 +131,73 @@ async function reverseGeocodeGoogle(
     const result = data.results[0];
     const addressComponents = result.address_components || [];
     
-    // Extract city and district for Turkey
+    // Extract detailed address components for Turkey
     let city = '';
     let district = '';
     let mahalle = '';
+    let sokak = '';
+    let sokakNo = '';
     
     for (const component of addressComponents) {
       const types = component.types || [];
       
-      if (types.includes('locality') || types.includes('administrative_area_level_1')) {
+      // City (Şehir)
+      if (types.includes('locality')) {
         if (!city) city = component.long_name;
       }
-      if (types.includes('sublocality') || types.includes('sublocality_level_1') || types.includes('neighborhood')) {
+      // Administrative area level 1 (İl)
+      if (types.includes('administrative_area_level_1') && !city) {
+        city = component.long_name;
+      }
+      // District (İlçe)
+      if (types.includes('sublocality_level_1') || types.includes('sublocality')) {
         if (!district) district = component.long_name;
       }
+      // Neighborhood/Mahalle
       if (types.includes('sublocality_level_2') || types.includes('neighborhood')) {
         if (!mahalle) mahalle = component.long_name;
       }
+      // Street (Sokak)
+      if (types.includes('route')) {
+        if (!sokak) sokak = component.long_name;
+      }
+      // Street number (Sokak numarası)
+      if (types.includes('street_number')) {
+        if (!sokakNo) sokakNo = component.long_name;
+      }
+    }
+    
+    // Build detailed address: Mahalle, Sokak SokakNo, İlçe, Şehir
+    const addressParts: string[] = [];
+    
+    if (mahalle && mahalle !== district && mahalle !== city) {
+      addressParts.push(mahalle);
+    }
+    
+    if (sokak) {
+      const sokakText = sokakNo ? `${sokak} ${sokakNo}` : sokak;
+      addressParts.push(sokakText);
+    }
+    
+    if (district && district !== city) {
+      addressParts.push(district);
+    }
+    
+    if (city) {
+      addressParts.push(city);
     }
     
     // Format address
     let locationText = '';
-    if (city) {
-      if (district && district !== city) {
-        locationText = `${city} / ${district}`;
-      } else if (mahalle && mahalle !== city) {
-        locationText = `${city} / ${mahalle}`;
-      } else {
-        locationText = city;
-      }
+    if (addressParts.length > 0) {
+      locationText = addressParts.join(', ');
     } else if (result.formatted_address) {
-      // Fallback to formatted address
-      const parts = result.formatted_address.split(',').map((p: string) => p.trim());
-      locationText = parts.slice(0, 2).join(' / ');
+      // Fallback to formatted address if components are not available
+      locationText = result.formatted_address;
     }
     
     if (locationText) {
+      console.log('📍 Parsed address components:', { city, district, mahalle, sokak, sokakNo, locationText });
       return {
         success: true,
         address: locationText,
