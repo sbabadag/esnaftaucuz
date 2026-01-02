@@ -166,20 +166,28 @@ function AutoOpenPopups({
   }, [map, mapRef]);
 
   useEffect(() => {
-    if (prices.length > 0) {
+    if (prices.length > 0 && mapRef.current) {
       // Wait for markers to render, then open all popups
       const timer = setTimeout(() => {
-        // Open all popups for cheapest prices
-        prices.forEach((price) => {
-          const priceId = price.id || price._id || '';
-          const markerRef = markerRefs.current[priceId];
-          if (markerRef?.leafletElement) {
-            const marker = markerRef.leafletElement;
-            if (!marker.isPopupOpen()) {
-              marker.openPopup();
+        try {
+          // Open all popups for cheapest prices
+          prices.forEach((price) => {
+            try {
+              const priceId = price.id || price._id || '';
+              const markerRef = markerRefs.current[priceId];
+              if (markerRef?.leafletElement && mapRef.current) {
+                const marker = markerRef.leafletElement;
+                if (!marker.isPopupOpen()) {
+                  marker.openPopup();
+                }
+              }
+            } catch (error: any) {
+              console.error('Error opening popup for price:', price.id, error);
             }
-          }
-        });
+          });
+        } catch (error: any) {
+          console.error('Error in AutoOpenPopups:', error);
+        }
       }, 1500);
 
       return () => clearTimeout(timer);
@@ -321,7 +329,20 @@ export default function MapScreen() {
     try {
       const position = await getCurrentPosition();
       if (position) {
-        const location: [number, number] = [position.latitude, position.longitude];
+        const lat = position.latitude;
+        const lng = position.longitude;
+        
+        // Validate coordinates
+        if (typeof lat !== 'number' || typeof lng !== 'number' || isNaN(lat) || isNaN(lng)) {
+          console.error('❌ Invalid position coordinates:', { lat, lng });
+          return;
+        }
+        if (lat < -90 || lat > 90 || lng < -180 || lng > 180) {
+          console.error('❌ Position coordinates out of range:', { lat, lng });
+          return;
+        }
+        
+        const location: [number, number] = [lat, lng];
         setUserLocation(location);
         // Only update map center if we don't have focus from URL
         if (!hasFocusFromURL.current) {
@@ -329,7 +350,7 @@ export default function MapScreen() {
           setMapZoom(15);
         }
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error('Failed to get user location:', error);
       toast.error('Konum alınamadı');
     }
@@ -338,6 +359,7 @@ export default function MapScreen() {
   const loadPrices = async () => {
     try {
       setIsLoading(true);
+      setMapError(null); // Clear any previous errors
       // Load all prices to find cheapest per product
       const data = await pricesAPI.getAll({
         limit: 500, // Load more prices to find cheapest per product
@@ -347,6 +369,8 @@ export default function MapScreen() {
       if (!Array.isArray(data)) {
         console.error('Invalid data format:', data);
         toast.error('Fiyat verileri beklenmeyen formatta');
+        setMapError('Fiyat verileri yüklenemedi');
+        setIsLoading(false);
         return;
       }
       
@@ -550,7 +574,7 @@ export default function MapScreen() {
       {/* Map Container */}
       <div 
         className="w-full relative" 
-        style={{ 
+            style={{
           height: 'calc(100vh - 80px)', 
           marginTop: '64px',
           zIndex: 1
@@ -562,7 +586,7 @@ export default function MapScreen() {
               <MapPin className="w-16 h-16 mx-auto mb-4 text-gray-400 animate-pulse" />
               <p>Harita yükleniyor...</p>
             </div>
-          </div>
+              </div>
         ) : mapError ? (
           <div className="flex items-center justify-center h-full bg-gray-100">
             <div className="text-center p-4">
@@ -893,9 +917,9 @@ export default function MapScreen() {
       {selectedPrice && (
         <Sheet open={!!selectedPrice} onOpenChange={(open) => !open && setSelectedPrice(null)}>
           <SheetContent side="bottom" className="h-[50vh]">
-            <SheetHeader>
+          <SheetHeader>
               <SheetTitle>{selectedPrice.product.name}</SheetTitle>
-            </SheetHeader>
+          </SheetHeader>
             <div className="py-4 space-y-4 overflow-y-auto">
               {/* Main Price Card */}
               <div className="border border-gray-200 rounded-lg p-4 bg-white shadow-sm">
@@ -1023,9 +1047,9 @@ export default function MapScreen() {
                   Detaylı bilgi için marker'a tıklayın.
                 </p>
               </div>
-            </div>
-          </SheetContent>
-        </Sheet>
+          </div>
+        </SheetContent>
+      </Sheet>
       )}
     </div>
   );
