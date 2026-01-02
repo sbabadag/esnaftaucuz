@@ -1306,13 +1306,44 @@ export const searchAPI = {
       // Client-side geospatial filtering
       const radiusKm = radius / 1000;
       const nearbyPrices = (prices || []).filter((price: any) => {
-        if (!price.location?.coordinates) return false;
-        const coords = price.location.coordinates;
-        const priceLat = coords.lat || coords.y || 0;
-        const priceLng = coords.lng || coords.x || 0;
+        // Try normalized lat/lng first (from pricesAPI.getAll normalization)
+        let priceLat: number | undefined;
+        let priceLng: number | undefined;
+        
+        if (price.lat && price.lng) {
+          // Use normalized coordinates
+          priceLat = typeof price.lat === 'number' ? price.lat : parseFloat(String(price.lat));
+          priceLng = typeof price.lng === 'number' ? price.lng : parseFloat(String(price.lng));
+        } else if (price.location?.coordinates) {
+          // Fallback to location.coordinates
+          const coords = price.location.coordinates;
+          priceLat = coords.lat || coords.y;
+          priceLng = coords.lng || coords.x;
+        }
+        
+        // Also check if coordinates are in location object directly
+        if (!priceLat && price.location?.lat) {
+          priceLat = typeof price.location.lat === 'number' ? price.location.lat : parseFloat(String(price.location.lat));
+        }
+        if (!priceLng && price.location?.lng) {
+          priceLng = typeof price.location.lng === 'number' ? price.location.lng : parseFloat(String(price.location.lng));
+        }
+        
+        if (!priceLat || !priceLng || isNaN(priceLat) || isNaN(priceLng)) {
+          return false;
+        }
+        
         const distance = calculateDistance(lat, lng, priceLat, priceLng);
-        return distance <= radiusKm;
+        const isWithinRadius = distance <= radiusKm;
+        
+        if (isWithinRadius) {
+          console.log(`📍 Price within radius: ${distance.toFixed(2)} km - ${price.product?.name || 'Unknown'}`);
+        }
+        
+        return isWithinRadius;
       });
+      
+      console.log(`📍 Filtered ${nearbyPrices.length} prices within ${radiusKm} km radius from ${nearbyPrices.length} total`);
 
       // Group by product and get cheapest
       const cheapestByProduct: Record<string, any> = {};

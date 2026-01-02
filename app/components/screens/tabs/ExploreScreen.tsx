@@ -78,6 +78,7 @@ export default function ExploreScreen() {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const [currentLocation, setCurrentLocation] = useState<string>('Konya / Selçuklu');
   const [isGettingLocation, setIsGettingLocation] = useState(false);
+  const [userLocation, setUserLocation] = useState<{ lat: number; lng: number } | null>(null);
   const [filters, setFilters] = useState({
     pazar: false,
     manav: false,
@@ -109,127 +110,27 @@ export default function ExploreScreen() {
           const { latitude, longitude } = position;
           console.log('📍 Auto-fetching location on mount:', { latitude, longitude });
           
-          // Reverse geocoding silently (no toast)
-          let locationText = '';
-          let geocodingSuccess = false;
+          // Save user coordinates for filtering
+          setUserLocation({ lat: latitude, lng: longitude });
           
+          // Reverse geocoding silently (no toast) using unified geocoding utility
           try {
-            // Add delay to respect rate limits
-            await new Promise(resolve => setTimeout(resolve, 1000));
+            const result = await reverseGeocode(latitude, longitude);
             
-            const response = await fetch(
-              `https://nominatim.openstreetmap.org/reverse?format=json&lat=${latitude}&lon=${longitude}&zoom=18&addressdetails=1&accept-language=tr`,
-              {
-                headers: {
-                  'User-Agent': 'esnaftaucuz-app/1.0',
-                },
-              }
-            );
-            
-            if (response.ok && mounted) {
-              const data = await response.json();
-              console.log('📍 Auto geocoding response:', data);
-              console.log('📍 Address object:', data.address);
-              
-              // Check if API returned an error
-              if (data.error) {
-                console.error('Geocoding API error:', data.error);
+            if (mounted) {
+              if (result.success && result.address) {
+                setCurrentLocation(result.address);
+                console.log('✅ Auto location set:', result.address);
               } else {
-                const address = data.address || {};
-                console.log('📍 Parsing address fields:', {
-                  city: address.city,
-                  town: address.town,
-                  village: address.village,
-                  municipality: address.municipality,
-                  state: address.state,
-                  district: address.district,
-                  suburb: address.suburb,
-                  neighbourhood: address.neighbourhood,
-                  display_name: data.display_name,
-                });
-                
-                // Try multiple strategies to get address
-                
-                // Strategy 1: City / District format
-                const city = address.city || address.town || address.village || address.municipality || address.state;
-                const district = address.suburb || address.neighbourhood || address.district || address.county || address.state_district;
-                const mahalle = address.quarter || address.neighbourhood;
-                
-                if (city) {
-                  if (district && district !== city) {
-                    locationText = `${city} / ${district}`;
-                    geocodingSuccess = true;
-                  } else if (mahalle && mahalle !== city) {
-                    locationText = `${city} / ${mahalle}`;
-                    geocodingSuccess = true;
-                  } else {
-                    locationText = city;
-                    geocodingSuccess = true;
-                  }
-                }
-                
-                // Strategy 2: Parse display_name if city not found
-                if (!geocodingSuccess && data.display_name) {
-                  const parts = data.display_name.split(',').map((p: string) => p.trim());
-                  console.log('📍 Parsing display_name parts:', parts);
-                  
-                  // Filter out common non-location words
-                  const filteredParts = parts.filter((part: string) => {
-                    const lower = part.toLowerCase();
-                    return !lower.includes('türkiye') && 
-                           !lower.includes('turkey') && 
-                           !lower.includes('postal') &&
-                           !lower.match(/^\d+$/); // Exclude pure numbers
-                  });
-                  
-                  if (filteredParts.length >= 2) {
-                    // Take first 2 meaningful parts
-                    locationText = filteredParts.slice(0, 2).join(' / ');
-                    geocodingSuccess = true;
-                  } else if (filteredParts.length === 1) {
-                    locationText = filteredParts[0];
-                    geocodingSuccess = true;
-                  } else if (parts.length >= 2) {
-                    // Fallback to original parts if filtered is empty
-                    locationText = parts.slice(0, 2).join(' / ');
-                    geocodingSuccess = true;
-                  }
-                }
-                
-                // Strategy 3: Try to extract from any available address field
-                if (!geocodingSuccess) {
-                  const allAddressFields = [
-                    address.road,
-                    address.suburb,
-                    address.neighbourhood,
-                    address.village,
-                    address.town,
-                    address.city,
-                    address.state,
-                  ].filter(Boolean);
-                  
-                  if (allAddressFields.length > 0) {
-                    locationText = allAddressFields.slice(0, 2).join(' / ');
-                    geocodingSuccess = true;
-                  }
-                }
+                // Fallback: use coordinates with a user-friendly message
+                setCurrentLocation('Mevcut Konum');
+                console.log('⚠️ Auto geocoding failed, using fallback');
               }
-            } else {
-              console.error('Geocoding API HTTP error:', response.status, response.statusText);
             }
           } catch (geocodeError: any) {
             console.error('Auto geocoding error:', geocodeError);
-          }
-          
-          // Set location text
-          if (mounted) {
-            if (geocodingSuccess && locationText) {
-              setCurrentLocation(locationText);
-              console.log('✅ Auto location set:', locationText);
-            } else {
-              // Fallback: use coordinates with a user-friendly message
+            if (mounted) {
               setCurrentLocation('Mevcut Konum');
-              console.log('⚠️ Auto geocoding failed, using fallback');
             }
           }
         }
@@ -249,6 +150,14 @@ export default function ExploreScreen() {
       mounted = false;
     };
   }, []); // Only run once on mount
+
+  // Reload data when user location or search radius changes
+  useEffect(() => {
+    if (userLocation) {
+      console.log('📍 User location or search radius changed, reloading data...', userLocation);
+      loadData();
+    }
+  }, [userLocation?.lat, userLocation?.lng, (user as any)?.search_radius, (user as any)?.preferences?.searchRadius]); // Reload when coordinates or radius change
 
   useEffect(() => {
     console.log('🔄 ExploreScreen mounted, loading data...');
@@ -301,25 +210,33 @@ export default function ExploreScreen() {
         return [];
       });
       
-      // Load recent prices with individual timeout
-      const recentPromise = pricesAPI.getAll({
-        sort: 'newest',
-        limit: 20,
-        todayOnly: true,
-      }).catch((err) => {
-        console.error('❌ Failed to load recent prices:', err);
-        return [];
-      });
-      
       // Get user's search radius preference (default: 15 km = 15000 meters)
       const searchRadiusKm = (user as any)?.search_radius || 
                             (user as any)?.preferences?.searchRadius || 
                             15;
       const searchRadiusMeters = searchRadiusKm * 1000;
       
-      // Load nearby cheapest with user's preferred radius
-      // Using default Konya coordinates if user location not available
-      const nearbyPromise = searchAPI.getNearbyCheapest(37.8667, 32.4833, searchRadiusMeters, 10).catch((err) => {
+      // Get user's current location or fallback to Konya
+      const userLat = userLocation?.lat || 37.8667;
+      const userLng = userLocation?.lng || 32.4833;
+      
+      console.log('📍 Using location for filtering:', JSON.stringify({ lat: userLat, lng: userLng, radiusKm: searchRadiusKm }));
+      
+      // Load recent prices with location filter
+      const recentPromise = pricesAPI.getAll({
+        sort: 'newest',
+        limit: 100, // Load more to filter by location
+        todayOnly: true,
+        lat: userLat,
+        lng: userLng,
+        radius: searchRadiusMeters,
+      }).catch((err) => {
+        console.error('❌ Failed to load recent prices:', err);
+        return [];
+      });
+      
+      // Load nearby cheapest with user's preferred radius and location
+      const nearbyPromise = searchAPI.getNearbyCheapest(userLat, userLng, searchRadiusMeters, 10).catch((err) => {
         console.error('❌ Failed to load nearby prices:', err);
         return [];
       });
@@ -464,6 +381,9 @@ export default function ExploreScreen() {
         const { latitude, longitude } = position;
         console.log('📍 Current location:', { latitude, longitude });
         
+        // Save user coordinates for filtering
+        setUserLocation({ lat: latitude, lng: longitude });
+        
         // Reverse geocoding using unified geocoding utility (Google Maps or OpenStreetMap)
         try {
           const result = await reverseGeocode(latitude, longitude);
@@ -473,12 +393,16 @@ export default function ExploreScreen() {
             toast.success('Konum alındı', {
               description: result.address,
             });
+            // Reload data with new location
+            loadData();
           } else {
             // Fallback: use coordinates with a user-friendly message
             setCurrentLocation('Mevcut Konum');
             toast.info('Konum tespit edildi', {
               description: 'Adres bilgisi yüklenemedi. Konum ayarlarından manuel olarak ayarlayabilirsiniz.',
             });
+            // Reload data with new location even if geocoding failed
+            loadData();
           }
         } catch (geocodeError: any) {
           console.error('Geocoding error:', geocodeError);
@@ -486,6 +410,8 @@ export default function ExploreScreen() {
           toast.warning('Konum alındı', {
             description: 'Adres bilgisi şu an için kullanılamıyor.',
           });
+          // Reload data with new location even if geocoding failed
+          loadData();
         }
       } else {
         toast.error('Konum alınamadı. Lütfen konum iznini kontrol edin.');
