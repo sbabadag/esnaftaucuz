@@ -179,6 +179,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               avatar: userMetadata.avatar_url || userMetadata.picture,
               google_id: userMetadata.provider === 'google' ? session.user.id : null,
               is_guest: false,
+              search_radius: 15, // Default search radius (ensures constraint is satisfied: 1-1000)
             })
             .select()
             .single();

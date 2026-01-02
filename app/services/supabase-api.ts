@@ -221,6 +221,7 @@ export const authAPI = {
           name: 'Misafir Kullanıcı',
           email: `guest_${Date.now()}@guest.com`,
           is_guest: true,
+          search_radius: 15, // Default search radius (ensures constraint is satisfied: 1-1000)
         })
         .select()
         .single();
