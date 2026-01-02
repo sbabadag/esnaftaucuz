@@ -439,25 +439,25 @@ export default function MapScreen() {
       `}</style>
       
       {/* Map Header */}
-      <div className="absolute top-0 left-0 right-0 bg-white/95 backdrop-blur-sm p-4 z-[1000] border-b border-gray-200 flex items-center justify-between gap-2">
-        <h1 className="text-center font-semibold flex-1">En Düşük Fiyatlı Ürünler</h1>
-        <div className="flex items-center gap-2">
+      <div className="absolute top-0 left-0 right-0 bg-white/95 backdrop-blur-sm px-3 py-2.5 z-[1000] border-b border-gray-200 flex items-center justify-between gap-2">
+        <h1 className="font-semibold text-base sm:text-lg flex-1 min-w-0 truncate whitespace-nowrap">En Düşük Fiyatlı Ürünler</h1>
+        <div className="flex items-center gap-1.5 flex-shrink-0">
           <Button
             variant={showBusinesses ? "default" : "outline"}
             size="sm"
             onClick={() => setShowBusinesses(!showBusinesses)}
-            className="text-xs"
+            className="text-xs px-2 h-8"
             title={showBusinesses ? 'İşletmeleri gizle' : 'İşletmeleri göster'}
           >
-            🏪 {showBusinesses ? 'İşletmeler' : 'İşletmeler'}
+            🏪
           </Button>
           <Button
             variant="outline"
             size="sm"
             onClick={handleCenterOnUser}
+            className="px-2 h-8"
           >
-            <Navigation className="w-4 h-4 mr-1" />
-            Konumum
+            <Navigation className="w-4 h-4" />
           </Button>
         </div>
       </div>
