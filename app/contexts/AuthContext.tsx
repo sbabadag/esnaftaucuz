@@ -14,6 +14,7 @@ interface User {
     verifications: number;
   };
   isGuest?: boolean;
+  is_merchant?: boolean;
   preferences?: {
     notifications?: boolean;
     searchRadius?: number;
@@ -92,6 +93,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             verifications: 0,
           },
           isGuest: false,
+          is_merchant: false,
           preferences: {
             notifications: true,
             searchRadius: 15, // Default search radius
@@ -246,6 +248,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           
           const userData = {
             ...profile,
+            is_merchant: profile.is_merchant || false, // Ensure is_merchant is included
             preferences: {
               ...(profile.preferences || {}),
               searchRadius: finalSearchRadius, // Ensure preferences.searchRadius is always set
@@ -290,6 +293,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               verifications: 0,
             },
             isGuest: false,
+            is_merchant: false,
             preferences: {
               notifications: true,
               searchRadius: 15,
@@ -695,6 +699,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         
         const userData = {
           ...profile,
+          is_merchant: profile.is_merchant || false, // Ensure is_merchant is included
           preferences: {
             ...(profile.preferences || {}),
             searchRadius: finalSearchRadius, // Ensure preferences.searchRadius is always set
@@ -704,6 +709,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setUser(userData);
         localStorage.setItem('user', JSON.stringify(userData));
         console.log('✅ User refreshed with settings:', {
+          email: userData.email,
+          is_merchant: userData.is_merchant,
           preferences: userData.preferences,
           search_radius: userData.search_radius,
         });

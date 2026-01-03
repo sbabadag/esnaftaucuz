@@ -1,5 +1,5 @@
 import { useNavigate } from 'react-router-dom';
-import { Settings, Heart, Award, Share2, LogOut, ChevronRight } from 'lucide-react';
+import { Settings, Heart, Award, Share2, LogOut, ChevronRight, Store } from 'lucide-react';
 import { Avatar, AvatarFallback, AvatarImage } from '../../ui/avatar';
 import { Badge } from '../../ui/badge';
 import { Button } from '../../ui/button';
@@ -44,7 +44,13 @@ export default function ProfileScreen() {
     return levels[user.level] || 'Yeni';
   };
 
+  const isMerchant = (user as any)?.is_merchant === true;
+
   const menuItems = [
+    // Esnaf için özel menü öğesi
+    ...(isMerchant ? [
+      { icon: Store, label: 'Dükkanım', onClick: () => navigate(`/app/merchant-shop/${user?.id}`) },
+    ] : []),
     { icon: Share2, label: 'Katkılarım', onClick: () => navigate('/app/contributions') },
     { icon: Heart, label: 'Favorilerim', onClick: () => {} },
     { icon: Award, label: 'Rozetler', onClick: () => {} },
@@ -64,7 +70,12 @@ export default function ProfileScreen() {
             </AvatarFallback>
           </Avatar>
           <div className="flex-1">
-            <h2 className="text-2xl">{user?.name || 'Kullanıcı'}</h2>
+            <div className="flex items-center gap-2">
+              <h2 className="text-2xl">{user?.name || 'Kullanıcı'}</h2>
+              {(user as any)?.is_merchant && (
+                <Badge className="bg-blue-600 text-white">Esnaf</Badge>
+              )}
+            </div>
             <div className="flex items-center gap-2 mt-1">
               <span className="text-sm text-gray-600">Seviye:</span>
               <Badge variant="secondary">{getLevelBadge()} 🏅</Badge>
