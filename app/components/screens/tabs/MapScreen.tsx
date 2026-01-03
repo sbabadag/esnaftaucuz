@@ -21,9 +21,17 @@ L.Icon.Default.mergeOptions({
   shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png',
 });
 
-// Custom marker icon for prices
+// Cache marker icons to prevent recreation (performance optimization)
+const priceIconCache = new Map<string, L.DivIcon>();
+const businessIconCache = new Map<string, L.DivIcon>();
+
+// Custom marker icon for prices (cached)
 const createPriceIcon = (price: string) => {
-  return L.divIcon({
+  if (priceIconCache.has(price)) {
+    return priceIconCache.get(price)!;
+  }
+  
+  const icon = L.divIcon({
     className: 'custom-price-marker',
     html: `
       <div style="
@@ -48,11 +56,19 @@ const createPriceIcon = (price: string) => {
     iconAnchor: [20, 20],
     popupAnchor: [0, -20],
   });
+  
+  priceIconCache.set(price, icon);
+  return icon;
 };
 
-// Custom marker icon for businesses/places
+// Custom marker icon for businesses/places (cached, single instance)
 const createBusinessIcon = () => {
-  return L.divIcon({
+  const cacheKey = 'business-icon';
+  if (businessIconCache.has(cacheKey)) {
+    return businessIconCache.get(cacheKey)!;
+  }
+  
+  const icon = L.divIcon({
     className: 'custom-business-marker',
     html: `
       <div style="
@@ -77,6 +93,9 @@ const createBusinessIcon = () => {
     iconAnchor: [18, 18],
     popupAnchor: [0, -18],
   });
+  
+  businessIconCache.set(cacheKey, icon);
+  return icon;
 };
 
 // Component to center map on user location
@@ -124,15 +143,19 @@ function MapCenter({ center, zoom }: { center: [number, number]; zoom?: number }
         });
         
         try {
+          // Disable animations on mobile for better performance (prevents ANR)
+          const isWebPlatform = isWeb();
+          const animateOptions = isWebPlatform ? { animate: true, duration: 0.5 } : { animate: false };
+          
           if (zoom !== undefined && zoom >= 0 && zoom <= 20) {
-            map.setView([lat, lng], zoom, { animate: true, duration: 0.5 });
+            map.setView([lat, lng], zoom, animateOptions);
             prevZoomRef.current = zoom;
           } else {
             const currentZoom = map.getZoom();
             if (currentZoom >= 0 && currentZoom <= 20) {
-              map.setView([lat, lng], currentZoom, { animate: true, duration: 0.5 });
+              map.setView([lat, lng], currentZoom, animateOptions);
             } else {
-              map.setView([lat, lng], 13, { animate: true, duration: 0.5 });
+              map.setView([lat, lng], 13, animateOptions);
             }
           }
           
@@ -168,55 +191,10 @@ function AutoOpenPopups({
   }, [map, mapRef]);
 
   useEffect(() => {
-    // Disable auto-open popups on web for better performance
-    if (isWebPlatform) {
-      return;
-    }
-    
-    if (prices.length > 0 && mapRef.current) {
-      // Wait for markers to render, then open LIMITED popups (max 5 for performance)
-      const timer = setTimeout(() => {
-        try {
-          // Limit to first 5 prices to prevent ANR
-          const pricesToOpen = prices.slice(0, 5);
-          let openedCount = 0;
-          
-          // Use requestAnimationFrame to spread popup opening across frames
-          const openNextPopup = () => {
-            if (openedCount >= pricesToOpen.length) return;
-            
-            const price = pricesToOpen[openedCount];
-            try {
-              const priceId = price.id || price._id || '';
-              const markerRef = markerRefs.current[priceId];
-              if (markerRef?.leafletElement && mapRef.current) {
-                const marker = markerRef.leafletElement;
-                if (!marker.isPopupOpen()) {
-                  marker.openPopup();
-                }
-              }
-            } catch (error: any) {
-              console.error('Error opening popup for price:', price.id, error);
-            }
-            
-            openedCount++;
-            // Open next popup in next frame (prevents blocking)
-            if (openedCount < pricesToOpen.length) {
-              requestAnimationFrame(() => {
-                setTimeout(openNextPopup, 100); // 100ms delay between each
-              });
-            }
-          };
-          
-          // Start opening popups
-          requestAnimationFrame(openNextPopup);
-        } catch (error: any) {
-          console.error('Error in AutoOpenPopups:', error);
-        }
-      }, 2000); // Increased delay to ensure map is fully loaded
-
-      return () => clearTimeout(timer);
-    }
+    // DISABLED: Auto-open popups cause ANR on mobile
+    // Users can manually click markers to see popups
+    // This significantly improves performance and prevents ANR
+    return;
   }, [prices, markerRefs, isWebPlatform]);
 
   return null;
@@ -388,7 +366,7 @@ export default function MapScreen() {
       // Load prices to find cheapest per product (platform-specific limits)
       const isWebPlatform = isWeb();
       const data = await pricesAPI.getAll({
-        limit: isWebPlatform ? 500 : 200, // Web can handle more, mobile limited for ANR prevention
+        limit: isWebPlatform ? 500 : 100, // Reduced from 200 to 100 for mobile to prevent ANR
         sort: 'cheapest', // Sort by cheapest first
       });
       
@@ -516,7 +494,7 @@ export default function MapScreen() {
       const result = await searchNearbyPlaces(
         latitude,
         longitude,
-        Math.min(searchRadiusMeters, isWebPlatform ? 5000 : 3000), // Web can search wider area
+        Math.min(searchRadiusMeters, isWebPlatform ? 5000 : 2000), // Reduced from 3000 to 2000 for mobile
         ['store', 'shop', 'establishment', 'supermarket', 'grocery_or_supermarket', 'bakery', 'butcher', 'pharmacy']
       );
       
@@ -729,7 +707,7 @@ export default function MapScreen() {
             {/* Price Markers - Only cheapest prices per product (platform-specific limits) */}
             {(() => {
               const isWebPlatform = isWeb();
-              const maxMarkers = isWebPlatform ? 200 : 50; // Web can handle more markers
+              const maxMarkers = isWebPlatform ? 200 : 20; // Reduced from 50 to 20 for mobile to prevent ANR
               return prices.slice(0, maxMarkers).map((price) => {
               // Validate coordinates before rendering marker
               if (!price.lat || !price.lng) return null;
@@ -758,11 +736,12 @@ export default function MapScreen() {
                   eventHandlers={{
                     click: (e) => {
                       try {
-                        // Use requestAnimationFrame to prevent blocking
-                        requestAnimationFrame(() => {
+                        // Debounce click handler to prevent rapid clicks from causing ANR
+                        const marker = e.target;
+                        // Use setTimeout with 0ms to defer to next event loop (prevents blocking)
+                        setTimeout(() => {
                           try {
                             // Open popup when marker is clicked
-                            const marker = e.target;
                             if (marker && marker.isPopupOpen()) {
                               marker.closePopup();
                             } else {
@@ -773,7 +752,7 @@ export default function MapScreen() {
                           } catch (error: any) {
                             console.error('❌ Error handling marker click:', error);
                           }
-                        });
+                        }, 0);
                       } catch (error: any) {
                         console.error('❌ Error in click handler:', error);
                       }
@@ -853,7 +832,7 @@ export default function MapScreen() {
             {/* Business/Place Markers (platform-specific limits) */}
             {showBusinesses && (() => {
               const isWebPlatform = isWeb();
-              const maxBusinesses = isWebPlatform ? 50 : 20; // Web can handle more businesses
+              const maxBusinesses = isWebPlatform ? 50 : 10; // Reduced from 20 to 10 for mobile to prevent ANR
               return businesses.slice(0, maxBusinesses).map((business) => {
               const lat = business.geometry?.location?.lat;
               const lng = business.geometry?.location?.lng;
