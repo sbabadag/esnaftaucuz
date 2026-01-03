@@ -21,12 +21,13 @@ const regularTabs = [
   { path: 'profile', label: 'Profil', icon: User },
 ];
 
-// Merchant tabs - replace "Profil" with "Dükkanım"
+// Merchant tabs - include both "Dükkanım" and "Profil"
 const merchantTabs = [
   { path: 'explore', label: 'Keşfet', icon: Compass },
   { path: 'map', label: 'Harita', icon: Map },
   { path: 'add', label: 'Ekle', icon: Plus },
   { path: 'merchant-shop', label: 'Dükkanım', icon: Store },
+  { path: 'profile', label: 'Profil', icon: User },
 ];
 
 export default function MainApp() {
@@ -36,7 +37,20 @@ export default function MainApp() {
   const [bannerVisible, setBannerVisible] = useState(true);
   
   // Check if user is merchant - use blue theme for merchants, green for regular users
-  const isMerchant = (user as any)?.is_merchant === true;
+  // Check both user object and localStorage for merchant status
+  const isMerchant = (user as any)?.is_merchant === true || 
+                    (() => {
+                      try {
+                        const storedUser = localStorage.getItem('user');
+                        if (storedUser) {
+                          const parsed = JSON.parse(storedUser);
+                          return parsed?.is_merchant === true;
+                        }
+                      } catch (e) {
+                        // Ignore parse errors
+                      }
+                      return false;
+                    })();
   const themeColor = isMerchant ? 'blue' : 'green';
   const themeColorClass = isMerchant ? 'blue-600' : 'green-600';
   const themeGradientFrom = isMerchant ? 'from-blue-600' : 'from-green-600';
@@ -66,6 +80,16 @@ export default function MainApp() {
 
   // Get tabs based on user type
   const tabs = isMerchant ? merchantTabs : regularTabs;
+  
+  // Debug: Log tabs
+  useEffect(() => {
+    console.log('🔍 MainApp - Tabs:', {
+      isMerchant,
+      tabsCount: tabs.length,
+      tabs: tabs.map(t => t.label),
+      user_is_merchant: (user as any)?.is_merchant,
+    });
+  }, [isMerchant, tabs, user]);
   
   // Hide tab bar on detail screens and add price screen
   const hideTabBar = location.pathname.includes('/product/') || 
@@ -134,7 +158,7 @@ export default function MainApp() {
 
       {!hideTabBar && (
         <nav className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 safe-area-inset-bottom z-40">
-          <div className="flex justify-around items-center h-16">
+          <div className="flex justify-around items-center h-16 overflow-x-auto">
             {tabs.map((tab) => {
               const Icon = tab.icon;
               // Check if tab is active - special handling for merchant-shop
@@ -146,12 +170,13 @@ export default function MainApp() {
                 <button
                   key={tab.path}
                   onClick={() => handleTabClick(tab.path)}
-                  className={`flex flex-col items-center justify-center flex-1 h-full transition-colors ${
+                  className={`flex flex-col items-center justify-center flex-1 h-full transition-colors min-w-0 ${
                     isActive ? (isMerchant ? 'text-blue-600' : 'text-green-600') : 'text-gray-600'
                   }`}
+                  style={{ minWidth: `${100 / tabs.length}%`, maxWidth: `${100 / tabs.length}%` }}
                 >
-                  <Icon className={`w-6 h-6 mb-1 ${tab.path === 'add' && (isMerchant ? 'bg-blue-600' : 'bg-green-600')} ${tab.path === 'add' && 'text-white rounded-full p-1 w-8 h-8'}`} />
-                  <span className="text-xs">{tab.label}</span>
+                  <Icon className={`w-5 h-5 sm:w-6 sm:h-6 mb-0.5 ${tab.path === 'add' && (isMerchant ? 'bg-blue-600' : 'bg-green-600')} ${tab.path === 'add' && 'text-white rounded-full p-1 w-8 h-8'}`} />
+                  <span className="text-[10px] sm:text-xs leading-tight">{tab.label}</span>
                 </button>
               );
             })}
