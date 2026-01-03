@@ -621,24 +621,69 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         is_merchant: (data.user as any).is_merchant,
         fullUser: data.user,
       });
+      
+      // ALWAYS refresh user profile after login to ensure is_merchant is loaded
+      // This is critical because the API might return a partial user object
+      try {
+        console.log('🔄 Refreshing user profile after login to ensure is_merchant is loaded...');
+        const { data: { session } } = await supabase.auth.getSession();
+        if (session) {
+          const { data: profile, error: profileError } = await supabase
+            .from('users')
+            .select('*')
+            .eq('id', session.user.id)
+            .single();
+          
+          if (profileError) {
+            console.error('❌ Error fetching profile after login:', profileError);
+          } else if (profile) {
+            // Ensure preferences and search_radius are properly set
+            const preferencesRadius = profile.preferences?.searchRadius;
+            const legacyRadius = profile.search_radius;
+            const finalSearchRadius = preferencesRadius !== undefined 
+              ? preferencesRadius 
+              : (legacyRadius !== undefined ? legacyRadius : 15);
+            
+            const userData = {
+              ...profile,
+              is_merchant: profile.is_merchant || false, // CRITICAL: Ensure is_merchant is included
+              preferences: {
+                ...(profile.preferences || {}),
+                searchRadius: finalSearchRadius,
+              },
+              search_radius: finalSearchRadius,
+            };
+            
+            console.log('✅ User profile refreshed after login:', {
+              id: userData.id,
+              email: userData.email,
+              is_merchant: userData.is_merchant,
+              is_merchant_type: typeof userData.is_merchant,
+            });
+            
+            setToken(data.token);
+            setUser(userData);
+            if (data.token) {
+              localStorage.setItem('authToken', data.token);
+            }
+            localStorage.setItem('user', JSON.stringify(userData));
+            console.log('✅ User stored in localStorage with is_merchant:', userData.is_merchant);
+            return; // Success - exit early
+          }
+        }
+      } catch (refreshError) {
+        console.error('❌ Failed to refresh user after login:', refreshError);
+      }
+      
+      // Fallback: Use data from API if refresh failed
+      console.warn('⚠️ Using API response data as fallback');
       setToken(data.token);
       setUser(data.user);
-      // Store in localStorage to ensure persistence
       if (data.token) {
         localStorage.setItem('authToken', data.token);
       }
       localStorage.setItem('user', JSON.stringify(data.user));
-      console.log('✅ User stored in localStorage with is_merchant:', (data.user as any).is_merchant);
-      
-      // Refresh user profile to ensure all fields are loaded (including is_merchant)
-      // This is important because the API might return a partial user object
-      try {
-        await refreshUser();
-        console.log('✅ User profile refreshed after login');
-      } catch (refreshError) {
-        console.warn('⚠️ Failed to refresh user after login:', refreshError);
-        // Don't throw - we already have the user from login
-      }
+      console.log('✅ User stored in localStorage (fallback) with is_merchant:', (data.user as any).is_merchant);
     } catch (error) {
       console.error('Login error:', error);
       throw error;
