@@ -205,6 +205,7 @@ export const authAPI = {
           level: profileData.level,
           points: profileData.points,
           contributions: profileData.contributions,
+          is_merchant: profileData.is_merchant || false, // Include is_merchant in returned user
         },
         token: session?.access_token || null,
         session: session,
