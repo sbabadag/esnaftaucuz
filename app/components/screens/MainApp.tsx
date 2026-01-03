@@ -157,26 +157,42 @@ export default function MainApp() {
       </main>
 
       {!hideTabBar && (
-        <nav className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 safe-area-inset-bottom z-40">
-          <div className="flex justify-around items-center h-16 overflow-x-auto">
-            {tabs.map((tab) => {
+        <nav className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 safe-area-inset-bottom z-40 shadow-lg">
+          <div className="flex items-center h-16">
+            {tabs.map((tab, index) => {
               const Icon = tab.icon;
               // Check if tab is active - special handling for merchant-shop
               const isActive = tab.path === 'merchant-shop' 
                 ? isMerchantShopActive 
                 : currentPath === tab.path;
               
+              // Calculate width for each tab (equal distribution)
+              const tabWidth = `${100 / tabs.length}%`;
+              
               return (
                 <button
                   key={tab.path}
-                  onClick={() => handleTabClick(tab.path)}
-                  className={`flex flex-col items-center justify-center flex-1 h-full transition-colors min-w-0 ${
+                  onClick={() => {
+                    console.log('🔘 Tab clicked:', tab.path, tab.label);
+                    handleTabClick(tab.path);
+                  }}
+                  className={`flex flex-col items-center justify-center h-full transition-colors relative ${
                     isActive ? (isMerchant ? 'text-blue-600' : 'text-green-600') : 'text-gray-600'
                   }`}
-                  style={{ minWidth: `${100 / tabs.length}%`, maxWidth: `${100 / tabs.length}%` }}
+                  style={{ 
+                    width: tabWidth,
+                    minWidth: tabWidth,
+                    maxWidth: tabWidth,
+                  }}
+                  aria-label={tab.label}
                 >
-                  <Icon className={`w-5 h-5 sm:w-6 sm:h-6 mb-0.5 ${tab.path === 'add' && (isMerchant ? 'bg-blue-600' : 'bg-green-600')} ${tab.path === 'add' && 'text-white rounded-full p-1 w-8 h-8'}`} />
-                  <span className="text-[10px] sm:text-xs leading-tight">{tab.label}</span>
+                  <div className="flex flex-col items-center justify-center gap-0.5">
+                    <Icon className={`w-5 h-5 flex-shrink-0 ${tab.path === 'add' && (isMerchant ? 'bg-blue-600' : 'bg-green-600')} ${tab.path === 'add' && 'text-white rounded-full p-1 w-8 h-8'}`} />
+                    <span className="text-[10px] leading-tight font-medium whitespace-nowrap">{tab.label}</span>
+                  </div>
+                  {isActive && (
+                    <div className={`absolute top-0 left-0 right-0 h-0.5 ${isMerchant ? 'bg-blue-600' : 'bg-green-600'}`} />
+                  )}
                 </button>
               );
             })}
