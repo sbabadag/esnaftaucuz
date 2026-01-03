@@ -43,8 +43,37 @@ export const authAPI = {
       console.log('✅ Auth user created:', { userId: authData.user.id, email: authData.user.email });
       console.log('🔑 Auth session:', { hasSession: !!authData.session, hasToken: !!authData.session?.access_token });
 
-      // Wait a moment to ensure auth state is fully set
-      await new Promise(resolve => setTimeout(resolve, 100));
+      // CRITICAL: If no session from signUp, sign in to get session
+      // This ensures auth.uid() is available for RLS policy
+      let session = authData.session;
+      if (!session) {
+        console.log('⚠️ No session from signUp, signing in to get session...');
+        const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({
+          email,
+          password,
+        });
+        
+        if (signInError) {
+          console.error('❌ SignIn after signUp error:', signInError);
+          // Continue anyway - might work with delayed session
+        } else {
+          session = signInData.session;
+          console.log('✅ Session obtained from signIn');
+        }
+      }
+
+      // Wait a moment to ensure auth state is fully propagated
+      await new Promise(resolve => setTimeout(resolve, 200));
+
+      // Verify auth.uid() is available
+      const { data: { user: currentUser } } = await supabase.auth.getUser();
+      console.log('🔍 Current auth.uid():', currentUser?.id);
+      console.log('🔍 Expected user id:', authData.user.id);
+      
+      if (!currentUser || currentUser.id !== authData.user.id) {
+        console.warn('⚠️ Auth state mismatch - waiting longer...');
+        await new Promise(resolve => setTimeout(resolve, 500));
+      }
 
       // Create user profile in public.users
       // IMPORTANT: Do NOT include is_merchant in INSERT - always use UPDATE after insert
@@ -107,8 +136,8 @@ export const authAPI = {
         }
       }
 
-      // If no session from signUp, try to sign in to get session
-      let session = authData.session;
+      // If no session from signUp, try to sign in to get session (for token storage)
+      session = authData.session;
       if (!session) {
         console.log('⚠️ No session from signUp, attempting signIn...');
         const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({
