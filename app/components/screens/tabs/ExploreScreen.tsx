@@ -1026,7 +1026,11 @@ export default function ExploreScreen() {
                                       onClick={(e) => {
                                         e.stopPropagation(); // Prevent card click
                                         console.log('🧭 Navigating to map with coordinates:', { lat, lng, productName: item.product?.name });
-                                        navigate(`/app/map?lat=${lat}&lng=${lng}&focus=true`);
+                                        const productId = item.product?.id || item.product?._id;
+                                        const url = productId 
+                                          ? `/app/map?lat=${lat}&lng=${lng}&focus=true&productId=${productId}`
+                                          : `/app/map?lat=${lat}&lng=${lng}&focus=true`;
+                                        navigate(url);
                                       }}
                                     >
                                       <Navigation className="w-3 h-3 mr-1" />

@@ -276,11 +276,23 @@ export default function MapScreen() {
   const focusedLocationRef = useRef<[number, number] | null>(null); // Store focused location coordinates
   const [mapError, setMapError] = useState<string | null>(null);
 
-  // Check for focus location from URL params FIRST (before loading prices/location)
+  // State for filtering by product ID
+  const [filterProductId, setFilterProductId] = useState<string | null>(null);
+
+  // Check for focus location and product filter from URL params FIRST (before loading prices/location)
   useEffect(() => {
     const focusLat = searchParams.get('lat');
     const focusLng = searchParams.get('lng');
     const shouldFocus = searchParams.get('focus') === 'true';
+    const productId = searchParams.get('productId');
+    
+    // Set product filter if productId is provided
+    if (productId) {
+      console.log('🔍 Filtering by product ID:', productId);
+      setFilterProductId(productId);
+    } else {
+      setFilterProductId(null);
+    }
     
     if (shouldFocus && focusLat && focusLng) {
       const lat = parseFloat(focusLat);
@@ -288,7 +300,7 @@ export default function MapScreen() {
       
       // Validate coordinates are within valid ranges
       if (!isNaN(lat) && !isNaN(lng) && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180) {
-        console.log('📍 Focusing on location from URL:', { lat, lng, rawLat: focusLat, rawLng: focusLng });
+        console.log('📍 Focusing on location from URL:', { lat, lng, rawLat: focusLat, rawLng: focusLng, productId });
         // Leaflet uses [lat, lng] format
         const focusCoords: [number, number] = [lat, lng];
         hasFocusFromURL.current = true; // Mark that we have focus from URL
@@ -297,7 +309,11 @@ export default function MapScreen() {
         setMapZoom(19); // Maximum zoom for closest view of product address
         // Clear URL params after focusing (with a delay to ensure map updates)
         setTimeout(() => {
-          window.history.replaceState({}, '', '/app/map');
+          // Keep productId in URL if it exists, but remove focus params
+          const newUrl = productId 
+            ? `/app/map?productId=${productId}`
+            : '/app/map';
+          window.history.replaceState({}, '', newUrl);
           // Keep focus flag active for longer (10 seconds) to prevent user location from overriding
           // This ensures geolocation API has time to complete without interfering
           setTimeout(() => {
@@ -326,14 +342,17 @@ export default function MapScreen() {
       loadPrices();
     }, 100);
     return () => clearTimeout(timer);
-  }, []);
+  }, [filterProductId]); // Reload when product filter changes
 
-  // Load nearby businesses when user location is available
+  // Load nearby businesses when user location is available (but not when filtering by product)
   useEffect(() => {
-    if (userLocation) {
+    if (userLocation && !filterProductId) {
       loadNearbyBusinesses(userLocation[0], userLocation[1]);
+    } else if (filterProductId) {
+      // Hide businesses when filtering by product
+      setBusinesses([]);
     }
-  }, [userLocation]);
+  }, [userLocation, filterProductId]);
 
 
   const loadUserLocation = async () => {
@@ -380,10 +399,19 @@ export default function MapScreen() {
       setMapError(null); // Clear any previous errors
       // Load prices to find cheapest per product (platform-specific limits)
       const isWebPlatform = isWeb();
-      const data = await pricesAPI.getAll({
+      
+      // If filtering by product ID, only load prices for that product
+      const requestParams: any = {
         limit: isWebPlatform ? 500 : 100, // Reduced from 200 to 100 for mobile to prevent ANR
         sort: 'cheapest', // Sort by cheapest first
-      });
+      };
+      
+      if (filterProductId) {
+        requestParams.productId = filterProductId;
+        console.log('🔍 Loading prices for product:', filterProductId);
+      }
+      
+      const data = await pricesAPI.getAll(requestParams);
       
       if (!Array.isArray(data)) {
         console.error('Invalid data format:', data);
