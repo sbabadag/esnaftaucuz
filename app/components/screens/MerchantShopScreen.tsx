@@ -44,6 +44,7 @@ interface Product {
 
 export default function MerchantShopScreen() {
   const navigate = useNavigate();
+  const location = useLocation();
   const { merchantId } = useParams<{ merchantId: string }>();
   const { user } = useAuth();
   const { getCurrentPosition } = useGeolocation();
@@ -335,14 +336,23 @@ export default function MerchantShopScreen() {
         coordinates: null,
       });
       setEditingProduct(null);
-      setIsDialogOpen(false);
-
-      // Reload products (with error handling)
+      
+      // Reload products first (with error handling)
       try {
         await loadMerchantProducts();
       } catch (reloadError) {
         console.error('⚠️ Failed to reload products:', reloadError);
         // Don't show error to user - product was saved successfully
+      }
+      
+      // Close dialog after reload
+      setIsDialogOpen(false);
+      
+      // Ensure we stay on merchant-shop page (prevent any unwanted navigation)
+      // Use replace: true to prevent back navigation issues
+      if (merchantId && location.pathname !== `/app/merchant-shop/${merchantId}`) {
+        console.log('🔄 Ensuring we stay on merchant-shop page');
+        navigate(`/app/merchant-shop/${merchantId}`, { replace: true });
       }
     } catch (error: any) {
       console.error('❌ Submit error:', error);
@@ -439,7 +449,27 @@ export default function MerchantShopScreen() {
             <h1 className="text-xl font-bold">Esnaf Dükkanı</h1>
           </div>
           {isOwnShop && (
-            <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
+            <Dialog 
+              open={isDialogOpen} 
+              onOpenChange={(open) => {
+                // Only allow closing if not submitting
+                if (!open && !isSubmitting) {
+                  setIsDialogOpen(false);
+                  setEditingProduct(null);
+                  // Reset form when dialog closes
+                  setFormData({
+                    productId: '',
+                    price: '',
+                    unit: 'kg',
+                    images: [],
+                    imagePreviews: [],
+                    locationId: '',
+                    locationName: '',
+                    coordinates: null,
+                  });
+                }
+              }}
+            >
               <DialogTrigger asChild>
                 <Button onClick={() => {
                   setEditingProduct(null);

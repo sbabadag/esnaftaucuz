@@ -101,6 +101,8 @@ export default function MainApp() {
                      (isMerchant && location.pathname.includes('/merchant-shop/') && location.pathname !== `/app/merchant-shop/${user?.id}`);
 
   const handleTabClick = (path: string) => {
+    console.log('🔘 Tab click handler:', { path, currentPath: location.pathname });
+    
     // Special handling for merchant-shop tab
     if (path === 'merchant-shop' && user?.id) {
       navigate(`/app/merchant-shop/${user.id}`, { replace: false });
