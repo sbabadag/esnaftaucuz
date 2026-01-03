@@ -274,36 +274,54 @@ export default function MerchantShopScreen() {
 
     try {
       setIsSubmitting(true);
+      console.log('🔄 Starting product submit...', { editingProduct: !!editingProduct });
 
-      // Upload images
+      // Upload images with timeout
       let imageUrls: string[] = [];
       if (formData.images.length > 0) {
-        imageUrls = await uploadImages(formData.images);
+        console.log('📤 Uploading images...', formData.images.length);
+        try {
+          const uploadPromise = uploadImages(formData.images);
+          const timeoutPromise = new Promise<string[]>((_, reject) => 
+            setTimeout(() => reject(new Error('Resim yükleme zaman aşımına uğradı')), 30000)
+          );
+          imageUrls = await Promise.race([uploadPromise, timeoutPromise]);
+          console.log('✅ Images uploaded:', imageUrls.length);
+        } catch (uploadError: any) {
+          console.error('❌ Image upload error:', uploadError);
+          toast.error(uploadError.message || 'Resim yükleme başarısız');
+          // Continue without images if upload fails
+        }
       }
 
-      if (editingProduct) {
-        // Update existing product
-        await merchantProductsAPI.update(editingProduct.id, {
-          price: parseFloat(formData.price),
-          unit: formData.unit,
-          images: imageUrls.length > 0 ? imageUrls : editingProduct.images,
-          location_id: formData.locationId || undefined,
-          coordinates: formData.coordinates || undefined,
-        });
-        toast.success('Ürün güncellendi');
-      } else {
-        // Create new product
-        await merchantProductsAPI.create({
-          merchant_id: user.id,
-          product_id: formData.productId,
-          price: parseFloat(formData.price),
-          unit: formData.unit,
-          images: imageUrls,
-          location_id: formData.locationId || undefined,
-          coordinates: formData.coordinates || undefined,
-        });
-        toast.success('Ürün eklendi');
-      }
+      // Create or update product with timeout
+      console.log('💾 Saving product...');
+      const savePromise = editingProduct
+        ? merchantProductsAPI.update(editingProduct.id, {
+            price: parseFloat(formData.price),
+            unit: formData.unit,
+            images: imageUrls.length > 0 ? imageUrls : editingProduct.images,
+            location_id: formData.locationId || undefined,
+            coordinates: formData.coordinates || undefined,
+          })
+        : merchantProductsAPI.create({
+            merchant_id: user.id,
+            product_id: formData.productId,
+            price: parseFloat(formData.price),
+            unit: formData.unit,
+            images: imageUrls,
+            location_id: formData.locationId || undefined,
+            coordinates: formData.coordinates || undefined,
+          });
+      
+      const timeoutPromise = new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('İşlem zaman aşımına uğradı')), 20000)
+      );
+      
+      await Promise.race([savePromise, timeoutPromise]);
+      console.log('✅ Product saved successfully');
+
+      toast.success(editingProduct ? 'Ürün güncellendi' : 'Ürün eklendi');
 
       // Reset form
       setFormData({
@@ -318,12 +336,22 @@ export default function MerchantShopScreen() {
       });
       setEditingProduct(null);
       setIsDialogOpen(false);
-      loadMerchantProducts();
+
+      // Reload products (with error handling)
+      try {
+        await loadMerchantProducts();
+      } catch (reloadError) {
+        console.error('⚠️ Failed to reload products:', reloadError);
+        // Don't show error to user - product was saved successfully
+      }
     } catch (error: any) {
-      console.error('Submit error:', error);
-      toast.error(error.message || 'Bir hata oluştu');
+      console.error('❌ Submit error:', error);
+      const errorMessage = error.message || 'Bir hata oluştu';
+      toast.error(errorMessage);
     } finally {
+      // Always reset submitting state
       setIsSubmitting(false);
+      console.log('✅ Submit process completed');
     }
   };
 
