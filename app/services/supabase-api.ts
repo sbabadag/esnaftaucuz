@@ -91,8 +91,8 @@ export const authAPI = {
         // Note: Cannot delete auth user from frontend (requires admin API)
         // The auth user will remain but profile creation failed
         // User can try registering again with same email (will get "already registered" error)
-        if (profileError.code === '42501') {
-          throw new Error('Profil oluşturulamadı: Yetki hatası (RLS). Lütfen Supabase migration ALL_MERCHANT_FIXES.sql dosyasını çalıştırdığınızdan emin olun. Hata detayları: ' + (profileError.message || 'Bilinmeyen'));
+        if (profileError.code === '42501' || profileError.code === 'PGRST301') {
+          throw new Error('Profil oluşturulamadı: Yetki hatası (RLS). Lütfen Supabase migration 016_ultimate_fix_rls.sql dosyasını çalıştırdığınızdan emin olun. Hata detayları: ' + (profileError.message || 'Bilinmeyen'));
         }
         // Check if error is related to is_merchant column
         if (profileError.message?.includes('is_merchant') || profileError.message?.includes('column')) {
