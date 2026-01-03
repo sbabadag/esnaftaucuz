@@ -120,17 +120,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         localStorage.setItem('authToken', session.access_token);
         
         // Check localStorage first for faster initial render
+        // BUT: Always reload from database to ensure is_merchant is correct
+        // Don't use cached user for merchant users - always fetch fresh
         let storedUser: string | null = null;
         let cachedUser: any = null;
         try {
           storedUser = localStorage.getItem('user');
           if (storedUser) {
             cachedUser = JSON.parse(storedUser);
-            if (cachedUser && cachedUser.id === session.user.id) {
-              console.log('⚡ Using cached user from localStorage for faster render');
+            // Only use cached user if it's not a merchant (to avoid theme flickering)
+            // For merchants, always fetch fresh to ensure is_merchant is correct
+            if (cachedUser && cachedUser.id === session.user.id && !cachedUser.is_merchant) {
+              console.log('⚡ Using cached user from localStorage for faster render (non-merchant)');
               setUser(cachedUser);
               setIsLoading(false); // Allow navigation immediately
               // Continue loading in background to get fresh data
+            } else if (cachedUser && cachedUser.id === session.user.id) {
+              console.log('⚡ Merchant user detected - will fetch fresh profile to ensure is_merchant is correct');
+              // Don't set cached user for merchants - wait for fresh data
             }
           }
         } catch (e) {
@@ -256,28 +263,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             search_radius: finalSearchRadius, // Keep legacy column for backward compatibility
           };
           
-          // Only update if we don't already have a cached user, or if this is a fresh profile
-          if (!cachedUser || profile.id !== cachedUser.id) {
+          // Always update user if profile is loaded - ensure is_merchant is always fresh
+          // This is critical for merchant users to maintain blue theme
+          const shouldUpdate = !cachedUser || 
+                              profile.id !== cachedUser.id || 
+                              (cachedUser.is_merchant !== userData.is_merchant) ||
+                              (userData.preferences && Object.keys(userData.preferences).length > 0);
+          
+          if (shouldUpdate) {
             setUser(userData);
             localStorage.setItem('user', JSON.stringify(userData));
-            console.log('✅ User profile loaded with settings:', {
+            console.log('✅ User profile loaded/updated with settings:', {
               email: userData.email,
               is_merchant: userData.is_merchant,
+              was_cached: !!cachedUser,
+              cached_is_merchant: cachedUser?.is_merchant,
               preferences: userData.preferences,
               search_radius: userData.search_radius,
             });
-            setIsLoading(false); // Always set loading false when profile is loaded
           } else {
-            // Update cached user with fresh preferences if they exist
-            if (userData.preferences && Object.keys(userData.preferences).length > 0) {
-              setUser(userData);
-              localStorage.setItem('user', JSON.stringify(userData));
-              console.log('✅ Updated cached user with fresh settings');
-            } else {
-              console.log('✅ User profile already cached, using cached version');
-            }
-            setIsLoading(false); // Set loading false even for cached user
+            console.log('✅ User profile already cached and up-to-date');
           }
+          setIsLoading(false); // Always set loading false when profile is loaded
         } else {
           console.warn('⚠️ No profile found and could not create one');
           // Even if profile creation failed, create a fallback user
@@ -430,10 +437,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       console.log('🔄 Auth state changed:', event, session?.user?.email);
       
       // Skip processing for routine events when user is already loaded
-      // TOKEN_REFRESHED is normal and doesn't need profile reload if user already exists
+      // BUT: For merchant users, always reload to ensure is_merchant is correct
+      // TOKEN_REFRESHED is normal and doesn't need profile reload if user already exists AND is not merchant
       if (event === 'TOKEN_REFRESHED' && user && session) {
-        console.log('✅ Token refreshed, user already loaded - skipping profile reload');
-        return; // Early return, no processing needed
+        // For merchant users, always reload profile to ensure is_merchant is correct
+        const isCurrentUserMerchant = (user as any)?.is_merchant === true;
+        if (!isCurrentUserMerchant) {
+          console.log('✅ Token refreshed, user already loaded (non-merchant) - skipping profile reload');
+          return; // Early return, no processing needed
+        } else {
+          console.log('🔄 Token refreshed, merchant user detected - reloading profile to ensure is_merchant is correct');
+          // Continue to reload profile for merchant users
+        }
       }
       
       // Skip timeout for certain events that don't require profile loading
@@ -454,8 +469,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       
       try {
         if (session) {
-          // Only reload profile if user is not already set or if it's a SIGNED_IN event
-          if (!user || event === 'SIGNED_IN') {
+          // Reload profile if:
+          // 1. User is not already set
+          // 2. It's a SIGNED_IN event
+          // 3. It's TOKEN_REFRESHED and user is a merchant (to ensure is_merchant is correct)
+          const isCurrentUserMerchant = user ? (user as any)?.is_merchant === true : false;
+          const shouldReload = !user || 
+                              event === 'SIGNED_IN' || 
+                              (event === 'TOKEN_REFRESHED' && isCurrentUserMerchant);
+          
+          if (shouldReload) {
             setIsLoading(true); // Set loading during profile load
             const shouldCleanUrl = event === 'SIGNED_IN' || (event === 'TOKEN_REFRESHED' && isOAuthCallback);
             await loadUserProfile(session, event, shouldCleanUrl);
@@ -541,18 +564,29 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           
           // If we have a user in state and localStorage, don't clear it
           // This might be a temporary session issue
+          // BUT: For merchant users, try to reload from database to ensure is_merchant is correct
           const storedUser = localStorage.getItem('user');
           if (storedUser) {
             try {
               const parsedUser = JSON.parse(storedUser);
               if (parsedUser && parsedUser.id) {
-                console.log('⚠️ Session null but user exists in storage, keeping user state');
-                if (stateChangeTimeout) {
-                  clearTimeout(stateChangeTimeout);
+                const isStoredUserMerchant = parsedUser.is_merchant === true;
+                console.log('⚠️ Session null but user exists in storage, keeping user state', {
+                  is_merchant: isStoredUserMerchant,
+                });
+                
+                // For merchant users, try to reload from database if session becomes available
+                if (isStoredUserMerchant) {
+                  console.log('🔄 Merchant user detected - will reload profile when session is available');
+                  // Don't set user yet - wait for session to reload
+                } else {
+                  if (stateChangeTimeout) {
+                    clearTimeout(stateChangeTimeout);
+                  }
+                  setUser(parsedUser);
+                  setIsLoading(false);
+                  return;
                 }
-                setUser(parsedUser);
-                setIsLoading(false);
-                return;
               }
             } catch (e) {
               console.error('Failed to parse stored user:', e);

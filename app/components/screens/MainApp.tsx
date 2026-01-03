@@ -50,6 +50,16 @@ export default function MainApp() {
     }
   }, []);
   
+  // Debug: Log merchant status when user changes
+  useEffect(() => {
+    console.log('🔍 MainApp - User changed:', {
+      id: user?.id,
+      email: user?.email,
+      is_merchant: (user as any)?.is_merchant,
+      is_merchant_type: typeof (user as any)?.is_merchant,
+    });
+  }, [user]);
+  
   // Get current path - handle both /app/explore and /app/explore/ cases
   const pathParts = location.pathname.split('/').filter(Boolean);
   const currentPath = pathParts[pathParts.length - 1] || 'explore';
