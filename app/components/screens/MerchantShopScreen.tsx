@@ -585,7 +585,7 @@ export default function MerchantShopScreen() {
       )}
 
       {/* Products List */}
-      <div className="p-4 space-y-4">
+      <div className="p-3 sm:p-4 space-y-3 sm:space-y-4 pb-20">
         {isLoading ? (
           <div className="text-center py-8 text-gray-500">Yükleniyor...</div>
         ) : products.length === 0 ? (
@@ -596,53 +596,53 @@ export default function MerchantShopScreen() {
           products.map((product) => (
             <div
               key={product.id}
-              className="bg-white rounded-lg p-4 border border-gray-200"
+              className="bg-white rounded-lg p-4 border border-gray-200 overflow-hidden"
             >
-              <div className="flex gap-4">
+              <div className="flex gap-3 sm:gap-4">
                 {/* Images */}
-                <div className="flex gap-2 flex-shrink-0">
+                <div className="flex gap-1.5 sm:gap-2 flex-shrink-0">
                   {product.images && product.images.length > 0 ? (
-                    <div className="flex gap-2">
+                    <div className="flex gap-1.5 sm:gap-2 flex-wrap">
                       {product.images.slice(0, 3).map((img, idx) => (
                         <img
                           key={idx}
                           src={img}
                           alt={`${product.product.name} ${idx + 1}`}
-                          className="w-20 h-20 object-cover rounded border"
+                          className="w-16 h-16 sm:w-20 sm:h-20 object-cover rounded border flex-shrink-0"
                         />
                       ))}
                       {product.images.length > 3 && (
-                        <div className="w-20 h-20 bg-gray-100 rounded border flex items-center justify-center text-xs text-gray-500">
+                        <div className="w-16 h-16 sm:w-20 sm:h-20 bg-gray-100 rounded border flex items-center justify-center text-xs text-gray-500 flex-shrink-0">
                           +{product.images.length - 3}
                         </div>
                       )}
                     </div>
                   ) : (
-                    <div className="w-20 h-20 bg-gray-100 rounded border flex items-center justify-center">
-                      <ImageIcon className="w-8 h-8 text-gray-400" />
+                    <div className="w-16 h-16 sm:w-20 sm:h-20 bg-gray-100 rounded border flex items-center justify-center flex-shrink-0">
+                      <ImageIcon className="w-6 h-6 sm:w-8 sm:h-8 text-gray-400" />
                     </div>
                   )}
                 </div>
 
                 {/* Product Info */}
-                <div className="flex-1 min-w-0">
-                  <h3 className="font-semibold text-lg">{product.product.name}</h3>
-                  <p className="text-sm text-gray-500 mb-2">{product.product.category}</p>
-                  <div className="flex items-baseline gap-2 mb-2">
-                    <span className="text-2xl font-bold text-green-600">
+                <div className="flex-1 min-w-0 overflow-hidden">
+                  <h3 className="font-semibold text-base sm:text-lg truncate">{product.product.name}</h3>
+                  <p className="text-xs sm:text-sm text-gray-500 mb-2 truncate">{product.product.category}</p>
+                  <div className="flex items-baseline gap-2 mb-2 flex-wrap">
+                    <span className="text-xl sm:text-2xl font-bold text-green-600">
                       {product.price.toFixed(2)} ₺
                     </span>
-                    <span className="text-gray-500">/ {product.unit}</span>
+                    <span className="text-sm text-gray-500">/ {product.unit}</span>
                   </div>
 
                   {/* Verification Counts */}
-                  <div className="flex gap-4 text-sm mb-2">
-                    <div className="flex items-center gap-1 text-green-600">
-                      <CheckCircle2 className="w-4 h-4" />
+                  <div className="flex gap-3 sm:gap-4 text-xs sm:text-sm mb-2">
+                    <div className="flex items-center gap-1 text-green-600 flex-shrink-0">
+                      <CheckCircle2 className="w-3 h-3 sm:w-4 sm:h-4" />
                       <span>{product.verification_count}</span>
                     </div>
-                    <div className="flex items-center gap-1 text-red-600">
-                      <XCircle className="w-4 h-4" />
+                    <div className="flex items-center gap-1 text-red-600 flex-shrink-0">
+                      <XCircle className="w-3 h-3 sm:w-4 sm:h-4" />
                       <span>{product.unverification_count}</span>
                     </div>
                   </div>
@@ -676,22 +676,24 @@ export default function MerchantShopScreen() {
 
                   {/* Actions */}
                   {isOwnShop && (
-                    <div className="flex gap-2 mt-3">
+                    <div className="flex gap-2 mt-3 flex-wrap">
                       <Button
                         variant="outline"
                         size="sm"
                         onClick={() => handleEdit(product)}
+                        className="flex-1 min-w-0"
                       >
-                        <Edit className="w-4 h-4 mr-1" />
-                        Düzenle
+                        <Edit className="w-3 h-3 sm:w-4 sm:h-4 mr-1 flex-shrink-0" />
+                        <span className="truncate">Düzenle</span>
                       </Button>
                       <Button
                         variant="outline"
                         size="sm"
                         onClick={() => handleDelete(product.id)}
+                        className="flex-1 min-w-0"
                       >
-                        <Trash2 className="w-4 h-4 mr-1" />
-                        Sil
+                        <Trash2 className="w-3 h-3 sm:w-4 sm:h-4 mr-1 flex-shrink-0" />
+                        <span className="truncate">Sil</span>
                       </Button>
                     </div>
                   )}
