@@ -53,11 +53,19 @@ export const authAPI = {
 
       if (profileError) {
         console.error('Profile creation error:', profileError);
+        console.error('Error code:', profileError.code);
+        console.error('Error message:', profileError.message);
+        console.error('Error details:', profileError.details);
+        console.error('Error hint:', profileError.hint);
         // Note: Cannot delete auth user from frontend (requires admin API)
         // The auth user will remain but profile creation failed
         // User can try registering again with same email (will get "already registered" error)
         if (profileError.code === '42501') {
-          throw new Error('Profil oluşturulamadı: Yetki hatası. Lütfen daha sonra tekrar deneyin.');
+          throw new Error('Profil oluşturulamadı: Yetki hatası. Lütfen Supabase migration\'larını çalıştırdığınızdan emin olun (009_add_is_merchant.sql ve 010_fix_merchant_insert_policy.sql).');
+        }
+        // Check if error is related to is_merchant column
+        if (profileError.message?.includes('is_merchant') || profileError.message?.includes('column')) {
+          throw new Error('Profil oluşturulamadı: Veritabanı hatası. Lütfen Supabase migration\'larını çalıştırdığınızdan emin olun.');
         }
         throw new Error('Profil oluşturulamadı: ' + (profileError.message || 'Bilinmeyen hata'));
       }
