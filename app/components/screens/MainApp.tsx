@@ -1,5 +1,5 @@
 import { Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom';
-import { Compass, Map, Plus, User, ShoppingBag, X } from 'lucide-react';
+import { Compass, Map, Plus, User, ShoppingBag, X, Store } from 'lucide-react';
 import ExploreScreen from './tabs/ExploreScreen';
 import MapScreen from './tabs/MapScreen';
 import AddPriceScreen from './tabs/AddPriceScreen';
@@ -13,11 +13,20 @@ import MerchantShopScreen from './MerchantShopScreen';
 import { useState, useEffect } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
 
-const tabs = [
+// Regular user tabs
+const regularTabs = [
   { path: 'explore', label: 'Keşfet', icon: Compass },
   { path: 'map', label: 'Harita', icon: Map },
   { path: 'add', label: 'Ekle', icon: Plus },
   { path: 'profile', label: 'Profil', icon: User },
+];
+
+// Merchant tabs - replace "Profil" with "Dükkanım"
+const merchantTabs = [
+  { path: 'explore', label: 'Keşfet', icon: Compass },
+  { path: 'map', label: 'Harita', icon: Map },
+  { path: 'add', label: 'Ekle', icon: Plus },
+  { path: 'merchant-shop', label: 'Dükkanım', icon: Store },
 ];
 
 export default function MainApp() {
@@ -45,18 +54,30 @@ export default function MainApp() {
   const pathParts = location.pathname.split('/').filter(Boolean);
   const currentPath = pathParts[pathParts.length - 1] || 'explore';
 
+  // Get tabs based on user type
+  const tabs = isMerchant ? merchantTabs : regularTabs;
+  
   // Hide tab bar on detail screens and add price screen
   const hideTabBar = location.pathname.includes('/product/') || 
                      location.pathname.includes('/location/') ||
                      location.pathname.includes('/notifications') ||
                      location.pathname.includes('/settings') ||
                      location.pathname.includes('/contributions') ||
-                     location.pathname.includes('/add');
+                     location.pathname.includes('/add') ||
+                     (isMerchant && location.pathname.includes('/merchant-shop/') && location.pathname !== `/app/merchant-shop/${user?.id}`);
 
   const handleTabClick = (path: string) => {
-    // Use absolute path for navigation
-    navigate(`/app/${path}`, { replace: false });
+    // Special handling for merchant-shop tab
+    if (path === 'merchant-shop' && user?.id) {
+      navigate(`/app/merchant-shop/${user.id}`, { replace: false });
+    } else {
+      // Use absolute path for navigation
+      navigate(`/app/${path}`, { replace: false });
+    }
   };
+  
+  // Check if merchant-shop tab is active
+  const isMerchantShopActive = isMerchant && location.pathname.includes('/merchant-shop/') && location.pathname === `/app/merchant-shop/${user?.id}`;
 
   return (
     <div className="min-h-screen bg-gray-50 pb-safe">
@@ -106,7 +127,10 @@ export default function MainApp() {
           <div className="flex justify-around items-center h-16">
             {tabs.map((tab) => {
               const Icon = tab.icon;
-              const isActive = currentPath === tab.path;
+              // Check if tab is active - special handling for merchant-shop
+              const isActive = tab.path === 'merchant-shop' 
+                ? isMerchantShopActive 
+                : currentPath === tab.path;
               
               return (
                 <button
