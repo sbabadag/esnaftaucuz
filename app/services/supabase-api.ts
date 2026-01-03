@@ -39,21 +39,17 @@ export const authAPI = {
       if (!authData.user) throw new Error('User creation failed');
 
       // Create user profile in public.users
-      // Try inserting without is_merchant first, then update if needed (workaround for RLS issues)
+      // IMPORTANT: Do NOT include is_merchant in INSERT - always use UPDATE after insert
+      // This avoids any potential RLS issues with the is_merchant column
       const userProfileData: any = {
         id: authData.user.id,
         email: authData.user.email!,
         name,
         search_radius: 15, // Default search radius (ensures constraint is satisfied)
+        // DO NOT include is_merchant here - it will be set via UPDATE after successful insert
       };
       
-      // Only add is_merchant if it's true (to avoid potential RLS issues with boolean false)
-      // If false, we'll update it after insert
-      if (isMerchant) {
-        userProfileData.is_merchant = true;
-      }
-      
-      console.log('📝 Inserting user profile:', { ...userProfileData, isMerchant });
+      console.log('📝 Inserting user profile (without is_merchant):', userProfileData);
       
       const { data: profileData, error: profileError } = await supabase
         .from('users')
@@ -73,7 +69,7 @@ export const authAPI = {
         // The auth user will remain but profile creation failed
         // User can try registering again with same email (will get "already registered" error)
         if (profileError.code === '42501') {
-          throw new Error('Profil oluşturulamadı: Yetki hatası (RLS). Lütfen Supabase migration 012_force_fix_merchant_rls.sql dosyasını çalıştırdığınızdan emin olun. Hata detayları: ' + (profileError.message || 'Bilinmeyen'));
+          throw new Error('Profil oluşturulamadı: Yetki hatası (RLS). Lütfen Supabase migration ALL_MERCHANT_FIXES.sql dosyasını çalıştırdığınızdan emin olun. Hata detayları: ' + (profileError.message || 'Bilinmeyen'));
         }
         // Check if error is related to is_merchant column
         if (profileError.message?.includes('is_merchant') || profileError.message?.includes('column')) {
@@ -82,19 +78,23 @@ export const authAPI = {
         throw new Error('Profil oluşturulamadı: ' + (profileError.message || 'Bilinmeyen hata') + ' (Kod: ' + (profileError.code || 'N/A') + ')');
       }
       
-      // If profile was created but is_merchant was not set (because we skipped it), update it now
-      if (profileData && !isMerchant) {
-        console.log('📝 Updating is_merchant to false for user:', profileData.id);
+      // Always update is_merchant after successful insert (whether true or false)
+      // This ensures the value is set correctly without causing RLS issues
+      if (profileData) {
+        console.log('📝 Updating is_merchant to', isMerchant, 'for user:', profileData.id);
         const { error: updateError } = await supabase
           .from('users')
-          .update({ is_merchant: false })
+          .update({ is_merchant: isMerchant })
           .eq('id', profileData.id);
         
         if (updateError) {
           console.warn('⚠️ Failed to update is_merchant, but profile was created:', updateError);
           // Don't throw - profile was created successfully, just is_merchant update failed
+          // The default value (false) will be used
         } else {
-          profileData.is_merchant = false;
+          // Update the returned profile data with the correct is_merchant value
+          profileData.is_merchant = isMerchant;
+          console.log('✅ is_merchant updated successfully to', isMerchant);
         }
       }
 
