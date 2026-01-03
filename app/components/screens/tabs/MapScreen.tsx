@@ -273,6 +273,7 @@ export default function MapScreen() {
   const markerRefs = useRef<Record<string, any>>({});
   const mapRef = useRef<L.Map | null>(null);
   const hasFocusFromURL = useRef(false); // Track if we have focus coordinates from URL
+  const focusedLocationRef = useRef<[number, number] | null>(null); // Store focused location coordinates
   const [mapError, setMapError] = useState<string | null>(null);
 
   // Check for focus location from URL params FIRST (before loading prices/location)
@@ -289,16 +290,23 @@ export default function MapScreen() {
       if (!isNaN(lat) && !isNaN(lng) && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180) {
         console.log('📍 Focusing on location from URL:', { lat, lng, rawLat: focusLat, rawLng: focusLng });
         // Leaflet uses [lat, lng] format
+        const focusCoords: [number, number] = [lat, lng];
         hasFocusFromURL.current = true; // Mark that we have focus from URL
-        setMapCenter([lat, lng]);
+        focusedLocationRef.current = focusCoords; // Store focused location
+        setMapCenter(focusCoords);
         setMapZoom(19); // Maximum zoom for closest view of product address
         // Clear URL params after focusing (with a delay to ensure map updates)
         setTimeout(() => {
           window.history.replaceState({}, '', '/app/map');
-          // Clear the focus flag after a delay to allow other functions to work normally
+          // Keep focus flag active for longer (10 seconds) to prevent user location from overriding
+          // This ensures geolocation API has time to complete without interfering
           setTimeout(() => {
             hasFocusFromURL.current = false;
-          }, 1000);
+            // Keep focused location for additional 5 seconds as backup
+            setTimeout(() => {
+              focusedLocationRef.current = null;
+            }, 5000);
+          }, 10000); // 10 seconds total
         }, 500);
       } else {
         console.error('❌ Invalid coordinates from URL:', { focusLat, focusLng, parsedLat: lat, parsedLng: lng });
@@ -347,10 +355,17 @@ export default function MapScreen() {
         
         const location: [number, number] = [lat, lng];
         setUserLocation(location);
-        // Only update map center if we don't have focus from URL
-        if (!hasFocusFromURL.current) {
+        // Only update map center if we don't have focus from URL or focused location
+        // Check both the flag and the stored focused location to prevent override
+        if (!hasFocusFromURL.current && !focusedLocationRef.current) {
           setMapCenter(location);
           setMapZoom(15);
+        } else {
+          console.log('📍 Skipping map center update - focus from URL is active:', {
+            hasFocusFromURL: hasFocusFromURL.current,
+            focusedLocation: focusedLocationRef.current,
+            userLocation: location
+          });
         }
       }
     } catch (error: any) {
@@ -422,13 +437,13 @@ export default function MapScreen() {
       setPrices(cheapestPrices);
       
       // If we have prices, center map on them (only if no user location and no focus from URL)
-      if (cheapestPrices.length > 0 && !userLocation && !hasFocusFromURL.current) {
+      if (cheapestPrices.length > 0 && !userLocation && !hasFocusFromURL.current && !focusedLocationRef.current) {
         const firstPrice = cheapestPrices[0];
         if (firstPrice.lat && firstPrice.lng) {
           console.log('📍 Centering map on first price location:', { lat: firstPrice.lat, lng: firstPrice.lng });
           setMapCenter([firstPrice.lat, firstPrice.lng]);
         }
-      } else if (hasFocusFromURL.current) {
+      } else if (hasFocusFromURL.current || focusedLocationRef.current) {
         console.log('📍 Skipping map center update from loadPrices - focus from URL is active');
       }
       
@@ -520,7 +535,9 @@ export default function MapScreen() {
       if (position) {
         const location: [number, number] = [position.latitude, position.longitude];
         setUserLocation(location);
-        hasFocusFromURL.current = false; // Clear URL focus when user manually centers
+        // Clear URL focus and focused location when user manually centers
+        hasFocusFromURL.current = false;
+        focusedLocationRef.current = null;
         setMapCenter(location);
         setMapZoom(15);
       } else {
