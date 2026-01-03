@@ -23,20 +23,8 @@ UPDATE public.users
 SET search_radius = 15
 WHERE search_radius IS NULL;
 
--- Step 3: Create a more permissive INSERT policy
--- Try the standard approach first
-CREATE POLICY "Users can create own profile" ON public.users
-  FOR INSERT 
-  TO authenticated
-  WITH CHECK (auth.uid() = id);
 
--- Step 4: If the above doesn't work, try this more permissive version
--- (Comment out Step 3 and uncomment this if needed)
-/*
-DROP POLICY IF EXISTS "Users can create own profile" ON public.users;
 
--- More permissive: allow any authenticated user to insert if id matches auth.uid()
--- OR if they're inserting their own profile
 CREATE POLICY "Users can create own profile" ON public.users
   FOR INSERT 
   TO authenticated
@@ -47,7 +35,7 @@ CREATE POLICY "Users can create own profile" ON public.users
     -- Fallback: allow if email matches authenticated user's email
     (email IS NOT NULL AND email IN (SELECT email FROM auth.users WHERE id = auth.uid()))
   );
-*/
+
 
 -- Step 5: Ensure guest users can be created
 CREATE POLICY "Users can create guest profile" ON public.users
