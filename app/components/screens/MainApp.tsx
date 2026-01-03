@@ -11,6 +11,7 @@ import SettingsScreen from './SettingsScreen';
 import ContributionsScreen from './ContributionsScreen';
 import MerchantShopScreen from './MerchantShopScreen';
 import { useState, useEffect } from 'react';
+import { useAuth } from '../../contexts/AuthContext';
 
 const tabs = [
   { path: 'explore', label: 'Keşfet', icon: Compass },
@@ -22,7 +23,15 @@ const tabs = [
 export default function MainApp() {
   const location = useLocation();
   const navigate = useNavigate();
+  const { user } = useAuth();
   const [bannerVisible, setBannerVisible] = useState(true);
+  
+  // Check if user is merchant - use blue theme for merchants, green for regular users
+  const isMerchant = (user as any)?.is_merchant === true;
+  const themeColor = isMerchant ? 'blue' : 'green';
+  const themeColorClass = isMerchant ? 'blue-600' : 'green-600';
+  const themeGradientFrom = isMerchant ? 'from-blue-600' : 'from-green-600';
+  const themeGradientTo = isMerchant ? 'to-blue-500' : 'to-emerald-600';
   
   // Check if banner was previously dismissed
   useEffect(() => {
@@ -53,7 +62,7 @@ export default function MainApp() {
     <div className="min-h-screen bg-gray-50 pb-safe">
       {/* App Banner */}
       {bannerVisible && (
-        <div className="bg-gradient-to-r from-green-600 to-emerald-600 text-white px-4 py-3 flex items-center justify-between shadow-md z-50 relative">
+        <div className={`bg-gradient-to-r ${themeGradientFrom} ${themeGradientTo} text-white px-4 py-3 flex items-center justify-between shadow-md z-50 relative`}>
           <div className="flex items-center gap-3 flex-1">
             <div className="bg-white/20 rounded-full p-2">
               <ShoppingBag className="w-5 h-5" />
@@ -104,10 +113,10 @@ export default function MainApp() {
                   key={tab.path}
                   onClick={() => handleTabClick(tab.path)}
                   className={`flex flex-col items-center justify-center flex-1 h-full transition-colors ${
-                    isActive ? 'text-green-600' : 'text-gray-600'
+                    isActive ? (isMerchant ? 'text-blue-600' : 'text-green-600') : 'text-gray-600'
                   }`}
                 >
-                  <Icon className={`w-6 h-6 mb-1 ${tab.path === 'add' && 'bg-green-600 text-white rounded-full p-1 w-8 h-8'}`} />
+                  <Icon className={`w-6 h-6 mb-1 ${tab.path === 'add' && (isMerchant ? 'bg-blue-600' : 'bg-green-600')} ${tab.path === 'add' && 'text-white rounded-full p-1 w-8 h-8'}`} />
                   <span className="text-xs">{tab.label}</span>
                 </button>
               );

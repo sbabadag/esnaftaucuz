@@ -57,6 +57,8 @@ export default function ProfileScreen() {
   };
 
   const isMerchant = (user as any)?.is_merchant === true;
+  const themeColor = isMerchant ? 'blue' : 'green';
+  const themeColorClass = isMerchant ? 'blue-600' : 'green-600';
 
   const menuItems = [
     // Esnaf için özel menü öğesi
@@ -77,7 +79,7 @@ export default function ProfileScreen() {
         <div className="flex items-center gap-4 mb-6">
           <Avatar className="w-20 h-20">
             <AvatarImage src={user?.avatar || ''} />
-            <AvatarFallback className="bg-green-600 text-white text-2xl">
+            <AvatarFallback className={`${isMerchant ? 'bg-blue-600' : 'bg-green-600'} text-white text-2xl`}>
               {getUserInitials()}
             </AvatarFallback>
           </Avatar>
@@ -98,7 +100,7 @@ export default function ProfileScreen() {
         {/* Stats */}
         <div className="grid grid-cols-3 gap-4">
           <div className="text-center">
-            <div className="text-2xl text-green-600">
+            <div className={`text-2xl ${isMerchant ? 'text-blue-600' : 'text-green-600'}`}>
               {typeof user?.contributions === 'object' 
                 ? user.contributions?.shares || 0 
                 : user?.contributions || 0}
@@ -106,7 +108,7 @@ export default function ProfileScreen() {
             <div className="text-sm text-gray-600">Paylaşım</div>
           </div>
           <div className="text-center">
-            <div className="text-2xl text-green-600">
+            <div className={`text-2xl ${isMerchant ? 'text-blue-600' : 'text-green-600'}`}>
               {typeof user?.contributions === 'object' 
                 ? user.contributions?.verifications || 0 
                 : 0}
@@ -114,7 +116,7 @@ export default function ProfileScreen() {
             <div className="text-sm text-gray-600">Doğrulama</div>
           </div>
           <div className="text-center">
-            <div className="text-2xl text-green-600">{user?.points || 0}</div>
+            <div className={`text-2xl ${isMerchant ? 'text-blue-600' : 'text-green-600'}`}>{user?.points || 0}</div>
             <div className="text-sm text-gray-600">Puan</div>
           </div>
         </div>
