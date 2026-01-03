@@ -256,6 +256,7 @@ export const authAPI = {
           level: profile.level,
           points: profile.points,
           contributions: profile.contributions,
+          is_merchant: profile.is_merchant || false, // Include is_merchant
         },
         token: data.session.access_token,
         session: data.session,
@@ -348,6 +349,7 @@ export const authAPI = {
           points: guestUser.points,
           contributions: guestUser.contributions,
           isGuest: true,
+          is_merchant: false, // Guest users are never merchants
         },
         token: guestUser.id, // Use guest ID as token
         session: {

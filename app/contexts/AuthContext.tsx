@@ -262,6 +262,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             localStorage.setItem('user', JSON.stringify(userData));
             console.log('✅ User profile loaded with settings:', {
               email: userData.email,
+              is_merchant: userData.is_merchant,
               preferences: userData.preferences,
               search_radius: userData.search_radius,
             });
