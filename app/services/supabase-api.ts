@@ -74,25 +74,73 @@ export const authAPI = {
       console.log('📝 Inserting user profile (without is_merchant):', userProfileData);
       console.log('🔍 Current auth.uid():', (await supabase.auth.getUser()).data.user?.id);
       
-      const { data: profileData, error: profileError } = await supabase
+      // Use UPSERT instead of INSERT to handle duplicate key errors
+      // This will insert if user doesn't exist, or update if they do
+      let profileData: any = null;
+      let profileError: any = null;
+      
+      const { data: upsertData, error: upsertError } = await supabase
         .from('users')
-        .insert(userProfileData)
+        .upsert(userProfileData, {
+          onConflict: 'id',
+          ignoreDuplicates: false, // Update if exists
+        })
         .select()
         .single();
 
-      if (profileError) {
-        console.error('❌ Profile creation error:', profileError);
-        console.error('Error code:', profileError.code);
-        console.error('Error message:', profileError.message);
-        console.error('Error details:', profileError.details);
-        console.error('Error hint:', profileError.hint);
-        console.error('Full error object:', JSON.stringify(profileError, null, 2));
+      if (upsertError) {
+        console.error('❌ Profile upsert error:', upsertError);
+        console.error('Error code:', upsertError.code);
+        console.error('Error message:', upsertError.message);
+        console.error('Error details:', upsertError.details);
+        console.error('Error hint:', upsertError.hint);
+        console.error('Full error object:', JSON.stringify(upsertError, null, 2));
         
-        // Note: Cannot delete auth user from frontend (requires admin API)
-        // The auth user will remain but profile creation failed
-        // User can try registering again with same email (will get "already registered" error)
+        // Handle duplicate key error - user profile already exists
+        if (upsertError.code === '23505' || upsertError.message?.includes('duplicate key') || upsertError.message?.includes('unique constraint')) {
+          console.log('⚠️ User profile already exists, fetching existing profile...');
+          // Try to fetch existing profile
+          const { data: existingProfile, error: fetchError } = await supabase
+            .from('users')
+            .select('*')
+            .eq('id', authData.user.id)
+            .single();
+          
+          if (fetchError) {
+            console.error('❌ Failed to fetch existing profile:', fetchError);
+            throw new Error('Profil zaten mevcut ancak yüklenemedi. Lütfen giriş yapmayı deneyin.');
+          }
+          
+          // Use existing profile and update is_merchant if needed
+          if (existingProfile) {
+            console.log('✅ Using existing profile');
+            profileData = existingProfile;
+            // Update is_merchant if it's different
+            if (existingProfile.is_merchant !== isMerchant) {
+              const { error: updateError } = await supabase
+                .from('users')
+                .update({ is_merchant: isMerchant })
+                .eq('id', existingProfile.id);
+              
+              if (!updateError) {
+                profileData.is_merchant = isMerchant;
+              }
+            }
+            // Skip error handling - we have the profile
+          } else {
+            profileError = upsertError;
+          }
+        } else {
+          profileError = upsertError;
+        }
+      } else {
+        profileData = upsertData;
+      }
+
+      // Handle errors (except duplicate key which we already handled)
+      if (profileError) {
         if (profileError.code === '42501' || profileError.code === 'PGRST301') {
-          throw new Error('Profil oluşturulamadı: Yetki hatası (RLS). Lütfen Supabase migration 016_ultimate_fix_rls.sql dosyasını çalıştırdığınızdan emin olun. Hata detayları: ' + (profileError.message || 'Bilinmeyen'));
+          throw new Error('Profil oluşturulamadı: Yetki hatası (RLS). Lütfen Supabase migration 017_final_working_rls.sql dosyasını çalıştırdığınızdan emin olun. Hata detayları: ' + (profileError.message || 'Bilinmeyen'));
         }
         // Check if error is related to is_merchant column
         if (profileError.message?.includes('is_merchant') || profileError.message?.includes('column')) {
