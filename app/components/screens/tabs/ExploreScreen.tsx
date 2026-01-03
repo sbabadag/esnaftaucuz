@@ -8,7 +8,7 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from '../.
 import { Checkbox } from '../../ui/checkbox';
 import { Label } from '../../ui/label';
 import { Avatar, AvatarImage, AvatarFallback } from '../../ui/avatar';
-import { productsAPI, pricesAPI, searchAPI } from '../../../services/supabase-api';
+import { productsAPI, pricesAPI, searchAPI, merchantProductsAPI } from '../../../services/supabase-api';
 import { useGeolocation } from '../../../../src/hooks/useGeolocation';
 import { useAuth } from '../../../contexts/AuthContext';
 import { reverseGeocode } from '../../../utils/geocoding';
@@ -74,6 +74,7 @@ export default function ExploreScreen() {
   const [trendProducts, setTrendProducts] = useState<Product[]>([]);
   const [nearbyCheapest, setNearbyCheapest] = useState<Price[]>([]);
   const [recentPrices, setRecentPrices] = useState<Price[]>([]);
+  const [merchantShops, setMerchantShops] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [pullDistance, setPullDistance] = useState(0);
@@ -420,12 +421,19 @@ export default function ExploreScreen() {
             return [];
           })
         : Promise.resolve([]);
+      
+      // Load merchant shops
+      const merchantShopsPromise = merchantProductsAPI.getAllMerchantShops(20).catch((err) => {
+        console.error('❌ Failed to load merchant shops:', err);
+        return [];
+      });
 
       // Wait for all promises (with individual error handling)
-      const [trending, recent, nearby] = await Promise.allSettled([
+      const [trending, recent, nearby, merchantShops] = await Promise.allSettled([
         trendingPromise,
         recentPromise,
         nearbyPromise,
+        merchantShopsPromise,
       ]);
 
       // Process results
@@ -451,6 +459,14 @@ export default function ExploreScreen() {
       } else {
         console.error('❌ Nearby prices failed:', nearby.reason);
         setNearbyCheapest([]);
+      }
+
+      if (merchantShops.status === 'fulfilled') {
+        console.log('🏪 Merchant shops loaded:', merchantShops.value?.length || 0);
+        setMerchantShops(merchantShops.value || []);
+      } else {
+        console.error('❌ Merchant shops failed:', merchantShops.reason);
+        setMerchantShops([]);
       }
 
       console.log('✅ Data loading completed');
@@ -1100,6 +1116,38 @@ export default function ExploreScreen() {
               <div className="text-center py-8 text-gray-500">Yükleniyor...</div>
             ) : (
               <>
+            {/* Merchant Shops */}
+            {merchantShops.length > 0 && (
+              <section>
+                <h2 className="text-base sm:text-lg mb-2 sm:mb-3 text-gray-900 font-semibold">Esnaf Dükkanları</h2>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  {merchantShops.map((shop) => (
+                    <div
+                      key={shop.id}
+                      onClick={() => navigate(`/app/merchant-shop/${shop.id}`)}
+                      className="bg-white rounded-lg p-4 border border-gray-200 hover:border-green-600 hover:shadow-md cursor-pointer transition-all"
+                    >
+                      <div className="flex items-center gap-3">
+                        <Avatar className="w-12 h-12 flex-shrink-0">
+                          <AvatarImage src={shop.avatar} />
+                          <AvatarFallback className="bg-green-600 text-white">
+                            {shop.name?.charAt(0)?.toUpperCase() || 'E'}
+                          </AvatarFallback>
+                        </Avatar>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 mb-1">
+                            <h3 className="font-semibold text-lg truncate">{shop.name || 'Esnaf'}</h3>
+                            <Badge className="bg-blue-600 text-white text-xs">Dükkan</Badge>
+                          </div>
+                          <p className="text-sm text-gray-500">Esnaf ürünlerini görüntüle</p>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            )}
+
             {/* Trend Products */}
             <section>
               <h2 className="text-base sm:text-lg mb-2 sm:mb-3 text-gray-900 font-semibold">Bugün En Çok Bakılanlar</h2>

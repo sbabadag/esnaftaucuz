@@ -1605,6 +1605,234 @@ export const searchAPI = {
 };
 
 // ============================================================================
+// MERCHANT PRODUCTS API
+// ============================================================================
+
+export const merchantProductsAPI = {
+  // Get all merchant products for a specific merchant
+  getByMerchant: async (merchantId: string) => {
+    try {
+      const { data, error } = await supabase
+        .from('merchant_products')
+        .select(`
+          *,
+          product:products(*),
+          location:locations(*),
+          merchant:users!merchant_products_merchant_id_fkey(id, name, avatar)
+        `)
+        .eq('merchant_id', merchantId)
+        .eq('is_active', true)
+        .order('created_at', { ascending: false });
+
+      if (error) throw error;
+      return data || [];
+    } catch (error: any) {
+      console.error('❌ Get merchant products error:', error);
+      throw error;
+    }
+  },
+
+  // Get a single merchant product by ID
+  getById: async (id: string) => {
+    try {
+      const { data, error } = await supabase
+        .from('merchant_products')
+        .select(`
+          *,
+          product:products(*),
+          location:locations(*),
+          merchant:users!merchant_products_merchant_id_fkey(id, name, avatar, email)
+        `)
+        .eq('id', id)
+        .single();
+
+      if (error) throw error;
+      return data;
+    } catch (error: any) {
+      console.error('❌ Get merchant product error:', error);
+      throw error;
+    }
+  },
+
+  // Create a new merchant product
+  create: async (data: {
+    merchant_id: string;
+    product_id: string;
+    price: number;
+    unit: string;
+    images: string[];
+    location_id?: string;
+    coordinates?: { lat: number; lng: number };
+  }) => {
+    try {
+      const insertData: any = {
+        merchant_id: data.merchant_id,
+        product_id: data.product_id,
+        price: data.price,
+        unit: data.unit,
+        images: data.images || [],
+        location_id: data.location_id || null,
+      };
+
+      // Add coordinates if provided
+      if (data.coordinates) {
+        insertData.coordinates = `(${data.coordinates.lng},${data.coordinates.lat})`;
+      }
+
+      const { data: result, error } = await supabase
+        .from('merchant_products')
+        .insert(insertData)
+        .select(`
+          *,
+          product:products(*),
+          location:locations(*)
+        `)
+        .single();
+
+      if (error) throw error;
+      return result;
+    } catch (error: any) {
+      console.error('❌ Create merchant product error:', error);
+      throw error;
+    }
+  },
+
+  // Update a merchant product
+  update: async (id: string, data: {
+    price?: number;
+    unit?: string;
+    images?: string[];
+    location_id?: string;
+    coordinates?: { lat: number; lng: number };
+    is_active?: boolean;
+  }) => {
+    try {
+      const updateData: any = {};
+
+      if (data.price !== undefined) updateData.price = data.price;
+      if (data.unit !== undefined) updateData.unit = data.unit;
+      if (data.images !== undefined) updateData.images = data.images;
+      if (data.location_id !== undefined) updateData.location_id = data.location_id;
+      if (data.is_active !== undefined) updateData.is_active = data.is_active;
+      if (data.coordinates) {
+        updateData.coordinates = `(${data.coordinates.lng},${data.coordinates.lat})`;
+      }
+
+      updateData.updated_at = new Date().toISOString();
+
+      const { data: result, error } = await supabase
+        .from('merchant_products')
+        .update(updateData)
+        .eq('id', id)
+        .select(`
+          *,
+          product:products(*),
+          location:locations(*)
+        `)
+        .single();
+
+      if (error) throw error;
+      return result;
+    } catch (error: any) {
+      console.error('❌ Update merchant product error:', error);
+      throw error;
+    }
+  },
+
+  // Delete a merchant product
+  delete: async (id: string) => {
+    try {
+      const { error } = await supabase
+        .from('merchant_products')
+        .delete()
+        .eq('id', id);
+
+      if (error) throw error;
+      return true;
+    } catch (error: any) {
+      console.error('❌ Delete merchant product error:', error);
+      throw error;
+    }
+  },
+
+  // Verify a merchant product (user confirms price is correct)
+  verify: async (merchantProductId: string, userId: string, isVerified: boolean = true) => {
+    try {
+      // Use UPSERT to handle both insert and update
+      const { data, error } = await supabase
+        .from('merchant_product_verifications')
+        .upsert({
+          merchant_product_id: merchantProductId,
+          user_id: userId,
+          is_verified: isVerified,
+        }, {
+          onConflict: 'merchant_product_id,user_id'
+        })
+        .select()
+        .single();
+
+      if (error) throw error;
+      return data;
+    } catch (error: any) {
+      console.error('❌ Verify merchant product error:', error);
+      throw error;
+    }
+  },
+
+  // Get user's verification status for a merchant product
+  getUserVerification: async (merchantProductId: string, userId: string) => {
+    try {
+      const { data, error } = await supabase
+        .from('merchant_product_verifications')
+        .select('*')
+        .eq('merchant_product_id', merchantProductId)
+        .eq('user_id', userId)
+        .maybeSingle();
+
+      if (error) throw error;
+      return data;
+    } catch (error: any) {
+      console.error('❌ Get user verification error:', error);
+      throw error;
+    }
+  },
+
+  // Get all merchant shops (merchants with products)
+  getAllMerchantShops: async (limit: number = 50) => {
+    try {
+      // Get distinct merchants who have active products
+      const { data, error } = await supabase
+        .from('merchant_products')
+        .select(`
+          merchant_id,
+          merchant:users!merchant_products_merchant_id_fkey(id, name, avatar, email, is_merchant),
+          coordinates
+        `)
+        .eq('is_active', true)
+        .limit(limit);
+
+      if (error) throw error;
+
+      // Group by merchant_id and get unique merchants
+      const merchantMap = new Map();
+      (data || []).forEach((item: any) => {
+        if (item.merchant && !merchantMap.has(item.merchant.id)) {
+          merchantMap.set(item.merchant.id, {
+            ...item.merchant,
+            coordinates: item.coordinates,
+          });
+        }
+      });
+
+      return Array.from(merchantMap.values());
+    } catch (error: any) {
+      console.error('❌ Get all merchant shops error:', error);
+      throw error;
+    }
+  },
+};
+
+// ============================================================================
 // HELPER FUNCTIONS
 // ============================================================================
 

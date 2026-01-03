@@ -9,6 +9,7 @@ import LocationDetailScreen from './details/LocationDetailScreen';
 import NotificationsScreen from './NotificationsScreen';
 import SettingsScreen from './SettingsScreen';
 import ContributionsScreen from './ContributionsScreen';
+import MerchantShopScreen from './MerchantShopScreen';
 import { useState, useEffect } from 'react';
 
 const tabs = [
@@ -87,6 +88,7 @@ export default function MainApp() {
           <Route path="notifications" element={<NotificationsScreen />} />
           <Route path="settings" element={<SettingsScreen />} />
           <Route path="contributions" element={<ContributionsScreen />} />
+          <Route path="merchant-shop/:merchantId" element={<MerchantShopScreen />} />
         </Routes>
       </main>
 
