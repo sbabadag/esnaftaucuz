@@ -15,6 +15,8 @@ import { v4 as uuidv4 } from 'uuid';
 export const authAPI = {
   register: async (email: string, password: string, name: string, isMerchant: boolean = false) => {
     try {
+      console.log('🔄 Starting registration process...', { email, name, isMerchant });
+      
       // Create user in Supabase Auth
       const { data: authData, error: authError } = await supabase.auth.signUp({
         email,
@@ -37,6 +39,12 @@ export const authAPI = {
         throw authError;
       }
       if (!authData.user) throw new Error('User creation failed');
+      
+      console.log('✅ Auth user created:', { userId: authData.user.id, email: authData.user.email });
+      console.log('🔑 Auth session:', { hasSession: !!authData.session, hasToken: !!authData.session?.access_token });
+
+      // Wait a moment to ensure auth state is fully set
+      await new Promise(resolve => setTimeout(resolve, 100));
 
       // Create user profile in public.users
       // IMPORTANT: Do NOT include is_merchant in INSERT - always use UPDATE after insert
@@ -50,6 +58,7 @@ export const authAPI = {
       };
       
       console.log('📝 Inserting user profile (without is_merchant):', userProfileData);
+      console.log('🔍 Current auth.uid():', (await supabase.auth.getUser()).data.user?.id);
       
       const { data: profileData, error: profileError } = await supabase
         .from('users')
