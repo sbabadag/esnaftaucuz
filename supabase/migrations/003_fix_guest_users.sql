@@ -28,3 +28,4 @@ CREATE TRIGGER validate_user_id_trigger
 
 
 
+

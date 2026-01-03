@@ -32,7 +32,7 @@ interface AuthContextType {
   user: User | null;
   token: string | null;
   isLoading: boolean;
-  register: (email: string, password: string, name: string) => Promise<void>;
+  register: (email: string, password: string, name: string, isMerchant?: boolean) => Promise<void>;
   login: (email: string, password: string) => Promise<void>;
   googleLogin: () => Promise<void>;
   guestLogin: () => Promise<void>;
@@ -577,10 +577,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => subscription.unsubscribe();
   }, []);
 
-  const register = async (email: string, password: string, name: string) => {
+  const register = async (email: string, password: string, name: string, isMerchant: boolean = false) => {
     try {
-      console.log('🔄 Starting registration...');
-      const data = await authAPI.register(email, password, name);
+      console.log('🔄 Starting registration...', { isMerchant });
+      const data = await authAPI.register(email, password, name, isMerchant);
       console.log('✅ Registration API call successful');
       console.log('📦 User data:', data.user);
       console.log('🔑 Token:', data.token ? 'Present' : 'Missing');

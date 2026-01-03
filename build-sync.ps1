@@ -28,3 +28,4 @@ Write-Host "✅ Build and Sync completed successfully!" -ForegroundColor Green
 Write-Host "========================================" -ForegroundColor Green
 Read-Host "Press Enter to exit"
 
+

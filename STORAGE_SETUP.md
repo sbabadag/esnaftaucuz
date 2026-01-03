@@ -71,3 +71,4 @@ Eğer fotoğraf yüklenemiyorsa:
 - RLS politikalarının doğru ayarlandığını kontrol edin
 - Kullanıcının authenticated olduğundan emin olun
 
+

@@ -13,7 +13,7 @@ import { v4 as uuidv4 } from 'uuid';
 // ============================================================================
 
 export const authAPI = {
-  register: async (email: string, password: string, name: string) => {
+  register: async (email: string, password: string, name: string, isMerchant: boolean = false) => {
     try {
       // Create user in Supabase Auth
       const { data: authData, error: authError } = await supabase.auth.signUp({
@@ -46,6 +46,7 @@ export const authAPI = {
           email: authData.user.email!,
           name,
           search_radius: 15, // Default search radius (ensures constraint is satisfied)
+          is_merchant: isMerchant, // Store merchant status
         })
         .select()
         .single();

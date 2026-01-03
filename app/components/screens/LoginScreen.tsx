@@ -21,6 +21,7 @@ export default function LoginScreen({ onLogin }: { onLogin?: () => void }) {
     password: '',
     name: '',
   });
+  const [isMerchant, setIsMerchant] = useState(false);
 
   const handleGoogleLogin = async () => {
     try {
@@ -74,8 +75,8 @@ export default function LoginScreen({ onLogin }: { onLogin?: () => void }) {
       setIsLoading(true);
 
       if (mode === 'register') {
-        await register(formData.email, formData.password, formData.name);
-        toast.success('Kayıt başarılı! Hoş geldiniz');
+        await register(formData.email, formData.password, formData.name, isMerchant);
+        toast.success(isMerchant ? 'Esnaf kaydı başarılı! Hoş geldiniz' : 'Kayıt başarılı! Hoş geldiniz');
       } else {
         await login(formData.email, formData.password);
         toast.success('Giriş başarılı');
@@ -209,12 +210,27 @@ export default function LoginScreen({ onLogin }: { onLogin?: () => void }) {
               </div>
             </div>
 
+            {mode === 'register' && (
+              <div className="flex items-center space-x-2">
+                <input
+                  type="checkbox"
+                  id="isMerchant"
+                  checked={isMerchant}
+                  onChange={(e) => setIsMerchant(e.target.checked)}
+                  className="w-4 h-4 text-green-600 border-gray-300 rounded focus:ring-green-500"
+                />
+                <label htmlFor="isMerchant" className="text-sm text-gray-700 cursor-pointer">
+                  Esnaf olarak kayıt olmak istiyorum
+                </label>
+              </div>
+            )}
+
             <Button
               type="submit"
               disabled={isLoading}
               className="w-full bg-green-600 hover:bg-green-700 text-white py-6 text-lg disabled:opacity-50"
             >
-              {isLoading ? 'İşleniyor...' : mode === 'login' ? 'Giriş Yap' : 'Kayıt Ol'}
+              {isLoading ? 'İşleniyor...' : mode === 'login' ? 'Giriş Yap' : (isMerchant ? 'Esnaf Kayıt' : 'Kayıt Ol')}
             </Button>
           </form>
 
@@ -251,6 +267,7 @@ export default function LoginScreen({ onLogin }: { onLogin?: () => void }) {
               onClick={() => {
                 setMode(mode === 'login' ? 'register' : 'login');
                 setFormData({ email: '', password: '', name: '' });
+                setIsMerchant(false);
               }}
               className="text-sm text-green-600 hover:text-green-700 underline"
             >
