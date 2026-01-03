@@ -396,9 +396,9 @@ export default function MerchantShopScreen() {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-gray-50 relative">
       {/* Header */}
-      <div className="bg-white border-b border-gray-200 sticky top-0 z-10">
+      <div className="bg-white border-b border-gray-200 sticky top-0 z-20 relative">
         <div className="flex items-center justify-between p-4">
           <div className="flex items-center gap-3">
             <Button
@@ -497,7 +497,8 @@ export default function MerchantShopScreen() {
                             />
                             <button
                               onClick={() => removeImage(index)}
-                              className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full p-1"
+                              className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full p-1 z-10"
+                              type="button"
                             >
                               <X className="w-3 h-3" />
                             </button>

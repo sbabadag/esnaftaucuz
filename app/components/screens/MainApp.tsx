@@ -83,7 +83,7 @@ export default function MainApp() {
     <div className="min-h-screen bg-gray-50 pb-safe">
       {/* App Banner */}
       {bannerVisible && (
-        <div className={`bg-gradient-to-r ${themeGradientFrom} ${themeGradientTo} text-white px-4 py-3 flex items-center justify-between shadow-md z-50 relative`}>
+        <div className={`bg-gradient-to-r ${themeGradientFrom} ${themeGradientTo} text-white px-4 py-3 flex items-center justify-between shadow-md z-30 relative`}>
           <div className="flex items-center gap-3 flex-1">
             <div className="bg-white/20 rounded-full p-2">
               <ShoppingBag className="w-5 h-5" />
@@ -123,7 +123,7 @@ export default function MainApp() {
       </main>
 
       {!hideTabBar && (
-        <nav className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 safe-area-inset-bottom z-50">
+        <nav className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 safe-area-inset-bottom z-40">
           <div className="flex justify-around items-center h-16">
             {tabs.map((tab) => {
               const Icon = tab.icon;
