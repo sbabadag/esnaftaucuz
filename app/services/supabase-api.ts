@@ -43,36 +43,21 @@ export const authAPI = {
       console.log('✅ Auth user created:', { userId: authData.user.id, email: authData.user.email });
       console.log('🔑 Auth session:', { hasSession: !!authData.session, hasToken: !!authData.session?.access_token });
 
-      // CRITICAL: If no session from signUp, sign in to get session
-      // This ensures auth.uid() is available for RLS policy
+      // Note: signUp() may not return a session if email confirmation is required
+      // We'll proceed with INSERT anyway - RLS policy will check auth.users table
       let session = authData.session;
       if (!session) {
-        console.log('⚠️ No session from signUp, signing in to get session...');
-        const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({
-          email,
-          password,
-        });
-        
-        if (signInError) {
-          console.error('❌ SignIn after signUp error:', signInError);
-          // Continue anyway - might work with delayed session
-        } else {
-          session = signInData.session;
-          console.log('✅ Session obtained from signIn');
-        }
+        console.log('⚠️ No session from signUp (email confirmation may be required)');
+        console.log('📝 Proceeding with INSERT - RLS policy will check auth.users table');
+        // Don't try signIn - it will fail with "Email not confirmed"
+        // RLS policy should allow INSERT if user exists in auth.users
+      } else {
+        console.log('✅ Session available from signUp');
       }
 
-      // Wait a moment to ensure auth state is fully propagated
-      await new Promise(resolve => setTimeout(resolve, 200));
-
-      // Verify auth.uid() is available
-      const { data: { user: currentUser } } = await supabase.auth.getUser();
-      console.log('🔍 Current auth.uid():', currentUser?.id);
-      console.log('🔍 Expected user id:', authData.user.id);
-      
-      if (!currentUser || currentUser.id !== authData.user.id) {
-        console.warn('⚠️ Auth state mismatch - waiting longer...');
-        await new Promise(resolve => setTimeout(resolve, 500));
+      // Wait a moment to ensure auth state is propagated (if session exists)
+      if (session) {
+        await new Promise(resolve => setTimeout(resolve, 200));
       }
 
       // Create user profile in public.users
