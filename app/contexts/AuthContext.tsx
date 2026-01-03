@@ -615,8 +615,30 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const login = async (email: string, password: string) => {
     try {
       const data = await authAPI.login(email, password);
+      console.log('✅ Login successful, user data:', {
+        id: data.user.id,
+        email: data.user.email,
+        is_merchant: (data.user as any).is_merchant,
+        fullUser: data.user,
+      });
       setToken(data.token);
       setUser(data.user);
+      // Store in localStorage to ensure persistence
+      if (data.token) {
+        localStorage.setItem('authToken', data.token);
+      }
+      localStorage.setItem('user', JSON.stringify(data.user));
+      console.log('✅ User stored in localStorage with is_merchant:', (data.user as any).is_merchant);
+      
+      // Refresh user profile to ensure all fields are loaded (including is_merchant)
+      // This is important because the API might return a partial user object
+      try {
+        await refreshUser();
+        console.log('✅ User profile refreshed after login');
+      } catch (refreshError) {
+        console.warn('⚠️ Failed to refresh user after login:', refreshError);
+        // Don't throw - we already have the user from login
+      }
     } catch (error) {
       console.error('Login error:', error);
       throw error;

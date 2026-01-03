@@ -1,4 +1,5 @@
 import { useNavigate } from 'react-router-dom';
+import { useEffect } from 'react';
 import { Settings, Heart, Award, Share2, LogOut, ChevronRight, Store } from 'lucide-react';
 import { Avatar, AvatarFallback, AvatarImage } from '../../ui/avatar';
 import { Badge } from '../../ui/badge';
@@ -9,6 +10,17 @@ import { toast } from 'sonner';
 export default function ProfileScreen() {
   const navigate = useNavigate();
   const { logout, user } = useAuth();
+
+  // Debug: Log user and is_merchant status
+  useEffect(() => {
+    console.log('🔍 ProfileScreen - User data:', {
+      id: user?.id,
+      email: user?.email,
+      is_merchant: (user as any)?.is_merchant,
+      is_merchant_type: typeof (user as any)?.is_merchant,
+      fullUser: user,
+    });
+  }, [user]);
 
   const handleLogout = async () => {
     try {
