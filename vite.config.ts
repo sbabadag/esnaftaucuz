@@ -33,18 +33,8 @@ export default defineConfig({
     emptyOutDir: true,
     // Copy public directory (CNAME file) to dist
     copyPublicDir: true,
-    // Ensure environment variables are included in build
-    define: {
-      // Vite automatically includes VITE_* env vars, but we can explicitly define them
-      'import.meta.env.VITE_SUPABASE_URL': JSON.stringify(process.env.VITE_SUPABASE_URL || ''),
-      'import.meta.env.VITE_SUPABASE_ANON_KEY': JSON.stringify(process.env.VITE_SUPABASE_ANON_KEY || ''),
-      'import.meta.env.VITE_API_URL': JSON.stringify(process.env.VITE_API_URL || ''),
-      // Google Maps API Key - use env var if available, otherwise use fallback for GitHub Pages
-      // Note: This key is protected by referrer restrictions in Google Cloud Console
-      'import.meta.env.VITE_GOOGLE_MAPS_API_KEY': JSON.stringify(
-        process.env.VITE_GOOGLE_MAPS_API_KEY?.trim() || 'AIzaSyCGRGdSA0IZHxgGI4PCv00kQ8xJ5dpx7Gc'
-      ),
-    },
+    // Vite automatically injects VITE_* environment variables into import.meta.env
+    // No need to manually define them - Vite handles this automatically
   },
   publicDir: 'public',
 })

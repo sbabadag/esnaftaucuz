@@ -35,7 +35,7 @@ workflows:
           fi
           
           # Export environment variables explicitly for npm build
-          # Vite automatically reads VITE_* prefixed environment variables
+          # Vite automatically reads VITE_* prefixed environment variables from process.env
           export VITE_SUPABASE_URL="$VITE_SUPABASE_URL"
           export VITE_SUPABASE_ANON_KEY="$VITE_SUPABASE_ANON_KEY"
           
@@ -43,8 +43,12 @@ workflows:
           echo "VITE_SUPABASE_URL: ${VITE_SUPABASE_URL:0:30}..."
           echo "VITE_SUPABASE_ANON_KEY: ${VITE_SUPABASE_ANON_KEY:0:20}..."
           
-          # Build with environment variables explicitly passed
-          VITE_SUPABASE_URL="$VITE_SUPABASE_URL" VITE_SUPABASE_ANON_KEY="$VITE_SUPABASE_ANON_KEY" npm run build
+          # Verify environment variables are accessible
+          echo "🔍 Verifying environment variables are accessible to Node.js..."
+          node -e "console.log('VITE_SUPABASE_URL:', process.env.VITE_SUPABASE_URL ? 'SET ✅' : 'MISSING ❌'); console.log('VITE_SUPABASE_ANON_KEY:', process.env.VITE_SUPABASE_ANON_KEY ? 'SET ✅' : 'MISSING ❌');"
+          
+          # Build with environment variables - Vite will automatically inject them
+          npm run build
           
           # Verify build output contains correct URL (not placeholder)
           if grep -r "placeholder.supabase.co" dist/ 2>/dev/null; then
