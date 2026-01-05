@@ -49,7 +49,7 @@ jobs:
           -destination 'platform=iOS Simulator,name=iPhone 15' \
           clean build
     
-    - name: Archive iOS (for App Store)
+    - name: Archive iOS (for App Store/Device)
       if: github.event_name == 'workflow_dispatch'
       run: |
         cd ios/App
@@ -62,6 +62,30 @@ jobs:
           CODE_SIGNING_REQUIRED=NO \
           CODE_SIGNING_ALLOWED=NO
       continue-on-error: true # Signing olmadan build edilebilir
+    
+    - name: Export IPA (for device installation)
+      if: github.event_name == 'workflow_dispatch'
+      run: |
+        cd ios/App
+        # Create ExportOptions.plist for ad-hoc distribution
+        cat > ExportOptions.plist << EOF
+        <?xml version="1.0" encoding="UTF-8"?>
+        <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+        <plist version="1.0">
+        <dict>
+          <key>method</key>
+          <string>ad-hoc</string>
+          <key>teamID</key>
+          <string></string>
+        </dict>
+        </plist>
+        EOF
+        # Export IPA (will fail without signing, but archive will be available)
+        xcodebuild -exportArchive \
+          -archivePath build/App.xcarchive \
+          -exportPath build/ipa \
+          -exportOptionsPlist ExportOptions.plist || true
+      continue-on-error: true
     
     - name: Upload artifacts
       if: always()
