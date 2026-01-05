@@ -4,9 +4,8 @@ workflows:
     max_build_duration: 120
     instance_type: mac_mini_m1
     environment:
-      groups:
-        # App Store Connect API key için (isteğe bağlı)
-        # - app_store_credentials
+      # groups:  # App Store Connect API key için (isteğe bağlı)
+      #   - app_store_credentials
       vars:
         XCODE_WORKSPACE: "ios/App/App.xcworkspace"
         XCODE_SCHEME: "App"
