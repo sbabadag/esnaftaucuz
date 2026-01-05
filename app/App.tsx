@@ -132,6 +132,99 @@ function App() {
     const isMobile = typeof window !== 'undefined' && 
       (window as any).Capacitor?.isNativePlatform();
     
+    // Function to handle OAuth code exchange
+    const handleOAuthCode = async (code: string, source: string) => {
+      console.log(`🔐 OAuth PKCE callback detected (${source})`);
+      console.log('🔐 Code:', code.substring(0, 20) + '...');
+      
+      try {
+        const { data, error } = await supabase.auth.exchangeCodeForSession(code);
+        
+        if (error) {
+          console.error('❌ Failed to exchange code for session:', error);
+          console.error('Error details:', {
+            message: error.message,
+            status: error.status,
+          });
+          window.location.hash = `error=${encodeURIComponent(error.message || 'Failed to exchange code')}`;
+          return;
+        }
+        
+        console.log('✅ Code exchanged for session successfully');
+        console.log('✅ Session data:', {
+          hasSession: !!data.session,
+          hasUser: !!data.user,
+          userId: data.user?.id,
+        });
+        
+        // Session is now set, AuthContext will handle the rest via onAuthStateChange
+        // Clean up URL
+        window.history.replaceState({}, document.title, '/');
+        
+        // Force a page reload to ensure AuthContext picks up the new session
+        setTimeout(() => {
+          window.location.reload();
+        }, 500);
+      } catch (err: any) {
+        console.error('❌ Error exchanging code for session:', err);
+        window.location.hash = `error=${encodeURIComponent(err.message || 'Unknown error')}`;
+      }
+    };
+    
+    // Check current URL for OAuth callback (handles case where we're already on callback page)
+    const checkCurrentUrlForOAuth = () => {
+      const currentUrl = window.location.href;
+      console.log('🔍 Checking current URL for OAuth callback:', currentUrl);
+      
+      // Check if we're on a Supabase callback page
+      if (currentUrl.includes('supabase.co/auth/v1/callback')) {
+        console.log('🔍 Detected Supabase callback page');
+        
+        // Try to extract OAuth parameters from current URL
+        try {
+          const url = new URL(currentUrl);
+          const code = url.searchParams.get('code');
+          const error = url.searchParams.get('error') || url.searchParams.get('error_description');
+          
+          if (code) {
+            console.log('🔐 Found OAuth code in current URL');
+            handleOAuthCode(code, 'current URL');
+            return true;
+          } else if (error) {
+            console.error('❌ OAuth error in current URL:', error);
+            window.location.hash = `error=${encodeURIComponent(error || 'Unknown error')}`;
+            return true;
+          }
+        } catch (e) {
+          console.error('❌ Failed to parse current URL:', e);
+        }
+      }
+      
+      // Also check hash fragment for implicit flow
+      const hash = window.location.hash.substring(1);
+      if (hash) {
+        const hashParams = new URLSearchParams(hash);
+        const accessToken = hashParams.get('access_token');
+        const hashError = hashParams.get('error');
+        
+        if (accessToken) {
+          console.log('🔐 OAuth implicit callback detected in hash');
+          // Let Supabase handle it via normal flow
+          return true;
+        } else if (hashError) {
+          console.error('❌ OAuth error in hash:', hashError);
+          return true;
+        }
+      }
+      
+      return false;
+    };
+    
+    // Check immediately on mount (in case we're already on callback page)
+    if (isMobile) {
+      checkCurrentUrlForOAuth();
+    }
+    
     if (isMobile) {
       // Listen for app URL open events (deep links)
       const listener = CapacitorApp.addListener('appUrlOpen', (event) => {
@@ -175,40 +268,7 @@ function App() {
           const hashError = hashParams.get('error');
           
           if (code) {
-            // PKCE flow - code parameter in query string
-            console.log('🔐 OAuth PKCE callback detected in deep link (code parameter)');
-            console.log('🔐 Code:', code.substring(0, 20) + '...');
-            // Exchange the code for a session manually
-            // Supabase client needs to exchange the code for access token
-            supabase.auth.exchangeCodeForSession(code)
-              .then(({ data, error }) => {
-                if (error) {
-                  console.error('❌ Failed to exchange code for session:', error);
-                  console.error('Error details:', {
-                    message: error.message,
-                    status: error.status,
-                  });
-                  window.location.hash = `error=${encodeURIComponent(error.message || 'Failed to exchange code')}`;
-                } else {
-                  console.log('✅ Code exchanged for session successfully');
-                  console.log('✅ Session data:', {
-                    hasSession: !!data.session,
-                    hasUser: !!data.user,
-                    userId: data.user?.id,
-                  });
-                  // Session is now set, AuthContext will handle the rest via onAuthStateChange
-                  // Clean up URL
-                  window.history.replaceState({}, document.title, '/');
-                  // Force a page reload to ensure AuthContext picks up the new session
-                  setTimeout(() => {
-                    window.location.reload();
-                  }, 500);
-                }
-              })
-              .catch((err) => {
-                console.error('❌ Error exchanging code for session:', err);
-                window.location.hash = `error=${encodeURIComponent(err.message || 'Unknown error')}`;
-              });
+            handleOAuthCode(code, 'deep link');
           } else if (accessToken) {
             // Implicit flow - access_token in hash fragment
             console.log('🔐 OAuth implicit callback detected in deep link (access_token)');
@@ -232,35 +292,21 @@ function App() {
         console.log('📱 App state changed:', state.isActive ? 'active' : 'inactive');
         if (state.isActive) {
           // Check if we're on a Supabase callback page
-          const currentUrl = window.location.href;
-          if (currentUrl.includes('supabase.co/auth/v1/callback')) {
-            console.log('🔍 Detected Supabase callback page, checking for OAuth parameters...');
-            // Try to extract OAuth parameters from current URL
-            const urlParams = new URLSearchParams(window.location.search);
-            const code = urlParams.get('code');
-            const error = urlParams.get('error');
-            
-            if (code) {
-              console.log('🔐 Found OAuth code in URL, exchanging for session...');
-              supabase.auth.exchangeCodeForSession(code)
-                .then(({ data, error }) => {
-                  if (error) {
-                    console.error('❌ Failed to exchange code:', error);
-                  } else {
-                    console.log('✅ Code exchanged successfully');
-                    window.location.href = 'com.esnaftaucuz.app://';
-                  }
-                });
-            } else if (error) {
-              console.error('❌ OAuth error in URL:', error);
-            }
-          }
+          checkCurrentUrlForOAuth();
         }
       });
+      
+      // Also check periodically (in case app state change doesn't fire)
+      const intervalId = setInterval(() => {
+        if (document.visibilityState === 'visible') {
+          checkCurrentUrlForOAuth();
+        }
+      }, 1000); // Check every second
       
       return () => {
         listener.remove();
         appStateListener.remove();
+        clearInterval(intervalId);
       };
     }
   }, []);
