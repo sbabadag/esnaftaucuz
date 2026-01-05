@@ -102,17 +102,24 @@ export default function ExploreScreen() {
     }
   }, []);
 
-  // Auto-fetch location on mount (only once)
+  // Auto-fetch location on mount and when permission is granted
   useEffect(() => {
     let mounted = true;
     
     const autoGetLocation = async () => {
+      // Skip if we already have location
+      if (userLocation) {
+        console.log('📍 Location already set, skipping auto-fetch');
+        return;
+      }
+      
       try {
+        console.log('📍 Attempting to get location...');
         const position = await getCurrentPosition();
         
         if (position && mounted) {
           const { latitude, longitude } = position;
-          console.log('📍 Auto-fetching location on mount:', { latitude, longitude });
+          console.log('📍 Auto-fetching location:', { latitude, longitude });
           
           // Save user coordinates for filtering
           setUserLocation({ lat: latitude, lng: longitude });
@@ -163,13 +170,13 @@ export default function ExploreScreen() {
       }
     };
     
-    // Auto-fetch location on mount
+    // Auto-fetch location on mount and when userLocation is null (to catch permission grants)
     autoGetLocation();
     
     return () => {
       mounted = false;
     };
-  }, []); // Only run once on mount
+  }, [userLocation]); // Re-run if userLocation is null (to catch permission grants)
 
   // Reload data when user location or search radius changes
   useEffect(() => {
@@ -403,7 +410,7 @@ export default function ExploreScreen() {
         ? pricesAPI.getAll({
             sort: 'newest',
             limit: 100, // Load more to filter by location
-            todayOnly: true,
+            todayOnly: false, // Show all recent prices, not just today
             lat: userLat,
             lng: userLng,
             radius: searchRadiusMeters,
@@ -414,7 +421,7 @@ export default function ExploreScreen() {
         : pricesAPI.getAll({
             sort: 'newest',
             limit: 20, // Load recent prices even without location
-            todayOnly: true,
+            todayOnly: false, // Show all recent prices, not just today
           }).catch((err) => {
             console.error('❌ Failed to load recent prices (no location):', err);
             return [];
@@ -458,16 +465,30 @@ export default function ExploreScreen() {
       }
 
       if (recent.status === 'fulfilled') {
-        console.log('📦 Recent prices loaded:', recent.value?.length || 0);
-        setRecentPrices(recent.value || []);
+        const recentPricesData = recent.value || [];
+        console.log('📦 Recent prices loaded:', recentPricesData.length);
+        console.log('📦 Recent prices sample:', recentPricesData.slice(0, 3).map((p: any) => ({
+          id: p.id,
+          product: p.product?.name,
+          price: p.price,
+          location: p.location?.name,
+        })));
+        setRecentPrices(recentPricesData);
       } else {
         console.error('❌ Recent prices failed:', recent.reason);
         setRecentPrices([]);
       }
 
       if (nearby.status === 'fulfilled') {
-        console.log('📦 Nearby prices loaded:', nearby.value?.length || 0);
-        setNearbyCheapest(nearby.value || []);
+        const nearbyPricesData = nearby.value || [];
+        console.log('📦 Nearby prices loaded:', nearbyPricesData.length);
+        console.log('📦 Nearby prices sample:', nearbyPricesData.slice(0, 3).map((p: any) => ({
+          id: p.id,
+          product: p.product?.name,
+          price: p.price,
+          location: p.location?.name,
+        })));
+        setNearbyCheapest(nearbyPricesData);
       } else {
         console.error('❌ Nearby prices failed:', nearby.reason);
         setNearbyCheapest([]);
