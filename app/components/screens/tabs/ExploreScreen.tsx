@@ -1209,119 +1209,124 @@ export default function ExploreScreen() {
               <h2 className="text-base sm:text-lg mb-2 sm:mb-3 text-gray-900 font-semibold">Sana Yakın En Ucuz</h2>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 {nearbyCheapest.length > 0 ? (
-                  nearbyCheapest.slice(0, 4).map((item) => (
-                    <div
-                      key={item.id || item._id}
-                      onClick={() => navigate(`/app/product/${item.product?.id || item.product?._id || ''}`)}
-                      className="bg-white rounded-lg p-3 sm:p-4 border border-gray-200 hover:border-green-600 hover:shadow-md cursor-pointer transition-all"
-                    >
-                      <div className="flex gap-3 sm:gap-4">
-                        <div className="w-14 h-14 sm:w-16 sm:h-16 rounded-lg bg-gray-100 flex items-center justify-center flex-shrink-0 overflow-hidden">
-                          {item.product?.image ? (
-                            <img 
-                              src={item.product.image} 
-                              alt={item.product?.name || 'Ürün'}
-                              className="w-full h-full object-cover"
-                              onError={(e) => {
-                                (e.target as HTMLImageElement).style.display = 'none';
-                                (e.target as HTMLImageElement).nextElementSibling?.classList.remove('hidden');
-                              }}
-                            />
-                          ) : null}
-                          <Package className={`w-6 h-6 sm:w-8 sm:h-8 text-gray-400 ${item.product?.image ? 'hidden' : ''}`} />
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <div className="flex justify-between items-start mb-1.5 sm:mb-2">
-                            <div className="flex-1 min-w-0">
-                              <h3 className="text-base sm:text-lg text-gray-900 font-medium truncate">{item.product?.name || 'Bilinmeyen Ürün'}</h3>
-                              <p className="text-xl sm:text-2xl text-green-600 font-semibold mt-1">
-                                {formatPrice(item.price)} TL{' '}
-                                <span className="text-xs sm:text-sm text-gray-500 font-normal">/ {item.unit}</span>
-                              </p>
-                            </div>
-                            {isToday(item.created_at || item.createdAt || '') && (
-                              <Badge className="bg-green-600 ml-2 flex-shrink-0 text-xs">BUGÜN</Badge>
-                            )}
+                  nearbyCheapest.slice(0, 4).map((item) => {
+                    // Ensure item has required fields
+                    if (!item || !item.product) {
+                      return null;
+                    }
+                    return (
+                      <div
+                        key={item.id || item._id}
+                        onClick={() => navigate(`/app/product/${item.product?.id || item.product?._id || ''}`)}
+                        className="bg-white rounded-lg p-3 sm:p-4 border border-gray-200 hover:border-green-600 hover:shadow-md cursor-pointer transition-all"
+                      >
+                        <div className="flex gap-3 sm:gap-4">
+                          <div className="w-14 h-14 sm:w-16 sm:h-16 rounded-lg bg-gray-100 flex items-center justify-center flex-shrink-0 overflow-hidden">
+                            {item.product?.image ? (
+                              <img 
+                                src={item.product.image} 
+                                alt={item.product?.name || 'Ürün'}
+                                className="w-full h-full object-cover"
+                                onError={(e) => {
+                                  (e.target as HTMLImageElement).style.display = 'none';
+                                  (e.target as HTMLImageElement).nextElementSibling?.classList.remove('hidden');
+                                }}
+                              />
+                            ) : null}
+                            <Package className={`w-6 h-6 sm:w-8 sm:h-8 text-gray-400 ${item.product?.image ? 'hidden' : ''}`} />
                           </div>
-                          <div className="mb-1.5 sm:mb-2">
-                            <div className="flex items-center gap-3 sm:gap-4 text-xs sm:text-sm text-gray-500 mb-1.5 sm:mb-2">
-                              <span className="flex items-center gap-1 min-w-0 flex-1">
-                                <MapPin className="w-3 h-3 sm:w-4 sm:h-4 flex-shrink-0" />
-                                <span className="truncate">{item.location?.name || 'Konum bilgisi yok'}</span>
-                              </span>
-                              <span className="flex items-center gap-1 flex-shrink-0">
-                                <Clock className="w-3 h-3 sm:w-4 sm:h-4" />
-                                {formatTimeAgo(item.created_at || item.createdAt || '')}
-                              </span>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex justify-between items-start mb-1.5 sm:mb-2">
+                              <div className="flex-1 min-w-0">
+                                <h3 className="text-base sm:text-lg text-gray-900 font-medium truncate">{item.product?.name || 'Bilinmeyen Ürün'}</h3>
+                                <p className="text-xl sm:text-2xl text-green-600 font-semibold mt-1">
+                                  {formatPrice(item.price)} TL{' '}
+                                  <span className="text-xs sm:text-sm text-gray-500 font-normal">/ {item.unit}</span>
+                                </p>
+                              </div>
+                              {isToday(item.created_at || item.createdAt || '') && (
+                                <Badge className="bg-green-600 ml-2 flex-shrink-0 text-xs">BUGÜN</Badge>
+                              )}
                             </div>
-                            {/* Konuma Git Button - Extract coordinates from item or location */}
-                            {(() => {
-                              // Prioritize location.coordinates over item.lat/lng (more reliable)
-                              let lat: number | undefined;
-                              let lng: number | undefined;
-                              
-                              // First, try to parse from location.coordinates
-                              const coords = item.location?.coordinates;
-                              if (coords) {
-                                if ((coords as any).lat !== undefined && (coords as any).lng !== undefined) {
-                                  lat = (coords as any).lat;
-                                  lng = (coords as any).lng;
-                                } else if ((coords as any).x !== undefined && (coords as any).y !== undefined) {
-                                  // Old format: x = lng, y = lat
-                                  lng = (coords as any).x;
-                                  lat = (coords as any).y;
-                                } else if (typeof coords === 'string') {
-                                  // PostgreSQL POINT string format: (lng,lat)
-                                  const match = coords.match(/\(([^,]+),([^)]+)\)/);
-                                  if (match) {
-                                    lng = parseFloat(match[1]);
-                                    lat = parseFloat(match[2]);
+                            <div className="mb-1.5 sm:mb-2">
+                              <div className="flex items-center gap-3 sm:gap-4 text-xs sm:text-sm text-gray-500 mb-1.5 sm:mb-2">
+                                <span className="flex items-center gap-1 min-w-0 flex-1">
+                                  <MapPin className="w-3 h-3 sm:w-4 sm:h-4 flex-shrink-0" />
+                                  <span className="truncate">{item.location?.name || 'Konum bilgisi yok'}</span>
+                                </span>
+                                <span className="flex items-center gap-1 flex-shrink-0">
+                                  <Clock className="w-3 h-3 sm:w-4 sm:h-4" />
+                                  {formatTimeAgo(item.created_at || item.createdAt || '')}
+                                </span>
+                              </div>
+                              {/* Konuma Git Button - Extract coordinates from item or location */}
+                              {(() => {
+                                // Prioritize location.coordinates over item.lat/lng (more reliable)
+                                let lat: number | undefined;
+                                let lng: number | undefined;
+                                
+                                // First, try to parse from location.coordinates
+                                const coords = item.location?.coordinates;
+                                if (coords) {
+                                  if ((coords as any).lat !== undefined && (coords as any).lng !== undefined) {
+                                    lat = (coords as any).lat;
+                                    lng = (coords as any).lng;
+                                  } else if ((coords as any).x !== undefined && (coords as any).y !== undefined) {
+                                    // Old format: x = lng, y = lat
+                                    lng = (coords as any).x;
+                                    lat = (coords as any).y;
+                                  } else if (typeof coords === 'string') {
+                                    // PostgreSQL POINT string format: (lng,lat)
+                                    const match = coords.match(/\(([^,]+),([^)]+)\)/);
+                                    if (match) {
+                                      lng = parseFloat(match[1]);
+                                      lat = parseFloat(match[2]);
+                                    }
                                   }
                                 }
-                              }
-                              
-                              // Fallback to item.lat/lng if coordinates not available
-                              if (!lat || !lng || isNaN(lat) || isNaN(lng)) {
-                                lat = item.lat;
-                                lng = item.lng;
-                              }
-                              
-                              return (lat && lng && !isNaN(lat) && !isNaN(lng)) ? (
-                                <Button
-                                  variant="outline"
-                                  size="sm"
-                                  className="w-full sm:w-auto text-xs h-7 px-2 border-green-600 text-green-600 hover:bg-green-50"
-                                  onClick={(e) => {
-                                    e.stopPropagation(); // Prevent card click
-                                    navigate(`/app/map?lat=${lat}&lng=${lng}&focus=true`);
-                                  }}
-                                >
-                                  <Navigation className="w-3 h-3 mr-1" />
-                                  Konuma Git
-                                </Button>
-                              ) : null;
-                            })()}
+                                
+                                // Fallback to item.lat/lng if coordinates not available
+                                if (!lat || !lng || isNaN(lat) || isNaN(lng)) {
+                                  lat = item.lat;
+                                  lng = item.lng;
+                                }
+                                
+                                return (lat && lng && !isNaN(lat) && !isNaN(lng)) ? (
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    className="w-full sm:w-auto text-xs h-7 px-2 border-green-600 text-green-600 hover:bg-green-50"
+                                    onClick={(e) => {
+                                      e.stopPropagation(); // Prevent card click
+                                      navigate(`/app/map?lat=${lat}&lng=${lng}&focus=true`);
+                                    }}
+                                  >
+                                    <Navigation className="w-3 h-3 mr-1" />
+                                    Konuma Git
+                                  </Button>
+                                ) : null;
+                              })()}
+                            </div>
+                            {item.user && (
+                              <div className="flex items-center gap-2 mt-1.5 sm:mt-2">
+                                <Avatar className="w-5 h-5 sm:w-6 sm:h-6">
+                                  <AvatarImage src={item.user.avatar} />
+                                  <AvatarFallback className="bg-green-600 text-white text-xs">
+                                    {item.user.name?.charAt(0)?.toUpperCase() || 'U'}
+                                  </AvatarFallback>
+                                </Avatar>
+                                <span className="text-xs sm:text-sm text-gray-600">{item.user.name}</span>
+                              </div>
+                            )}
+                            {(item.is_verified || item.isVerified) && (
+                              <div className="flex items-center gap-1.5 sm:gap-2 mt-1.5 sm:mt-2 text-xs sm:text-sm text-green-600">
+                                <CheckCircle2 className="w-3 h-3 sm:w-4 sm:h-4" />
+                                <span>Doğrulanmış</span>
+                              </div>
+                            )}
                           </div>
-                          {item.user && (
-                            <div className="flex items-center gap-2 mt-1.5 sm:mt-2">
-                              <Avatar className="w-5 h-5 sm:w-6 sm:h-6">
-                                <AvatarImage src={item.user.avatar} />
-                                <AvatarFallback className="bg-green-600 text-white text-xs">
-                                  {item.user.name?.charAt(0)?.toUpperCase() || 'U'}
-                                </AvatarFallback>
-                              </Avatar>
-                              <span className="text-xs sm:text-sm text-gray-600">{item.user.name}</span>
-                            </div>
-                          )}
-                          {(item.is_verified || item.isVerified) && (
-                            <div className="flex items-center gap-1.5 sm:gap-2 mt-1.5 sm:mt-2 text-xs sm:text-sm text-green-600">
-                              <CheckCircle2 className="w-3 h-3 sm:w-4 sm:h-4" />
-                              <span>Doğrulanmış</span>
-                            </div>
-                          )}
                         </div>
                       </div>
-                    </div>
                     );
                   }).filter(Boolean)
                 ) : (
@@ -1454,7 +1459,8 @@ export default function ExploreScreen() {
                         </div>
                       </div>
                     </div>
-                  ))
+                    );
+                  }).filter(Boolean)
                 ) : (
                   <p className="text-sm text-gray-500">Henüz fiyat girilmemiş</p>
                 )}
