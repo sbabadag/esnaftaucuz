@@ -41,13 +41,13 @@ export default function LocationPermissionScreen({ onAllow }: { onAllow: () => v
             // Already granted, get position with timeout
             console.log('📱 iOS: Permission already granted, getting position...');
             
-            // Add timeout for getCurrentPosition (15 seconds)
+            // Add timeout for getCurrentPosition (20 seconds - increased for iOS GPS)
             const positionPromise = getCurrentPosition();
             const positionTimeout = new Promise<null>((resolve) => 
               setTimeout(() => {
-                console.warn('📱 iOS: getCurrentPosition timeout');
+                console.warn('📱 iOS: getCurrentPosition timeout (20s)');
                 resolve(null);
-              }, 15000)
+              }, 20000)
             );
             
             const position = await Promise.race([positionPromise, positionTimeout]);
@@ -69,29 +69,36 @@ export default function LocationPermissionScreen({ onAllow }: { onAllow: () => v
             // Request permission with timeout
             console.log('📱 iOS: Requesting location permission...');
             
-            // Add timeout to prevent hanging
+            // On iOS, requestPermissions() shows the system dialog
+            // We need to wait for user response, but also handle timeout
             const permissionPromise = Geolocation.requestPermissions();
-            const timeoutPromise = new Promise((_, reject) => 
-              setTimeout(() => reject(new Error('Permission request timeout')), 30000)
+            const timeoutPromise = new Promise<{ location: string }>((resolve) => 
+              setTimeout(() => {
+                console.warn('📱 iOS: Permission request timeout (30s) - user may not have responded');
+                // Return denied status on timeout
+                resolve({ location: 'denied' });
+              }, 30000)
             );
             
-            const requestResult = await Promise.race([permissionPromise, timeoutPromise]) as any;
+            const requestResult = await Promise.race([permissionPromise, timeoutPromise]);
             console.log('📱 iOS: Permission request result:', requestResult);
             
             if (requestResult.location === 'granted') {
-              // Wait a bit for iOS to process the permission
-              await new Promise(resolve => setTimeout(resolve, 500));
+              // Wait longer for iOS to fully process the permission (1 second)
+              // iOS needs time to update its internal permission state
+              console.log('📱 iOS: Permission granted, waiting for iOS to process...');
+              await new Promise(resolve => setTimeout(resolve, 1000));
               
               // Permission granted, get position with timeout
-              console.log('📱 iOS: Permission granted, getting position...');
+              console.log('📱 iOS: Getting position...');
               
-              // Add timeout for getCurrentPosition (15 seconds)
+              // Add timeout for getCurrentPosition (20 seconds - increased for iOS GPS)
               const positionPromise = getCurrentPosition();
               const positionTimeout = new Promise<null>((resolve) => 
                 setTimeout(() => {
-                  console.warn('📱 iOS: getCurrentPosition timeout');
+                  console.warn('📱 iOS: getCurrentPosition timeout (20s)');
                   resolve(null);
-                }, 15000)
+                }, 20000)
               );
               
               const position = await Promise.race([positionPromise, positionTimeout]);
@@ -109,10 +116,16 @@ export default function LocationPermissionScreen({ onAllow }: { onAllow: () => v
                 navigate(getNextRoute());
                 return;
               }
+            } else if (requestResult.location === 'denied') {
+              // Permission denied or timeout
+              console.log('📱 iOS: Permission denied or timeout:', requestResult.location);
+              toast.error('Konum izni reddedildi veya zaman aşımına uğradı. Ayarlardan izin verebilirsiniz.');
+              navigate(getNextRoute());
+              return;
             } else {
-              // Permission denied
-              console.log('📱 iOS: Permission denied:', requestResult.location);
-              toast.error('Konum izni reddedildi. Ayarlardan izin verebilirsiniz.');
+              // Other status (prompt, etc.)
+              console.log('📱 iOS: Permission status:', requestResult.location);
+              toast.warning('Konum izni durumu belirsiz. Ayarlardan kontrol edebilirsiniz.');
               navigate(getNextRoute());
               return;
             }
