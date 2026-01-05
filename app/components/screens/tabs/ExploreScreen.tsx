@@ -398,7 +398,7 @@ export default function ExploreScreen() {
         hasUserLocation: !!(userLat && userLng)
       }));
       
-      // Load recent prices with location filter (only if user location is available)
+      // Load recent prices - with location filter if available, otherwise show all recent
       const recentPromise = (userLat && userLng) 
         ? pricesAPI.getAll({
             sort: 'newest',
@@ -411,16 +411,28 @@ export default function ExploreScreen() {
             console.error('❌ Failed to load recent prices:', err);
             return [];
           })
-        : Promise.resolve([]);
+        : pricesAPI.getAll({
+            sort: 'newest',
+            limit: 20, // Load recent prices even without location
+            todayOnly: true,
+          }).catch((err) => {
+            console.error('❌ Failed to load recent prices (no location):', err);
+            return [];
+          });
       
-      // Load nearby cheapest ONLY if user location is available
-      // This ensures we only show prices within the user's search radius
+      // Load nearby cheapest - with location filter if available, otherwise show cheapest overall
       const nearbyPromise = (userLat && userLng)
         ? searchAPI.getNearbyCheapest(userLat, userLng, searchRadiusMeters, 10).catch((err) => {
             console.error('❌ Failed to load nearby prices:', err);
             return [];
           })
-        : Promise.resolve([]);
+        : pricesAPI.getAll({
+            sort: 'cheapest',
+            limit: 10, // Show cheapest prices even without location
+          }).catch((err) => {
+            console.error('❌ Failed to load cheapest prices (no location):', err);
+            return [];
+          });
       
       // Load merchant shops
       const merchantShopsPromise = merchantProductsAPI.getAllMerchantShops(20).catch((err) => {
@@ -1310,9 +1322,10 @@ export default function ExploreScreen() {
                         </div>
                       </div>
                     </div>
-                  ))
+                    );
+                  }).filter(Boolean)
                 ) : (
-                  <p className="text-sm text-gray-500">Yakınınızda fiyat bulunamadı</p>
+                  <p className="text-sm text-gray-500">Henüz fiyat girilmemiş</p>
                 )}
               </div>
             </section>
@@ -1323,7 +1336,12 @@ export default function ExploreScreen() {
               <h2 className="text-base sm:text-lg mb-2 sm:mb-3 text-gray-900 font-semibold">Son Girilen Fiyatlar</h2>
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
                 {recentPrices.length > 0 ? (
-                  recentPrices.slice(0, 9).map((item) => (
+                  recentPrices.slice(0, 9).map((item) => {
+                    // Ensure item has required fields
+                    if (!item || !item.product) {
+                      return null;
+                    }
+                    return (
                     <div
                       key={item.id || item._id}
                       onClick={() => navigate(`/app/product/${item.product?.id || item.product?._id || ''}`)}
