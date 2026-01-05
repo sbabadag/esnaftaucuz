@@ -1492,10 +1492,11 @@ export const searchAPI = {
 
   getNearbyCheapest: async (lat: number, lng: number, radius: number = 5000, limit: number = 10) => {
     try {
-      console.log('🔍 Fetching nearby cheapest prices...');
+      console.log('🔍 Fetching nearby cheapest prices...', { lat, lng, radius, limit });
       
       // Get all prices (geospatial filtering would require PostGIS)
       // Timeout handled by Supabase client's custom fetch
+      // Remove 24-hour limit to show all available prices
       const { data: prices, error } = await supabase
         .from('prices')
         .select(`
@@ -1505,9 +1506,8 @@ export const searchAPI = {
           user:users(id, name, avatar, level)
         `)
         .eq('is_active', true)
-        .gte('created_at', new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()) // Last 24 hours
         .order('price', { ascending: true })
-        .limit(100);
+        .limit(500); // Increased limit to get more prices for filtering
 
       if (error) {
         console.error('❌ Supabase error:', error);
@@ -1515,6 +1515,7 @@ export const searchAPI = {
       }
       
       console.log('✅ Nearby prices fetched:', prices?.length || 0);
+      console.log('📍 User location:', { lat, lng, radiusKm: radius / 1000 });
 
       // Normalize coordinates first (same logic as pricesAPI.getAll)
       const normalizedPrices = (prices || []).map((price: any) => {
@@ -1580,6 +1581,9 @@ export const searchAPI = {
       
       // Client-side geospatial filtering
       const radiusKm = radius / 1000;
+      console.log(`📍 Filtering prices within ${radiusKm} km radius...`);
+      console.log(`📍 Prices with coordinates: ${normalizedPrices.filter((p: any) => p.lat && p.lng).length} out of ${normalizedPrices.length}`);
+      
       const nearbyPrices = normalizedPrices.filter((price: any) => {
         // Use normalized lat/lng
         if (!price.lat || !price.lng || isNaN(price.lat) || isNaN(price.lng)) {
@@ -1590,13 +1594,25 @@ export const searchAPI = {
         const isWithinRadius = distance <= radiusKm;
         
         if (isWithinRadius) {
-          console.log(`📍 Price within radius: ${distance.toFixed(2)} km - ${price.product?.name || 'Unknown'}`);
+          console.log(`📍 Price within radius: ${distance.toFixed(2)} km - ${price.product?.name || 'Unknown'} - ${price.price} TL/${price.unit}`);
         }
         
         return isWithinRadius;
       });
       
       console.log(`📍 Filtered ${nearbyPrices.length} prices within ${radiusKm} km radius from ${normalizedPrices.length} total`);
+      
+      if (nearbyPrices.length === 0 && normalizedPrices.length > 0) {
+        // Log some sample prices to debug why they're not within radius
+        const samplePrices = normalizedPrices.slice(0, 5);
+        console.log('⚠️ No prices within radius. Sample prices:', samplePrices.map((p: any) => ({
+          product: p.product?.name,
+          lat: p.lat,
+          lng: p.lng,
+          hasCoords: !!(p.lat && p.lng),
+          distance: p.lat && p.lng ? calculateDistance(lat, lng, p.lat, p.lng).toFixed(2) + ' km' : 'N/A',
+        })));
+      }
 
       // Group by product and get cheapest
       const cheapestByProduct: Record<string, any> = {};
