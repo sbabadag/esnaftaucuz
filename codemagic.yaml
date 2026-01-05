@@ -47,15 +47,36 @@ workflows:
           echo "🔍 Verifying environment variables are accessible to Node.js..."
           node -e "console.log('VITE_SUPABASE_URL:', process.env.VITE_SUPABASE_URL ? 'SET ✅' : 'MISSING ❌'); console.log('VITE_SUPABASE_ANON_KEY:', process.env.VITE_SUPABASE_ANON_KEY ? 'SET ✅' : 'MISSING ❌');"
           
-          # Build with environment variables - Vite will automatically inject them
+          # Create a temporary .env file for Vite to read during build
+          # This ensures Vite can access the variables even if they're not in process.env
+          echo "📝 Creating .env file for Vite..."
+          echo "VITE_SUPABASE_URL=$VITE_SUPABASE_URL" > .env
+          echo "VITE_SUPABASE_ANON_KEY=$VITE_SUPABASE_ANON_KEY" >> .env
+          echo "✅ .env file created"
+          
+          # Verify .env file contents (without exposing full values)
+          echo "🔍 Verifying .env file..."
+          echo "VITE_SUPABASE_URL in .env: $(grep -o 'VITE_SUPABASE_URL=.*' .env | cut -d'=' -f2 | cut -c1-30)..."
+          echo "VITE_SUPABASE_ANON_KEY in .env: $(grep -o 'VITE_SUPABASE_ANON_KEY=.*' .env | cut -d'=' -f2 | cut -c1-20)..."
+          
+          # Build with environment variables - Vite will read from .env file
           npm run build
           
+          # Clean up .env file after build (security)
+          echo "🧹 Cleaning up .env file..."
+          rm -f .env
+          
           # Verify build output contains correct URL (not placeholder)
+          echo "🔍 Verifying build output..."
           if grep -r "placeholder.supabase.co" dist/ 2>/dev/null; then
-            echo "❌ WARNING: Build output still contains placeholder URL!"
+            echo "❌ ERROR: Build output still contains placeholder URL!"
             echo "This means environment variables were not properly injected."
             echo "Checking if Supabase URL is in build output..."
-            grep -r "xmskjcdwmwlcmjexnnxw" dist/ 2>/dev/null | head -1 || echo "❌ Supabase URL not found in build output"
+            if grep -r "xmskjcdwmwlcmjexnnxw" dist/ 2>/dev/null | head -1; then
+              echo "⚠️ Supabase URL found but placeholder also exists - this is a problem"
+            else
+              echo "❌ Supabase URL not found in build output"
+            fi
             exit 1
           else
             echo "✅ Build verification: No placeholder URLs found in build output"
@@ -63,7 +84,8 @@ workflows:
             if grep -r "xmskjcdwmwlcmjexnnxw" dist/ 2>/dev/null | head -1; then
               echo "✅ Correct Supabase URL found in build output!"
             else
-              echo "⚠️ Supabase URL not found in build output (might be minified)"
+              echo "⚠️ Supabase URL not found in build output (might be minified or encoded)"
+              echo "⚠️ This might be OK if the URL is encoded differently"
             fi
           fi
       - name: Add iOS platform if not exists
