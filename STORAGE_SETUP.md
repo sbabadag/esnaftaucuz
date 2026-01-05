@@ -72,3 +72,4 @@ Eğer fotoğraf yüklenemiyorsa:
 - Kullanıcının authenticated olduğundan emin olun
 
 
+

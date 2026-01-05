@@ -14,3 +14,4 @@ BEGIN
   RAISE NOTICE 'Reset search_count for % products', updated_count;
 END $$;
 
+

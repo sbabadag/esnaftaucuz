@@ -15,3 +15,4 @@ CREATE POLICY "Users can create own profile" ON public.users
 ALTER TABLE public.users
 ADD COLUMN IF NOT EXISTS is_merchant BOOLEAN DEFAULT FALSE;
 
+

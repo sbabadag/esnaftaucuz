@@ -155,3 +155,4 @@ CREATE POLICY "Users can manage own verifications"
 GRANT SELECT, INSERT, UPDATE, DELETE ON public.merchant_products TO authenticated;
 GRANT SELECT, INSERT, UPDATE, DELETE ON public.merchant_product_verifications TO authenticated;
 
+

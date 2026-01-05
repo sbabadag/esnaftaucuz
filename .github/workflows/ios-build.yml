@@ -1,0 +1,74 @@
+name: iOS Build
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch: # Manuel tetikleme için
+
+jobs:
+  build:
+    runs-on: macos-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+        cache: 'npm'
+    
+    - name: Install dependencies
+      run: npm ci
+    
+    - name: Build web
+      run: npm run build
+    
+    - name: Install CocoaPods
+      run: |
+        sudo gem install cocoapods
+        pod --version
+    
+    - name: Install iOS dependencies
+      run: |
+        cd ios/App
+        pod install
+        cd ../..
+    
+    - name: Sync Capacitor
+      run: npx cap sync ios
+    
+    - name: Build iOS (Simulator)
+      run: |
+        cd ios/App
+        xcodebuild -workspace App.xcworkspace \
+          -scheme App \
+          -configuration Debug \
+          -sdk iphonesimulator \
+          -destination 'platform=iOS Simulator,name=iPhone 15' \
+          clean build
+    
+    - name: Archive iOS (for App Store)
+      if: github.event_name == 'workflow_dispatch'
+      run: |
+        cd ios/App
+        xcodebuild -workspace App.xcworkspace \
+          -scheme App \
+          -configuration Release \
+          -archivePath build/App.xcarchive \
+          archive \
+          CODE_SIGN_IDENTITY="" \
+          CODE_SIGNING_REQUIRED=NO \
+          CODE_SIGNING_ALLOWED=NO
+      continue-on-error: true # Signing olmadan build edilebilir
+    
+    - name: Upload artifacts
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: ios-build
+        path: |
+          ios/App/build/
+        retention-days: 7
+

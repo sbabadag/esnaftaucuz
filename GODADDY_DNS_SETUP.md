@@ -153,3 +153,4 @@ GoDaddy DNS Management sayfasında şöyle görünmeli:
 
 
 
+
