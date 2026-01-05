@@ -47,18 +47,22 @@ iOS'ta OAuth callback için:
 ### Supabase Dashboard
 
 1. **Authentication → URL Configuration:**
-   - **Site URL:** `com.esnaftaucuz.app://`
-   - **Redirect URLs:**
-     - `com.esnaftaucuz.app://`
-     - `com.esnaftaucuz.app://**`
+   - **Site URL:** `com.esnaftaucuz.app://` (veya mevcut web URL'inizi koruyun)
+   - **Redirect URLs** listesine ekleyin:
+     - `com.esnaftaucuz.app://` ✅ (iOS için gerekli)
+     - `com.esnaftaucuz.app://**` ✅ (iOS için gerekli)
+   
+   **ÖNEMLİ:** Custom URL scheme'ler Supabase'de eklenebilir, ancak Google Cloud Console'da eklenemez. Supabase, OAuth callback'i alır ve iOS uygulamanıza yönlendirir.
 
 ### Google Cloud Console
 
 1. **APIs & Services → Credentials:**
    - OAuth 2.0 Client ID'nizi seçin
    - **Authorized redirect URIs:**
-     - `https://[YOUR_SUPABASE_PROJECT].supabase.co/auth/v1/callback`
-     - `com.esnaftaucuz.app://`
+     - `https://xmskjcdwmwlcmjexnnxw.supabase.co/auth/v1/callback` ✅ (Zaten ekli)
+     - ❌ **`com.esnaftaucuz.app://` EKLEMEYİN** - Google Cloud Console custom URL scheme'leri kabul etmez!
+   
+   **ÖNEMLİ:** Google Cloud Console'da sadece Supabase callback URL'i olmalı. Custom URL scheme'ler Google Cloud Console'da desteklenmez. Supabase, OAuth callback'i alır ve kendi redirect URL'lerine yönlendirir.
 
 ## 🔧 Test Adımları
 
