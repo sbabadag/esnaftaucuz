@@ -21,6 +21,14 @@ workflows:
       - name: Build web
         script: |
           npm run build
+      - name: Add iOS platform if not exists
+        script: |
+          if [ ! -d "ios" ]; then
+            echo "iOS platform not found, adding..."
+            npx cap add ios
+          else
+            echo "iOS platform already exists"
+          fi
       - name: Install CocoaPods dependencies
         script: |
           cd ios/App
