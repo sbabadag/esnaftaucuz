@@ -7,6 +7,8 @@ if (!supabaseUrl || !supabaseAnonKey) {
   console.error('❌ Missing Supabase environment variables!');
   console.error('VITE_SUPABASE_URL:', supabaseUrl ? 'Set' : 'MISSING');
   console.error('VITE_SUPABASE_ANON_KEY:', supabaseAnonKey ? 'Set' : 'MISSING');
+  console.error('⚠️ This is a build-time error. Environment variables must be set during build.');
+  console.error('⚠️ For Codemagic: Add VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY in Settings → Environment variables');
   console.warn('⚠️ Continuing without Supabase - some features may not work');
 }
 

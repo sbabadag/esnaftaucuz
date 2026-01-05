@@ -22,10 +22,35 @@ workflows:
         script: |
           # Environment variables must be set in Codemagic UI (Settings → Environment variables)
           # VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY should be added as encrypted variables
-          echo "Building with environment variables..."
-          echo "VITE_SUPABASE_URL is set: $([ -n "$VITE_SUPABASE_URL" ] && echo 'YES' || echo 'NO')"
-          echo "VITE_SUPABASE_ANON_KEY is set: $([ -n "$VITE_SUPABASE_ANON_KEY" ] && echo 'YES' || echo 'NO')"
+          echo "🔍 Checking environment variables..."
+          echo "VITE_SUPABASE_URL is set: $([ -n "$VITE_SUPABASE_URL" ] && echo 'YES ✅' || echo 'NO ❌')"
+          echo "VITE_SUPABASE_ANON_KEY is set: $([ -n "$VITE_SUPABASE_ANON_KEY" ] && echo 'YES ✅' || echo 'NO ❌')"
+          
+          # Check if environment variables are set
+          if [ -z "$VITE_SUPABASE_URL" ] || [ -z "$VITE_SUPABASE_ANON_KEY" ]; then
+            echo "❌ ERROR: Environment variables are missing!"
+            echo "Please add VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY in Codemagic Settings → Environment variables"
+            echo "Build will fail without these variables."
+            exit 1
+          fi
+          
+          # Export environment variables explicitly for npm build
+          export VITE_SUPABASE_URL="$VITE_SUPABASE_URL"
+          export VITE_SUPABASE_ANON_KEY="$VITE_SUPABASE_ANON_KEY"
+          
+          echo "✅ Environment variables are set, starting build..."
+          echo "VITE_SUPABASE_URL: ${VITE_SUPABASE_URL:0:30}..."
+          echo "VITE_SUPABASE_ANON_KEY: ${VITE_SUPABASE_ANON_KEY:0:20}..."
+          
           npm run build
+          
+          # Verify build output contains correct URL (not placeholder)
+          if grep -r "placeholder.supabase.co" dist/ 2>/dev/null; then
+            echo "❌ WARNING: Build output still contains placeholder URL!"
+            echo "This means environment variables were not properly injected."
+          else
+            echo "✅ Build verification: No placeholder URLs found in build output"
+          fi
       - name: Add iOS platform if not exists
         script: |
           if [ ! -d "ios" ]; then
