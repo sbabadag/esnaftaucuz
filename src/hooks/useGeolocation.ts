@@ -14,9 +14,10 @@ export const useGeolocation = () => {
     try {
       if (isNative()) {
         // Use Capacitor Geolocation on native
+        // Increased timeout for iOS (20 seconds) to handle slower GPS acquisition
         const position = await Geolocation.getCurrentPosition({
           enableHighAccuracy: true,
-          timeout: 10000,
+          timeout: 20000, // 20 seconds (increased from 10 for iOS)
         });
         return {
           latitude: position.coords.latitude,

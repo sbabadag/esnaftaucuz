@@ -38,11 +38,29 @@ export default function LocationPermissionScreen({ onAllow }: { onAllow: () => v
           console.log('📱 iOS: Current permissions:', permissions);
           
           if (permissions.location === 'granted') {
-            // Already granted, get position
+            // Already granted, get position with timeout
             console.log('📱 iOS: Permission already granted, getting position...');
-            const position = await getCurrentPosition();
+            
+            // Add timeout for getCurrentPosition (15 seconds)
+            const positionPromise = getCurrentPosition();
+            const positionTimeout = new Promise<null>((resolve) => 
+              setTimeout(() => {
+                console.warn('📱 iOS: getCurrentPosition timeout');
+                resolve(null);
+              }, 15000)
+            );
+            
+            const position = await Promise.race([positionPromise, positionTimeout]);
+            
             if (position) {
               toast.success('Konum izni zaten verilmiş');
+              onAllow();
+              navigate(getNextRoute());
+              return;
+            } else {
+              console.warn('📱 iOS: Permission granted but position not available or timeout');
+              toast.warning('Konum izni verilmiş ancak konum alınamadı. GPS\'i açık olduğundan emin olun.');
+              // Still navigate - permission is granted, position can be obtained later
               onAllow();
               navigate(getNextRoute());
               return;
@@ -64,17 +82,30 @@ export default function LocationPermissionScreen({ onAllow }: { onAllow: () => v
               // Wait a bit for iOS to process the permission
               await new Promise(resolve => setTimeout(resolve, 500));
               
-              // Permission granted, get position
+              // Permission granted, get position with timeout
               console.log('📱 iOS: Permission granted, getting position...');
-              const position = await getCurrentPosition();
+              
+              // Add timeout for getCurrentPosition (15 seconds)
+              const positionPromise = getCurrentPosition();
+              const positionTimeout = new Promise<null>((resolve) => 
+                setTimeout(() => {
+                  console.warn('📱 iOS: getCurrentPosition timeout');
+                  resolve(null);
+                }, 15000)
+              );
+              
+              const position = await Promise.race([positionPromise, positionTimeout]);
+              
               if (position) {
                 toast.success('Konum izni verildi');
                 onAllow();
                 navigate(getNextRoute());
                 return;
               } else {
-                console.warn('📱 iOS: Permission granted but position not available');
-                toast.error('Konum alınamadı. Lütfen GPS\'i açın.');
+                console.warn('📱 iOS: Permission granted but position not available or timeout');
+                toast.warning('Konum izni verildi ancak konum alınamadı. GPS\'i açık olduğundan emin olun.');
+                // Still navigate - permission is granted, position can be obtained later
+                onAllow();
                 navigate(getNextRoute());
                 return;
               }
