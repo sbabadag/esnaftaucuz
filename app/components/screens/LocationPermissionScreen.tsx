@@ -35,9 +35,11 @@ export default function LocationPermissionScreen({ onAllow }: { onAllow: () => v
         try {
           // Check if permissions are already granted
           const permissions = await Geolocation.checkPermissions();
+          console.log('📱 iOS: Current permissions:', permissions);
           
           if (permissions.location === 'granted') {
             // Already granted, get position
+            console.log('📱 iOS: Permission already granted, getting position...');
             const position = await getCurrentPosition();
             if (position) {
               toast.success('Konum izni zaten verilmiş');
@@ -46,32 +48,61 @@ export default function LocationPermissionScreen({ onAllow }: { onAllow: () => v
               return;
             }
           } else if (permissions.location === 'prompt' || permissions.location === 'prompt-with-rationale') {
-            // Request permission
-            const requestResult = await Geolocation.requestPermissions();
+            // Request permission with timeout
+            console.log('📱 iOS: Requesting location permission...');
+            
+            // Add timeout to prevent hanging
+            const permissionPromise = Geolocation.requestPermissions();
+            const timeoutPromise = new Promise((_, reject) => 
+              setTimeout(() => reject(new Error('Permission request timeout')), 30000)
+            );
+            
+            const requestResult = await Promise.race([permissionPromise, timeoutPromise]) as any;
+            console.log('📱 iOS: Permission request result:', requestResult);
             
             if (requestResult.location === 'granted') {
+              // Wait a bit for iOS to process the permission
+              await new Promise(resolve => setTimeout(resolve, 500));
+              
               // Permission granted, get position
+              console.log('📱 iOS: Permission granted, getting position...');
               const position = await getCurrentPosition();
               if (position) {
                 toast.success('Konum izni verildi');
                 onAllow();
                 navigate(getNextRoute());
                 return;
+              } else {
+                console.warn('📱 iOS: Permission granted but position not available');
+                toast.error('Konum alınamadı. Lütfen GPS\'i açın.');
+                navigate(getNextRoute());
+                return;
               }
             } else {
               // Permission denied
+              console.log('📱 iOS: Permission denied:', requestResult.location);
               toast.error('Konum izni reddedildi. Ayarlardan izin verebilirsiniz.');
               navigate(getNextRoute());
               return;
             }
           } else {
             // Permission denied
+            console.log('📱 iOS: Permission already denied:', permissions.location);
             toast.error('Konum izni reddedildi. Ayarlardan izin verebilirsiniz.');
             navigate(getNextRoute());
             return;
           }
         } catch (error: any) {
-          console.error('Permission error:', error);
+          console.error('📱 iOS: Permission error:', error);
+          
+          // If timeout, still try to navigate
+          if (error.message?.includes('timeout')) {
+            console.warn('📱 iOS: Permission request timeout, navigating anyway');
+            toast.warning('Konum izni isteği zaman aşımına uğradı. Ayarlardan manuel olarak izin verebilirsiniz.');
+            navigate(getNextRoute());
+            return;
+          }
+          
           toast.error('Konum izni alınamadı: ' + (error.message || 'Bilinmeyen hata'));
           navigate(getNextRoute());
           return;
