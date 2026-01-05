@@ -102,11 +102,12 @@ export default function ExploreScreen() {
     }
   }, []);
 
-  // Auto-fetch location on mount and when permission is granted
+  // Auto-fetch location on mount and retry if permission is granted later
   useEffect(() => {
     let mounted = true;
+    let retryTimeout: NodeJS.Timeout | null = null;
     
-    const autoGetLocation = async () => {
+    const autoGetLocation = async (isRetry = false) => {
       // Skip if we already have location
       if (userLocation) {
         console.log('📍 Location already set, skipping auto-fetch');
@@ -114,7 +115,7 @@ export default function ExploreScreen() {
       }
       
       try {
-        console.log('📍 Attempting to get location...');
+        console.log(`📍 ${isRetry ? 'Retrying' : 'Attempting'} to get location...`);
         const position = await getCurrentPosition();
         
         if (position && mounted) {
@@ -160,23 +161,42 @@ export default function ExploreScreen() {
               console.log('📍 Using coordinates for filtering:', { lat: latitude, lng: longitude });
             }
           }
+        } else if (mounted && !isRetry) {
+          // If first attempt failed and we don't have location, retry after 3 seconds
+          // This catches cases where permission is granted after the screen loads
+          console.log('📍 Location not available, will retry in 3 seconds...');
+          retryTimeout = setTimeout(() => {
+            if (mounted && !userLocation) {
+              autoGetLocation(true);
+            }
+          }, 3000);
         }
-      } catch (error) {
+      } catch (error: any) {
         console.error('Auto location fetch error:', error);
-        // Silently fail - don't show error on initial load
-        if (mounted) {
+        // If permission denied or not available, retry after 3 seconds (only once)
+        if (mounted && !isRetry && !userLocation) {
+          console.log('📍 Location fetch failed, will retry in 3 seconds...');
+          retryTimeout = setTimeout(() => {
+            if (mounted && !userLocation) {
+              autoGetLocation(true);
+            }
+          }, 3000);
+        } else if (mounted) {
           setCurrentLocation('Mevcut Konum');
         }
       }
     };
     
-    // Auto-fetch location on mount and when userLocation is null (to catch permission grants)
+    // Auto-fetch location on mount
     autoGetLocation();
     
     return () => {
       mounted = false;
+      if (retryTimeout) {
+        clearTimeout(retryTimeout);
+      }
     };
-  }, [userLocation]); // Re-run if userLocation is null (to catch permission grants)
+  }, []); // Only run once on mount
 
   // Reload data when user location or search radius changes
   useEffect(() => {
@@ -482,12 +502,18 @@ export default function ExploreScreen() {
       if (nearby.status === 'fulfilled') {
         const nearbyPricesData = nearby.value || [];
         console.log('📦 Nearby prices loaded:', nearbyPricesData.length);
-        console.log('📦 Nearby prices sample:', nearbyPricesData.slice(0, 3).map((p: any) => ({
-          id: p.id,
-          product: p.product?.name,
-          price: p.price,
-          location: p.location?.name,
-        })));
+        if (nearbyPricesData.length > 0) {
+          console.log('📦 Nearby prices sample:', nearbyPricesData.slice(0, 3).map((p: any) => ({
+            id: p.id,
+            product: p.product?.name,
+            price: p.price,
+            location: p.location?.name,
+            lat: p.lat,
+            lng: p.lng,
+          })));
+        } else {
+          console.log('⚠️ No nearby prices found - check location and radius settings');
+        }
         setNearbyCheapest(nearbyPricesData);
       } else {
         console.error('❌ Nearby prices failed:', nearby.reason);
