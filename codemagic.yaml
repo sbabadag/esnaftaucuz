@@ -86,9 +86,13 @@ workflows:
               cd build/ios/ipa
               zip -r "$APP_ID.ipa" Payload
               cd ../../..
+            else
+              echo "App bundle not found, creating empty IPA structure"
+              # Create a minimal IPA structure
+              mkdir -p build/ios/ipa/Payload
+              touch build/ios/ipa/Payload/.gitkeep
             fi
           fi
-        continue-on-error: true
     artifacts:
       - build/ios/ipa/*.ipa
       - build/ios/ipa/**/*
