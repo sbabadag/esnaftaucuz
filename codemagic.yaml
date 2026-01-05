@@ -5,7 +5,7 @@ workflows:
     instance_type: mac_mini_m1
     environment:
       groups:
-        - supabase_env_vars  # Supabase environment variables grubu
+        - "2"  # Supabase environment variables grubu (VITE_SUPABASE_URL ve VITE_SUPABASE_ANON_KEY)
       vars:
         XCODE_WORKSPACE: "ios/App/App.xcworkspace"
         XCODE_SCHEME: "App"
