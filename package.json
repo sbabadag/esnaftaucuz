@@ -14,7 +14,9 @@
     "mobile:android": "npx cap open android",
     "mobile:build": "npm run build && npx cap sync",
     "mobile:build-sync": "npm run build && npx cap sync",
-    "watch:sync": "npm run build && npx cap sync && echo 'Watching for changes...' && npm run build -- --watch"
+    "watch:sync": "npm run build && npx cap sync && echo 'Watching for changes...' && npm run build -- --watch",
+    "dev:android": "npm run dev & npx cap run android --livereload --external",
+    "dev:ios": "npm run dev & npx cap run ios --livereload --external"
   },
   "dependencies": {
     "@capacitor/android": "^6.2.1",

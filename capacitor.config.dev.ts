@@ -1,16 +1,18 @@
 import { CapacitorConfig } from '@capacitor/cli';
 
+// Development configuration with live reload
+// This file is used when running with --livereload flag
 const config: CapacitorConfig = {
   appId: 'com.esnaftaucuz.app',
   appName: 'esnaftaucuz',
   webDir: 'dist',
-  // Production: No server.url = use bundled files from assets/public
-  // androidScheme defaults to 'https' which uses capacitor://localhost
-  // Development: Uncomment below to use dev server for live reload
-  // IMPORTANT: Comment out before production build!
+  // Development: Use dev server for live reload
+  // Replace YOUR_LOCAL_IP with your computer's local IP address
+  // Find it with: ipconfig (Windows) or ifconfig (Mac/Linux)
+  // Example: http://192.168.1.100:5173
   server: {
-    url: 'http://192.168.3.13:5173',
-    cleartext: true
+    url: process.env.CAPACITOR_SERVER_URL || 'http://localhost:5173',
+    cleartext: true, // Allow HTTP (not HTTPS) for local development
   },
   plugins: {
     Camera: {
