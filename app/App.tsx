@@ -141,12 +141,28 @@ function App() {
         try {
           // Fix URL format if needed (com.esnaftaucuz.app:?code=... -> com.esnaftaucuz.app://?code=...)
           let urlString = event.url;
-          if (urlString.includes('com.esnaftaucuz.app:?') && !urlString.includes('://')) {
+          console.log('🔗 Raw deep link URL:', urlString);
+          
+          // Handle different URL formats
+          if (urlString.includes('com.esnaftaucuz.app:') && !urlString.includes('://')) {
             urlString = urlString.replace('com.esnaftaucuz.app:', 'com.esnaftaucuz.app://');
             console.log('🔧 Fixed URL format:', urlString);
           }
           
+          // Handle URL without protocol
+          if (!urlString.includes('://')) {
+            urlString = `com.esnaftaucuz.app://${urlString}`;
+            console.log('🔧 Added protocol:', urlString);
+          }
+          
           const url = new URL(urlString);
+          console.log('🔗 Parsed URL:', {
+            protocol: url.protocol,
+            host: url.host,
+            pathname: url.pathname,
+            search: url.search,
+            hash: url.hash,
+          });
           
           // Check for PKCE flow code parameter in query string
           const code = url.searchParams.get('code');

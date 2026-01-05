@@ -218,22 +218,40 @@ export const authAPI = {
 
   login: async (email: string, password: string) => {
     try {
-      const { data, error } = await supabase.auth.signInWithPassword({
+      console.log('🔐 Starting email login...', { email });
+      
+      // Add timeout for iOS network issues
+      const loginPromise = supabase.auth.signInWithPassword({
         email,
         password,
       });
+      
+      const timeoutPromise = new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('Giriş isteği zaman aşımına uğradı. Lütfen internet bağlantınızı kontrol edin.')), 30000)
+      );
+      
+      const { data, error } = await Promise.race([loginPromise, timeoutPromise]) as any;
 
       if (error) {
+        console.error('❌ Login error:', error);
         // Handle specific Supabase errors
-        if (error.message.includes('Invalid login credentials')) {
+        if (error.message?.includes('Invalid login credentials') || error.message?.includes('invalid')) {
           throw new Error('Email veya şifre hatalı');
         }
-        if (error.message.includes('Email not confirmed')) {
+        if (error.message?.includes('Email not confirmed')) {
           throw new Error('Email adresinizi doğrulamanız gerekiyor');
         }
-        throw error;
+        if (error.message?.includes('timeout') || error.message?.includes('network')) {
+          throw new Error('İnternet bağlantısı hatası. Lütfen tekrar deneyin.');
+        }
+        throw new Error(error.message || 'Giriş başarısız');
       }
-      if (!data.user || !data.session) throw new Error('Login failed');
+      if (!data?.user || !data?.session) {
+        console.error('❌ Login failed: No user or session');
+        throw new Error('Giriş başarısız - kullanıcı veya oturum oluşturulamadı');
+      }
+      
+      console.log('✅ Login successful, fetching profile...');
 
       // Get user profile
       const { data: profile, error: profileError } = await supabase
