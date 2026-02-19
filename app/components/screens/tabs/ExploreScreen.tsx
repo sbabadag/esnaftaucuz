@@ -868,7 +868,7 @@ export default function ExploreScreen() {
           </div>
           <div className="flex items-center gap-3">
             {user?.name && (
-              <div className="hidden sm:block mr-2">
+              <div className="block mr-2">
                 <span className={`text-sm font-medium ${isMerchant ? 'text-blue-50' : 'text-white'}`}>
                   {String(user.name).split(' ')[0]}
                 </span>
