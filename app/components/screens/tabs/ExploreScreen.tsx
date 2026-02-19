@@ -859,7 +859,7 @@ export default function ExploreScreen() {
         paddingTop: '0.5rem',
         paddingBottom: '0.5rem',
         height: 'auto',
-        minHeight: '45px',
+        minHeight: '56px', // increased to avoid overlapping header/search
         zIndex: 100
       }}>
         <div className="px-4 h-full flex items-center justify-between">
@@ -892,7 +892,7 @@ export default function ExploreScreen() {
 
       {/* Header - positioned directly below hero with no gap */}
       <div className="bg-white border-b border-gray-200 sticky" style={{ 
-        top: 'calc(61px + env(safe-area-inset-top, 0px))', 
+        top: 'calc(101px + env(safe-area-inset-top, 0px))', 
         margin: 0, 
         padding: 0,
         zIndex: 99
@@ -1006,14 +1006,14 @@ export default function ExploreScreen() {
       </div>
 
       {/* Content */}
-      <div 
+        <div 
         ref={scrollContainerRef}
         className="px-3 sm:px-4 md:px-6 pb-3 sm:pb-4 md:pb-6 space-y-3 sm:space-y-4 overflow-y-auto max-w-7xl mx-auto"
         style={{ 
           paddingTop: pullDistance > 0 ? `${Math.min(pullDistance, 60)}px` : '0px',
-          marginTop: `calc(84px + env(safe-area-inset-top, 0px))`,
-          minHeight: 'calc(100vh - 84px - env(safe-area-inset-top, 0px))',
-          maxHeight: 'calc(100vh - 84px - env(safe-area-inset-top, 0px))',
+          marginTop: `calc(124px + env(safe-area-inset-top, 0px))`,
+          minHeight: 'calc(100vh - 124px - env(safe-area-inset-top, 0px))',
+          maxHeight: 'calc(100vh - 124px - env(safe-area-inset-top, 0px))',
           transition: pullDistance === 0 ? 'padding-top 0.2s' : 'none',
           position: 'relative',
           zIndex: 1
