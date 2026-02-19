@@ -869,7 +869,7 @@ export default function ExploreScreen() {
             </div>
             <div className="flex-1 min-w-0">
             <h1 className="text-lg font-bold">esnaftaucuz</h1>
-            <p className={`text-xs opacity-90 leading-tight ${isMerchant ? 'text-blue-50' : 'text-green-50'}`}>En iyi fiyatları keşfet</p>
+            <p className={`text-xs opacity-90 leading-tight ${isMerchant ? 'text-blue-50' : 'text-green-50'}`}>En iyi fiyatları keşfet.</p>
             </div>
           </div>
           <div className="flex items-center gap-3">
@@ -892,7 +892,8 @@ export default function ExploreScreen() {
 
       {/* Header - positioned directly below hero with no gap */}
       <div className="bg-white border-b border-gray-200 sticky" style={{ 
-        top: 'calc(101px + env(safe-area-inset-top, 0px))', 
+        // place the search/header 5px below the esnaftaucuz hero bar (hero height = 56px)
+        top: 'calc(56px + env(safe-area-inset-top, 0px) + 5px)', 
         margin: 0, 
         padding: 0,
         zIndex: 99
@@ -1009,11 +1010,12 @@ export default function ExploreScreen() {
         <div 
         ref={scrollContainerRef}
         className="px-3 sm:px-4 md:px-6 pb-3 sm:pb-4 md:pb-6 space-y-3 sm:space-y-4 overflow-y-auto max-w-7xl mx-auto"
-        style={{ 
+          style={{ 
           paddingTop: pullDistance > 0 ? `${Math.min(pullDistance, 60)}px` : '0px',
-          marginTop: `calc(124px + env(safe-area-inset-top, 0px))`,
-          minHeight: 'calc(100vh - 124px - env(safe-area-inset-top, 0px))',
-          maxHeight: 'calc(100vh - 124px - env(safe-area-inset-top, 0px))',
+          // account for hero (56px) + 5px gap + approximate header height (64px)
+          marginTop: `calc(56px + env(safe-area-inset-top, 0px) + 5px + 64px)`,
+          minHeight: 'calc(100vh - (56px + 5px + 64px) - env(safe-area-inset-top, 0px))',
+          maxHeight: 'calc(100vh - (56px + 5px + 64px) - env(safe-area-inset-top, 0px))',
           transition: pullDistance === 0 ? 'padding-top 0.2s' : 'none',
           position: 'relative',
           zIndex: 1
