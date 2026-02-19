@@ -787,10 +787,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 export function useAuth() {
   const context = useContext(AuthContext);
   if (context === undefined) {
-    // During HMR, context might not be available yet - return a safe fallback
+    // During live-reload, context might not be available yet - return a safe fallback
     if (import.meta.env.DEV) {
-      console.warn('useAuth called outside AuthProvider - this might be an HMR issue');
-      // Return a safe fallback during development/HMR
+      console.warn('useAuth called outside AuthProvider - this might be a live-reload issue');
+      // Return a safe fallback during development (live reload)
       return {
         user: null,
         token: null,

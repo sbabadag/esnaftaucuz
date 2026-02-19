@@ -17,21 +17,22 @@ import FavoritesScreen from './FavoritesScreen';
 import FeedbackScreen from './FeedbackScreen';
 import { useState, useEffect } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
+import { useLanguage } from '../../contexts/LanguageContext';
 
-// Regular user tabs
-const regularTabs = [
-  { path: 'explore', label: 'Keşfet', icon: Compass },
-  { path: 'map', label: 'Harita', icon: Map },
-  { path: 'add', label: 'Ekle', icon: Plus },
-  { path: 'profile', label: 'Profil', icon: User },
+// Regular user tabs (labelKey will be translated via LanguageContext)
+  const regularTabs = [
+  { path: 'explore', labelKey: 'EXPLORE', icon: Compass },
+  { path: 'map', labelKey: 'MAP', icon: Map },
+  { path: 'add', labelKey: 'ADD', icon: Plus },
+  { path: 'profile', labelKey: 'PROFILE', icon: User },
 ];
 
 // Merchant tabs - esnaf sadece ürün sayfasından ürün ekleyebilir, + tuşu yok
 const merchantTabs = [
-  { path: 'explore', label: 'Keşfet', icon: Compass },
-  { path: 'map', label: 'Harita', icon: Map },
-  { path: 'merchant-shop', label: 'Dükkanım', icon: Store },
-  { path: 'profile', label: 'Profil', icon: User },
+  { path: 'explore', labelKey: 'TREND_TITLE', icon: Compass },
+  { path: 'map', labelKey: 'MAP', icon: Map },
+  { path: 'merchant-shop', labelKey: 'MY_SHOP', icon: Store },
+  { path: 'profile', labelKey: 'PROFILE', icon: User },
 ];
 
 export default function MainApp() {
@@ -71,6 +72,9 @@ export default function MainApp() {
   // Get current path - handle both /app/explore and /app/explore/ cases
   const pathParts = location.pathname.split('/').filter(Boolean);
   const currentPath = pathParts[pathParts.length - 1] || 'explore';
+
+  // Language
+  const { t } = useLanguage();
 
   // Get tabs based on user type
   const tabs = isMerchant ? merchantTabs : regularTabs;
@@ -193,7 +197,7 @@ export default function MainApp() {
                 >
                   <div className="flex flex-col items-center justify-center gap-0.5">
                     <Icon className={`w-5 h-5 flex-shrink-0 ${tab.path === 'add' && (isMerchant ? 'bg-blue-600' : 'bg-green-600')} ${tab.path === 'add' && 'text-white rounded-full p-1 w-8 h-8'}`} />
-                    <span className="text-[10px] leading-tight font-medium whitespace-nowrap">{tab.label}</span>
+                    <span className="text-[10px] leading-tight font-medium whitespace-nowrap">{t(tab.labelKey || tab.label || '')}</span>
                   </div>
                   {isActive && (
                     <div className={`absolute top-0 left-0 right-0 h-0.5 ${isMerchant ? 'bg-blue-600' : 'bg-green-600'}`} />

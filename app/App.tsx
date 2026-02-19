@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { BrowserRouter, Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom';
 import { Toaster } from './components/ui/sonner';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
+import { LanguageProvider } from './contexts/LanguageContext';
 import { ThemeProvider } from './contexts/ThemeContext';
 import SplashScreen from './components/screens/SplashScreen';
 import OnboardingScreen from './components/screens/OnboardingScreen';
@@ -29,7 +30,7 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
 
 // App routes component (needs to be inside AuthProvider)
 function AppRoutes() {
-  const { user, isLoading } = useAuth(); // useAuth handles HMR cases internally
+  const { user, isLoading } = useAuth(); // useAuth handles live-reload cases internally
   const location = useLocation();
   const navigate = useNavigate();
   const [hasSeenOnboarding, setHasSeenOnboarding] = useState(false);
@@ -308,7 +309,7 @@ function App() {
     
     // If running inside Capacitor webview and currently loading from file://,
     // try to detect a running dev server and redirect the webview to it so
-    // livereload / HMR works even if Capacitor didn't set server.url.
+    // livereload / hot-reload works even if Capacitor didn't set server.url.
     const tryRedirectToDevServer = async () => {
       try {
         const isNative = typeof window !== 'undefined' && (window as any).Capacitor?.isNativePlatform && (window as any).Capacitor.isNativePlatform();
@@ -353,16 +354,18 @@ function App() {
     tryRedirectToDevServer();
 
   return (
-    <AuthProvider>
-      <ThemeProvider>
-        <BrowserRouter>
-          <div className="min-h-screen bg-background">
-            <AppRoutes />
-            <Toaster />
-          </div>
-        </BrowserRouter>
-      </ThemeProvider>
-    </AuthProvider>
+    <LanguageProvider>
+      <AuthProvider>
+        <ThemeProvider>
+          <BrowserRouter>
+            <div className="min-h-screen bg-background">
+              <AppRoutes />
+              <Toaster />
+            </div>
+          </BrowserRouter>
+        </ThemeProvider>
+      </AuthProvider>
+    </LanguageProvider>
   );
 }
 

@@ -13,6 +13,8 @@ import { useGeolocation } from '../../../src/hooks/useGeolocation';
 import { isNative } from '../../../src/utils/capacitor';
 import { Geolocation } from '@capacitor/geolocation';
 import { reverseGeocode } from '../../utils/geocoding';
+import { useTheme } from '../../contexts/ThemeContext';
+import { useLanguage } from '../../contexts/LanguageContext';
 
 const settingsItems = [
   { icon: Bell, label: 'Bildirimler', path: null },
@@ -32,6 +34,8 @@ export default function SettingsScreen() {
   const isMerchant = (user as any)?.is_merchant === true;
   const [searchRadius, setSearchRadius] = useState<number>(15);
   const [isSaving, setIsSaving] = useState(false);
+  const { themeOption, setThemeOption } = useTheme();
+  const { t } = useLanguage();
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   const [deleteConfirmText, setDeleteConfirmText] = useState('');
   const [isDeleting, setIsDeleting] = useState(false);
@@ -465,6 +469,33 @@ export default function SettingsScreen() {
                 }}
                 className="w-5 h-5 text-green-600 rounded focus:ring-green-500"
               />
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Theme Setting */}
+      <div className="p-4" style={{ scrollSnapAlign: 'start' }}>
+        <div className="bg-white rounded-lg p-4 border border-gray-200">
+          <div className="flex items-center gap-3 mb-4">
+            <Settings className="w-5 h-5 text-gray-600" />
+            <h2 className="text-lg font-semibold">{t('THEME')}</h2>
+          </div>
+          <div className="space-y-3">
+            <label className="flex items-center gap-3">
+              <input type="radio" name="theme" checked={themeOption === 'light'} onChange={() => setThemeOption('light')} />
+              <span className="ml-2">{t('LIGHT')}</span>
+            </label>
+            <label className="flex items-center gap-3">
+              <input type="radio" name="theme" checked={themeOption === 'dark'} onChange={() => setThemeOption('dark')} />
+              <span className="ml-2">{t('DARK')}</span>
+            </label>
+            <label className="flex items-center gap-3">
+              <input type="radio" name="theme" checked={themeOption === 'system'} onChange={() => setThemeOption('system')} />
+              <span className="ml-2">{t('SYSTEM')}</span>
+            </label>
+            <div>
+              <Button onClick={() => { toast.success(t('THEME_SAVED')); }} className="mt-2">{t('SAVE')}</Button>
             </div>
           </div>
         </div>

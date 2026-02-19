@@ -1,0 +1,19 @@
+.dark .bg-white { background-color: #0b1220 !important; }
+.dark .text-gray-900 { color: #e5e7eb !important; }
+.dark .text-gray-700 { color: #d1d5db !important; }
+.dark .text-gray-600 { color: #9ca3af !important; }
+.dark .text-gray-500 { color: #9ca3af !important; }
+.dark .text-gray-400 { color: #94a3b8 !important; }
+.dark .border-gray-200 { border-color: rgba(255,255,255,0.06) !important; }
+.dark .bg-yellow-50 { background-color: #2b2f34 !important; }
+.dark .bg-red-50 { background-color: #2b1212 !important; }
+.dark .bg-gray-50 { background-color: #071017 !important; }
+.dark .bg-green-600 { background-color: #065f46 !important; }
+.dark a, .dark button { color: inherit; }
+.dark .rounded-lg { box-shadow: none !important; }
+.dark .bg-white\/20 { background-color: rgba(255,255,255,0.06) !important; }
+.dark .bg-white\/50 { background-color: rgba(255,255,255,0.12) !important; }
+.dark .bg-red-600 { background-color: #7f1d1d !important; }
+.dark .bg-blue-600 { background-color: #1e40af !important; }
+.dark input, .dark textarea { background-color: transparent !important; color: inherit !important; border-color: rgba(255,255,255,0.06) !important; }
+.dark .avatar-fallback, .dark .avatar { background-color: rgba(255,255,255,0.06) !important; }

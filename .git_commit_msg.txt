@@ -1,3 +1,0 @@
-feat: implement testers' recommendations — onboarding, theme, feedback, i18n, Play Store copy
-
-Apply feedback from testers: add ThemeContext (dark mode), onboarding skip/replay enhancements, Feedback screen and API, basic i18n scaffolding (tr/en), Play Store description and production questionnaire draft, and register feedback route. These changes implement UX and discoverability improvements requested in the testing report.

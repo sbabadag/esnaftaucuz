@@ -5,6 +5,7 @@ import { Button } from '../ui/button';
 import { favoritesAPI } from '../../services/supabase-api';
 import { useAuth } from '../../contexts/AuthContext';
 import { toast } from 'sonner';
+import { useLanguage } from '../../contexts/LanguageContext';
 
 interface Favorite {
   id: string;
@@ -21,6 +22,7 @@ interface Favorite {
 export default function FavoritesScreen() {
   const navigate = useNavigate();
   const { user } = useAuth();
+  const { t, lang } = useLanguage();
   const [favorites, setFavorites] = useState<Favorite[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [removingIds, setRemovingIds] = useState<Set<string>>(new Set());
@@ -40,7 +42,7 @@ export default function FavoritesScreen() {
       setFavorites(data as Favorite[]);
     } catch (error: any) {
       console.error('Failed to load favorites:', error);
-      toast.error('Favoriler yüklenemedi');
+      toast.error(t('FAVORITES_LOAD_ERROR'));
     } finally {
       setIsLoading(false);
     }
@@ -49,14 +51,14 @@ export default function FavoritesScreen() {
   const handleRemoveFavorite = async (productId: string) => {
     if (!user) return;
 
-    try {
+      try {
       setRemovingIds(prev => new Set(prev).add(productId));
       await favoritesAPI.remove(productId, user.id);
       setFavorites(prev => prev.filter(fav => fav.product_id !== productId));
-      toast.success('Favorilerden kaldırıldı');
+        toast.success(t('FAVORITE_REMOVED'));
     } catch (error: any) {
       console.error('Failed to remove favorite:', error);
-      toast.error('Favoriden kaldırılamadı');
+        toast.error(t('FAVORITE_REMOVE_ERROR'));
     } finally {
       setRemovingIds(prev => {
         const newSet = new Set(prev);
@@ -70,8 +72,8 @@ export default function FavoritesScreen() {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
         <div className="text-center">
-          <p className="text-gray-500 mb-4">Favorileri görmek için giriş yapmanız gerekiyor</p>
-          <Button onClick={() => navigate('/login')}>Giriş Yap</Button>
+          <p className="text-gray-500 mb-4">{t('MUST_LOGIN_TO_VIEW_FAVORITES')}</p>
+          <Button onClick={() => navigate('/login')}>{t('LOGIN')}</Button>
         </div>
       </div>
     );
@@ -80,7 +82,7 @@ export default function FavoritesScreen() {
   if (isLoading) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <div className="text-gray-500">Yükleniyor...</div>
+        <div className="text-gray-500">{t('LOADING')}</div>
       </div>
     );
   }
@@ -96,7 +98,7 @@ export default function FavoritesScreen() {
           >
             <ArrowLeft className="w-5 h-5" />
           </button>
-          <h1 className="text-xl font-semibold">Favorilerim</h1>
+          <h1 className="text-xl font-semibold">{t('FAVORITES_TITLE')}</h1>
         </div>
       </div>
 
@@ -106,16 +108,16 @@ export default function FavoritesScreen() {
           <div className="bg-white rounded-lg p-8 text-center border border-gray-200">
             <Heart className="w-16 h-16 text-gray-300 mx-auto mb-4" />
             <h2 className="text-lg font-semibold text-gray-700 mb-2">
-              Henüz favori ürününüz yok
+              {t('NO_FAVORITES_TITLE')}
             </h2>
             <p className="text-sm text-gray-500 mb-4">
-              Beğendiğiniz ürünleri favorilerinize ekleyerek kolayca erişebilirsiniz
+              {t('NO_FAVORITES_DESC')}
             </p>
             <Button 
               onClick={() => navigate('/app/explore')}
               className="bg-green-600 hover:bg-green-700"
             >
-              Ürünleri Keşfet
+              {t('EXPLORE_PRODUCTS')}
             </Button>
           </div>
         ) : (
@@ -157,7 +159,7 @@ export default function FavoritesScreen() {
                       <p className="text-sm text-gray-500">{favorite.product.category}</p>
                     )}
                     <p className="text-xs text-gray-400 mt-1">
-                      {new Date(favorite.created_at).toLocaleDateString('tr-TR', {
+                      {new Date(favorite.created_at).toLocaleDateString(lang === 'tr' ? 'tr-TR' : 'en-US', {
                         year: 'numeric',
                         month: 'long',
                         day: 'numeric'

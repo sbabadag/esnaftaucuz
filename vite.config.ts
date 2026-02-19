@@ -1,34 +1,33 @@
 import { defineConfig } from 'vite';
+import path from 'path';
+import os from 'os';
 import react from '@vitejs/plugin-react';
+import tailwindcss from '@tailwindcss/vite';
 
-// Vite config tuned for mobile livereload with Capacitor.
-// - server.host=true makes dev server listen on all interfaces so device can reach it.
-// - hmr.clientPort ensures the HMR client connects to the same port.
-export default defineConfig({
-  plugins: [react()],
-  server: {
-    host: true,
-    port: 5173,
-    strictPort: false,
-    hmr: {
-      protocol: 'ws',
-      clientPort: 5173,
-    },
-  },
-});
+// Helper: detect a non-internal IPv4 address to make HMR reachable from mobile devices.
+function getLocalIp(): string {
+  const nets = os.networkInterfaces();
+  for (const name of Object.keys(nets)) {
+    const list = nets[name] || [];
+    for (const net of list) {
+      // Node's types may vary; check for IPv4 and non-internal
+      if ((net as any).family === 'IPv4' && !(net as any).internal) {
+        return (net as any).address;
+      }
+    }
+  }
+  return 'localhost';
+}
 
-import { defineConfig } from 'vite'
-import path from 'path'
-import tailwindcss from '@tailwindcss/vite'
-import react from '@vitejs/plugin-react'
+const devHost = process.env.VITE_DEV_HOST || getLocalIp();
+const devPort = process.env.VITE_DEV_PORT ? Number(process.env.VITE_DEV_PORT) : 5173;
 
-// https://vitejs.dev/config/
+// Unified Vite config tuned for mobile livereload with Capacitor.
 export default defineConfig({
   // Use /esnaftaucuz/ for GitHub Pages, / for custom domain
   base: process.env.GITHUB_ACTIONS && !process.env.CUSTOM_DOMAIN ? '/esnaftaucuz/' : '/',
   plugins: [
-    // The React and Tailwind plugins are both required for Make, even if
-    // Tailwind is not being actively used – do not remove them
+    // React and Tailwind plugins are required
     react(),
     tailwindcss(),
   ],
@@ -39,9 +38,14 @@ export default defineConfig({
     },
   },
   server: {
-    host: '0.0.0.0', // Allow external connections
-    port: 5173,
+    host: true, // allow external connections on all interfaces
+    port: devPort,
     strictPort: false,
+    hmr: {
+      protocol: 'ws',
+      host: devHost,
+      port: devPort,
+    },
   },
   preview: {
     host: '0.0.0.0',
@@ -50,10 +54,7 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     emptyOutDir: true,
-    // Copy public directory (CNAME file) to dist
     copyPublicDir: true,
-    // Vite automatically injects VITE_* environment variables into import.meta.env
-    // No need to manually define them - Vite handles this automatically
   },
   publicDir: 'public',
-})
+});

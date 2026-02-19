@@ -12,7 +12,7 @@ Smooth hot-reload for Capacitor (Android) — Quick guide
 - Disable VPNs/firewalls blocking port 5173.
 - If your machine has multiple network interfaces, use the "Network" URL printed by Vite (http://192.x.x.x:5173) when troubleshooting.
 
-4) If HMR doesn't update:
+4) If hot-reload doesn't update:
 - Tap "Reload webview" in Settings (dev box) to force the WebView to reload the dev server.
 - Re-deploy with: npm run dev:android
 - Check Vite logs for "hmr update" entries.

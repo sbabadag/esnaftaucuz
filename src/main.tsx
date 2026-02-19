@@ -6,6 +6,7 @@ import { Keyboard } from '@capacitor/keyboard';
 import App from '../app/App';
 import { ErrorBoundary } from '../app/components/ErrorBoundary';
 import '../styles/index.css';
+import '../app/styles/dark-overrides.css';
 import 'leaflet/dist/leaflet.css';
 
 // Initialize Capacitor plugins for native

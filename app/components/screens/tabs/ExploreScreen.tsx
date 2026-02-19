@@ -11,6 +11,7 @@ import { Avatar, AvatarImage, AvatarFallback } from '../../ui/avatar';
 import { productsAPI, pricesAPI, searchAPI, merchantProductsAPI } from '../../../services/supabase-api';
 import { useGeolocation } from '../../../../src/hooks/useGeolocation';
 import { useAuth } from '../../../contexts/AuthContext';
+import { useLanguage } from '../../../contexts/LanguageContext';
 import { reverseGeocode } from '../../../utils/geocoding';
 import { supabase } from '../../../lib/supabase';
 import { toast } from 'sonner';
@@ -64,6 +65,7 @@ export default function ExploreScreen() {
   const { getCurrentPosition } = useGeolocation();
   const { user } = useAuth();
   const isMerchant = (user as any)?.is_merchant === true;
+  const { t, lang, setLang } = useLanguage();
   const [searchParams, setSearchParams] = useSearchParams();
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<{
@@ -81,7 +83,13 @@ export default function ExploreScreen() {
   const [pullDistance, setPullDistance] = useState(0);
   const touchStartY = useRef<number | null>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const headerRef = useRef<HTMLDivElement | null>(null);
+  const heroRef = useRef<HTMLDivElement | null>(null);
   const channelRef = useRef<any>(null);
+  const [headerHeight, setHeaderHeight] = useState<number>(0);
+  const [heroHeight, setHeroHeight] = useState<number>(0);
+  const HEADER_OVERLAP = 0; // pixels to pull content up so it starts immediately under the search box
+  const HEADER_GAP = 8; // small extra gap to avoid overlap
   const retryCountRef = useRef<number>(0);
   const [currentLocation, setCurrentLocation] = useState<string>('Konya / Selçuklu');
   const [isGettingLocation, setIsGettingLocation] = useState(false);
@@ -419,8 +427,35 @@ export default function ExploreScreen() {
       clearTimeout(safetyTimeout);
     });
     
+    // Use ResizeObserver to track hero + header heights precisely (handles font/load/layout changes)
+    let ro: ResizeObserver | null = null;
+    if (typeof ResizeObserver !== 'undefined') {
+      try {
+        ro = new ResizeObserver(() => {
+          try {
+            const hh = headerRef.current?.offsetHeight || 0;
+            const hv = heroRef.current?.offsetHeight || 0;
+            setHeaderHeight(hh);
+            setHeroHeight(hv);
+          } catch (e) { /* ignore */ }
+        });
+        if (headerRef.current) ro.observe(headerRef.current);
+        if (heroRef.current) ro.observe(heroRef.current);
+      } catch (e) {
+        ro = null;
+      }
+    }
+    // initial measure (defer slightly to allow layout)
+    setTimeout(() => {
+      try {
+        setHeaderHeight(headerRef.current?.offsetHeight || 0);
+        setHeroHeight(heroRef.current?.offsetHeight || 0);
+      } catch (e) {}
+    }, 0);
+
     return () => {
       clearTimeout(safetyTimeout);
+      if (ro && headerRef.current) ro.disconnect();
     };
   }, [loadData]);
 
@@ -854,7 +889,7 @@ export default function ExploreScreen() {
       )}
 
       {/* Fixed Hero Section */}
-      <div className={`fixed left-0 right-0 ${isMerchant ? 'bg-gradient-to-br from-blue-600 via-blue-500 to-blue-600 text-white' : 'bg-gradient-to-br from-green-600 via-green-500 to-emerald-600 text-white'}`} style={{ 
+      <div ref={heroRef} className={`fixed left-0 right-0 ${isMerchant ? 'bg-gradient-to-br from-blue-600 via-blue-500 to-blue-600 text-white' : 'bg-gradient-to-br from-green-600 via-green-500 to-emerald-600 text-white'}`} style={{ 
         top: 'env(safe-area-inset-top, 0px)',
         paddingTop: '0.5rem',
         paddingBottom: '0.5rem',
@@ -869,7 +904,7 @@ export default function ExploreScreen() {
             </div>
             <div className="flex-1 min-w-0">
             <h1 className="text-lg font-bold">esnaftaucuz</h1>
-            <p className={`text-xs opacity-90 leading-tight ${isMerchant ? 'text-blue-50' : 'text-green-50'}`}>En iyi fiyatları keşfet (HMR)</p>
+            <p className={`text-xs opacity-90 leading-tight ${isMerchant ? 'text-blue-50' : 'text-green-50'}`}>{t('HERO_SUB')}</p>
             </div>
           </div>
           <div className="flex items-center gap-3">
@@ -886,19 +921,26 @@ export default function ExploreScreen() {
             >
               <Bell className="w-5 h-5" />
             </button>
+            <button
+              onClick={() => setLang(lang === 'tr' ? 'en' : 'tr')}
+              aria-label="Toggle language"
+              className="ml-2 px-3 py-1 rounded bg-white/20 text-sm"
+            >
+              {lang === 'tr' ? 'TR' : 'EN'}
+            </button>
           </div>
         </div>
       </div>
 
       {/* Header - positioned directly below hero with no gap */}
-      <div className="bg-white border-b border-gray-200 sticky" style={{ 
-        // place the search/header 5px below the esnaftaucuz hero bar (hero height = 56px)
-        top: 'calc(56px + env(safe-area-inset-top, 0px) + 5px)', 
+      <div ref={headerRef} className="bg-white border-b border-gray-200 sticky" style={{ 
+        // place the search/header directly below the hero (measured heroHeight) with a small gap
+        top: `calc(${heroHeight + HEADER_GAP}px + env(safe-area-inset-top, 0px))`, 
         margin: 0, 
         padding: 0,
         zIndex: 99
       }}>
-        <div className="px-4 py-1.5">
+        <div className="px-4 py-1.5" style={{ marginTop: 0 }}>
           <div className="flex gap-2">
             <div className="flex-1 relative">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
@@ -906,7 +948,7 @@ export default function ExploreScreen() {
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 onKeyPress={(e) => e.key === 'Enter' && handleSearch()}
-                placeholder="Ürün veya yer ara"
+                placeholder={t('SEARCH_PLACEHOLDER')}
                 className="pl-10"
               />
             </div>
@@ -976,10 +1018,10 @@ export default function ExploreScreen() {
                       className="flex-1 bg-green-600 hover:bg-green-700"
                       onClick={async () => {
                         await loadData();
-                        toast.success('Filtre uygulandı');
+                        toast.success(t('REFRESHED'));
                       }}
                     >
-                      Filtreyi Uygula
+                      {t('FILTER_APPLY')}
                     </Button>
                     <Button 
                       variant="outline" 
@@ -996,7 +1038,7 @@ export default function ExploreScreen() {
                         });
                       }}
                     >
-                      Temizle
+                      {t('CLEAR')}
                     </Button>
                   </div>
                 </div>
@@ -1012,10 +1054,10 @@ export default function ExploreScreen() {
         className="px-3 sm:px-4 md:px-6 pb-3 sm:pb-4 md:pb-6 space-y-3 sm:space-y-4 overflow-y-auto max-w-7xl mx-auto"
           style={{ 
           paddingTop: pullDistance > 0 ? `${Math.min(pullDistance, 60)}px` : '0px',
-          // account for hero (56px) + 5px gap + approximate header height (64px)
-          marginTop: `calc(56px + env(safe-area-inset-top, 0px) + 5px + 64px)`,
-          minHeight: 'calc(100vh - (56px + 5px + 64px) - env(safe-area-inset-top, 0px))',
-          maxHeight: 'calc(100vh - (56px + 5px + 64px) - env(safe-area-inset-top, 0px))',
+          // account for hero (measured) + measured header height so content starts immediately under search box
+          marginTop: `calc(${heroHeight + HEADER_GAP}px + env(safe-area-inset-top, 0px) + ${headerHeight}px - ${HEADER_OVERLAP}px)`,
+          minHeight: `calc(100vh - (${heroHeight + HEADER_GAP}px + ${headerHeight}px - ${HEADER_OVERLAP}px) - env(safe-area-inset-top, 0px))`,
+          maxHeight: `calc(100vh - (${heroHeight + HEADER_GAP}px + ${headerHeight}px - ${HEADER_OVERLAP}px) - env(safe-area-inset-top, 0px))`,
           transition: pullDistance === 0 ? 'padding-top 0.2s' : 'none',
           position: 'relative',
           zIndex: 1
@@ -1024,7 +1066,7 @@ export default function ExploreScreen() {
         {/* Trend Products - En üste taşındı */}
         {!searchResults && (
           <section>
-            <h2 className="text-base sm:text-lg mb-2 sm:mb-3 text-gray-900 font-semibold">Bugün En Çok Bakılanlar</h2>
+            <h2 className="text-base sm:text-lg mb-0 sm:mb-0 text-gray-900 font-semibold">{t('TREND_TITLE')}</h2>
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-2 sm:gap-3">
               {trendProducts.length > 0 ? (
                 trendProducts.slice(0, 12).map((product) => (
@@ -1067,7 +1109,7 @@ export default function ExploreScreen() {
           <div className="space-y-4">
             <div className="flex items-center justify-between">
               <h2 className="text-lg font-semibold">
-                Arama Sonuçları: "{searchQuery}"
+                {lang === 'tr' ? `Arama Sonuçları: "${searchQuery}"` : `Search results: "${searchQuery}"`}
               </h2>
               <Button
                 variant="outline"
@@ -1081,7 +1123,7 @@ export default function ExploreScreen() {
             </div>
 
             {isSearching ? (
-              <div className="text-center py-8 text-gray-500">Aranıyor...</div>
+                <div className="text-center py-8 text-gray-500">{t('SEARCHING')}</div>
             ) : (
               <>
                 {/* Products Results */}
@@ -1308,9 +1350,9 @@ export default function ExploreScreen() {
                  searchResults.locations.length === 0 && (
                   <div className="text-center py-12">
                     <Package className="w-12 h-12 text-gray-400 mx-auto mb-4" />
-                    <p className="text-gray-600 font-medium mb-2">Sonuç bulunamadı</p>
+                    <p className="text-gray-600 font-medium mb-2">{t('NO_RESULTS_TITLE')}</p>
                     <p className="text-sm text-gray-500">
-                      "{searchQuery}" için arama sonucu bulunamadı. Farklı bir terim deneyin.
+                      {t('NO_RESULTS_DESC', { q: searchQuery })}
                     </p>
                   </div>
                 )}
@@ -1323,13 +1365,13 @@ export default function ExploreScreen() {
         {!searchResults && (
           <>
             {isLoading ? (
-              <div className="text-center py-8 text-gray-500">Yükleniyor...</div>
+              <div className="text-center py-8 text-gray-500">{t('LOADING')}</div>
             ) : (
               <>
             {/* Merchant Shops */}
             {merchantShops.length > 0 && (
               <section>
-                <h2 className="text-base sm:text-lg mb-2 sm:mb-3 text-gray-900 font-semibold">Esnaf Dükkanları</h2>
+                <h2 className="text-base sm:text-lg mb-2 sm:mb-3 text-gray-900 font-semibold">{t('STORES_TITLE')}</h2>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                   {merchantShops.map((shop) => (
                     <div

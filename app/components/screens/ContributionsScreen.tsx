@@ -5,6 +5,7 @@ import { Badge } from '../ui/badge';
 import { useAuth } from '../../contexts/AuthContext';
 import { usersAPI } from '../../services/supabase-api';
 import { toast } from 'sonner';
+import { useLanguage } from '../../contexts/LanguageContext';
 
 interface Price {
   id: string;
@@ -35,6 +36,7 @@ interface Price {
 export default function ContributionsScreen() {
   const navigate = useNavigate();
   const { user } = useAuth();
+  const { t } = useLanguage();
   const [prices, setPrices] = useState<Price[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
@@ -51,7 +53,7 @@ export default function ContributionsScreen() {
       setPrices(data || []);
     } catch (error) {
       console.error('Failed to load contributions:', error);
-      toast.error('Katkılar yüklenemedi');
+      toast.error(t('CONTRIBUTIONS_LOAD_ERROR'));
     } finally {
       setIsLoading(false);
     }
@@ -87,7 +89,7 @@ export default function ContributionsScreen() {
   if (isLoading) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <div className="text-gray-500">Yükleniyor...</div>
+        <div className="text-gray-500">{t('LOADING')}</div>
       </div>
     );
   }
@@ -96,11 +98,11 @@ export default function ContributionsScreen() {
     <div className="min-h-screen bg-gray-50">
       {/* Header */}
       <div className="sticky bg-white border-b border-gray-200 p-4 z-10" style={{ top: 'env(safe-area-inset-top, 0px)', paddingTop: 'calc(1rem + env(safe-area-inset-top, 0px))' }}>
-        <div className="flex items-center gap-4">
+          <div className="flex items-center gap-4">
           <button onClick={() => navigate(-1)} className="p-2 -ml-2 hover:bg-gray-100 rounded-full">
             <ArrowLeft className="w-5 h-5" />
           </button>
-          <h1 className="text-xl">Girilen Ürünler</h1>
+          <h1 className="text-xl">{t('CONTRIBUTIONS_TITLE')}</h1>
         </div>
       </div>
 
@@ -145,7 +147,7 @@ export default function ContributionsScreen() {
                     <div className="flex justify-between items-start mb-2">
                       <div className="flex-1 min-w-0">
                         <h3 className="text-lg font-semibold text-gray-900 mb-1">
-                          {item.product?.name || 'Bilinmeyen ürün'}
+                          {item.product?.name || t('UNKNOWN_PRODUCT')}
                         </h3>
                         <div className="text-2xl text-green-600 font-semibold">
                           {formatPrice(item.price)} TL{' '}
@@ -153,14 +155,14 @@ export default function ContributionsScreen() {
                         </div>
                       </div>
                       {isToday(createdAt) && (
-                        <Badge className="bg-green-600 ml-2 flex-shrink-0">BUGÜN</Badge>
+                        <Badge className="bg-green-600 ml-2 flex-shrink-0">{t('TODAY')}</Badge>
                       )}
                     </div>
 
                     <div className="flex items-center gap-4 text-sm text-gray-500 mb-2">
                       <span className="flex items-center gap-1">
                         <MapPin className="w-4 h-4" />
-                        <span className="truncate">{item.location?.name || 'Bilinmeyen konum'}</span>
+                      <span className="truncate">{item.location?.name || t('UNKNOWN_LOCATION')}</span>
                       </span>
                       <span className="flex items-center gap-1">
                         <Clock className="w-4 h-4" />
@@ -171,13 +173,13 @@ export default function ContributionsScreen() {
                     {isVerified && (
                       <div className="flex items-center gap-1.5 text-sm text-green-600">
                         <CheckCircle2 className="w-4 h-4" />
-                        <span>Doğrulanmış</span>
+                        <span>{t('VERIFICATIONS')}</span>
                       </div>
                     )}
 
                     {!item.photo && (
                       <div className="mt-2 text-xs text-gray-500 italic">
-                        Bu fiyat için fotoğraf eklenmemiş
+                        {t('PHOTO_MISSING')}
                       </div>
                     )}
                   </div>
@@ -188,9 +190,9 @@ export default function ContributionsScreen() {
         ) : (
           <div className="text-center py-12">
             <Package className="w-16 h-16 text-gray-400 mx-auto mb-4" />
-            <p className="text-gray-600 font-medium mb-2">Henüz fiyat girilmemiş</p>
+            <p className="text-gray-600 font-medium mb-2">{t('NO_CONTRIBUTIONS_TITLE')}</p>
             <p className="text-sm text-gray-500">
-              İlk fiyatınızı eklemek için "Ekle" sekmesine gidin
+              {t('NO_CONTRIBUTIONS_DESC')}
             </p>
           </div>
         )}

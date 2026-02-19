@@ -8,14 +8,13 @@ import { useAuth } from '../../../contexts/AuthContext';
 import { toast } from 'sonner';
 import { useTheme } from '../../../contexts/ThemeContext';
 import { useState } from 'react';
+import { useLanguage } from '../../../contexts/LanguageContext';
 
 export default function ProfileScreen() {
   const navigate = useNavigate();
   const { logout, user } = useAuth();
   const { theme, toggleTheme } = useTheme();
-  const [locale, setLocale] = useState<string>(() => {
-    try { return localStorage.getItem('locale') || 'tr'; } catch { return 'tr'; }
-  });
+  const { t, lang, setLang } = useLanguage();
 
   // Debug: Log user and is_merchant status
   useEffect(() => {
@@ -31,11 +30,11 @@ export default function ProfileScreen() {
   const handleLogout = async () => {
     try {
       await logout();
-      toast.success('Çıkış yapıldı');
+      toast.success(t('LOGOUT_SUCCESS'));
       navigate('/login', { replace: true });
     } catch (error) {
       console.error('Logout error:', error);
-      toast.error('Çıkış yapılırken bir hata oluştu');
+      toast.error(t('LOGOUT_ERROR'));
     }
   };
 
@@ -51,15 +50,15 @@ export default function ProfileScreen() {
 
   // Get level badge text
   const getLevelBadge = () => {
-    if (!user?.level) return 'Yeni';
+    if (!user?.level) return t('LEVEL_NEW');
     const levels: Record<number, string> = {
-      1: 'Yeni',
-      2: 'Mahalleli',
-      3: 'Uzman',
-      4: 'Master',
-      5: 'Efsane',
+      1: t('LEVEL_NEW'),
+      2: t('LEVEL_NEIGHBOR'),
+      3: t('LEVEL_EXPERT'),
+      4: t('LEVEL_MASTER'),
+      5: t('LEVEL_LEGEND'),
     };
-    return levels[user.level] || 'Yeni';
+    return levels[user.level] || t('LEVEL_NEW');
   };
 
   const isMerchant = (user as any)?.is_merchant === true;
@@ -69,28 +68,31 @@ export default function ProfileScreen() {
   const menuItems = [
     // Esnaf için özel menü öğesi
     ...(isMerchant ? [
-      { icon: Store, label: 'Dükkanım', onClick: () => navigate(`/app/merchant-shop/${user?.id}`) },
+      { icon: Store, label: t('MY_SHOP'), onClick: () => navigate(`/app/merchant-shop/${user?.id}`) },
     ] : []),
-    { icon: Share2, label: 'Katkılarım', onClick: () => navigate('/app/contributions') },
-    { icon: Heart, label: 'Favorilerim', onClick: () => navigate('/app/favorites') },
-    { icon: Award, label: 'Rozetler', onClick: () => {} },
-    { icon: Settings, label: 'Ayarlar', onClick: () => navigate('/app/settings') },
-    { icon: Share2, label: 'Destek & Geri Bildirim', onClick: () => navigate('/app/feedback') },
+    { icon: Share2, label: t('CONTRIBUTIONS'), onClick: () => navigate('/app/contributions') },
+    { icon: Heart, label: t('FAVORITES_TITLE'), onClick: () => navigate('/app/favorites') },
+    { icon: Award, label: t('BADGES'), onClick: () => {} },
+    { icon: Settings, label: t('SETTINGS'), onClick: () => navigate('/app/settings') },
+    { icon: Share2, label: t('FEEDBACK_AND_SUPPORT'), onClick: () => navigate('/app/feedback') },
     // Theme toggle (not a navigation item)
-    { icon: Share2, label: `Tema: ${theme === 'dark' ? 'Koyu' : 'Açık'}`, onClick: () => toggleTheme() },
+    { icon: Share2, label: `${t('THEME')}: ${theme === 'dark' ? t('DARK') : t('LIGHT')}`, onClick: () => toggleTheme() },
     // Language selector entry (cycles en/tr)
-    { icon: Share2, label: `Dil: ${locale === 'tr' ? 'Türkçe' : 'English'}`, onClick: () => {
-      const next = locale === 'tr' ? 'en' : 'tr';
-      try { localStorage.setItem('locale', next); } catch {}
-      setLocale(next);
-      toast.success('Dil değiştirildi');
+    { icon: Share2, label: `${t('LANGUAGE')}: ${lang === 'tr' ? 'Türkçe' : 'English'}`, onClick: () => {
+      const next = lang === 'tr' ? 'en' : 'tr';
+      try { setLang(next as any); } catch {}
+      // show toast in the newly selected language
+      toast.success(next === 'tr' ? 'Dil değiştirildi' : 'Language changed');
     } },
   ];
 
   return (
     <div className="min-h-screen bg-gray-50">
       {/* Profile Header */}
-      <div className="bg-white p-6 border-b border-gray-200" style={{ paddingTop: 'calc(1.5rem + env(safe-area-inset-top, 0px))' }}>
+      <div
+        className={`${isMerchant ? 'bg-blue-600' : 'bg-white'} p-6 border-b ${isMerchant ? 'border-blue-600' : 'border-gray-200'}`}
+        style={{ paddingTop: 'calc(1.5rem + env(safe-area-inset-top, 0px))' }}
+      >
         <div className="flex items-center gap-4 mb-6">
           <Avatar className="w-20 h-20">
             <AvatarImage src={user?.avatar || ''} />
@@ -100,13 +102,13 @@ export default function ProfileScreen() {
           </Avatar>
           <div className="flex-1">
             <div className="flex items-center gap-2">
-              <h2 className="text-2xl">{user?.name || 'Kullanıcı'}</h2>
+              <h2 className={`text-2xl ${isMerchant ? 'text-white' : ''}`}>{user?.name || 'Kullanıcı'}</h2>
               {(user as any)?.is_merchant && (
-                <Badge className="bg-blue-600 text-white">Esnaf</Badge>
+                <Badge className="bg-white text-blue-600">Esnaf</Badge>
               )}
             </div>
             <div className="flex items-center gap-2 mt-1">
-              <span className="text-sm text-gray-600">Seviye:</span>
+              <span className={`text-sm ${isMerchant ? 'text-white/80' : 'text-gray-600'}`}>{t('LEVEL_LABEL')}</span>
               <Badge variant="secondary">{getLevelBadge()} 🏅</Badge>
             </div>
           </div>
@@ -120,7 +122,7 @@ export default function ProfileScreen() {
                 ? user.contributions?.shares || 0 
                 : user?.contributions || 0}
             </div>
-            <div className="text-sm text-gray-600">Paylaşım</div>
+            <div className="text-sm text-gray-600">{t('SHARES')}</div>
           </div>
           <div className="text-center">
             <div className={`text-2xl ${isMerchant ? 'text-blue-600' : 'text-green-600'}`}>
@@ -128,17 +130,17 @@ export default function ProfileScreen() {
                 ? user.contributions?.verifications || 0 
                 : 0}
             </div>
-            <div className="text-sm text-gray-600">Doğrulama</div>
+            <div className="text-sm text-gray-600">{t('VERIFICATIONS')}</div>
           </div>
           <div className="text-center">
             <div className={`text-2xl ${isMerchant ? 'text-blue-600' : 'text-green-600'}`}>{user?.points || 0}</div>
-            <div className="text-sm text-gray-600">Puan</div>
+            <div className="text-sm text-gray-600">{t('POINTS')}</div>
           </div>
         </div>
       </div>
 
       {/* Menu */}
-      <div className="p-4 space-y-2">
+        <div className="p-4 space-y-2">
         {menuItems.map((item) => (
           <button
             key={item.label}
