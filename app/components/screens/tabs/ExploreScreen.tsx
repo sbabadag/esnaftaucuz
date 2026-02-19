@@ -866,12 +866,21 @@ export default function ExploreScreen() {
             <p className={`text-xs opacity-90 leading-tight ${isMerchant ? 'text-blue-50' : 'text-green-50'}`}>En iyi fiyatları keşfet</p>
             </div>
           </div>
-          <button
-            onClick={() => navigate('/app/notifications')}
-            className="p-2 hover:bg-white/20 rounded-full flex-shrink-0 transition-colors"
-          >
-            <Bell className="w-5 h-5" />
-          </button>
+          <div className="flex items-center gap-3">
+            {user?.name && (
+              <div className="hidden sm:block mr-2">
+                <span className={`text-sm font-medium ${isMerchant ? 'text-blue-50' : 'text-white'}`}>
+                  {String(user.name).split(' ')[0]}
+                </span>
+              </div>
+            )}
+            <button
+              onClick={() => navigate('/app/notifications')}
+              className="p-2 hover:bg-white/20 rounded-full flex-shrink-0 transition-colors"
+            >
+              <Bell className="w-5 h-5" />
+            </button>
+          </div>
         </div>
       </div>
 
