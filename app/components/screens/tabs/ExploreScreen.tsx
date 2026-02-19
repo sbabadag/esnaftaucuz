@@ -820,6 +820,12 @@ export default function ExploreScreen() {
       onTouchMove={handleTouchMove}
       onTouchEnd={handleTouchEnd}
     >
+      {/* Debug banner showing webview origin to confirm where assets are loaded from */}
+      <div className="fixed left-0 right-0 z-60 flex justify-center pointer-events-none" style={{ top: 'calc(env(safe-area-inset-top, 0px) + 4px)' }}>
+        <div className="bg-red-600 text-white text-xs px-3 py-1 rounded opacity-95 pointer-events-auto">
+          Origin: {typeof window !== 'undefined' ? window.location.protocol + '//' + window.location.host : 'n/a'} {typeof window !== 'undefined' && window.location.pathname}
+        </div>
+      </div>
       {/* Pull-to-refresh indicator */}
       {pullDistance > 0 && (
         <div 
