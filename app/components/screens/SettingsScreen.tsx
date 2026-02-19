@@ -27,7 +27,9 @@ const RADIUS_OPTIONS = [1, 5, 10, 15, 20, 50, 100, 1000];
 export default function SettingsScreen() {
   const navigate = useNavigate();
   const { user, refreshUser, logout } = useAuth();
+  const isGuest = (user as any)?.is_guest === true;
   const { getCurrentPosition } = useGeolocation();
+  const isMerchant = (user as any)?.is_merchant === true;
   const [searchRadius, setSearchRadius] = useState<number>(15);
   const [isSaving, setIsSaving] = useState(false);
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
@@ -37,6 +39,8 @@ export default function SettingsScreen() {
   const [isRequestingLocation, setIsRequestingLocation] = useState(false);
   const [currentAddress, setCurrentAddress] = useState<string>('');
   const [isLoadingAddress, setIsLoadingAddress] = useState(false);
+  // Detect at runtime if the WebView is loading from an HTTP origin (dev server)
+  const isDevWebview = typeof window !== 'undefined' && typeof window.location !== 'undefined' && window.location.protocol.startsWith('http');
 
   useEffect(() => {
     // Load user's search radius preference
@@ -118,6 +122,10 @@ export default function SettingsScreen() {
       toast.error('Giriş yapmanız gerekiyor');
       return;
     }
+    if (isGuest) {
+      toast.error('Misafir hesabı bazı ayarları değiştiremez. Lütfen kaydolun veya giriş yapın.');
+      return;
+    }
 
     // Validate radius is in allowed values and within database constraint (1-1000)
     if (!RADIUS_OPTIONS.includes(searchRadius)) {
@@ -186,17 +194,59 @@ export default function SettingsScreen() {
   return (
     <div className="min-h-screen bg-gray-50">
       {/* Header */}
-      <div className="sticky bg-white border-b border-gray-200 p-4 z-10" style={{ top: 'env(safe-area-inset-top, 0px)', paddingTop: 'calc(1rem + env(safe-area-inset-top, 0px))' }}>
+      <div
+        className={`sticky border-b p-4 z-50 ${isMerchant ? 'bg-blue-600 border-blue-600' : 'bg-white border-gray-200'}`}
+        style={{
+          top: 0,
+          paddingTop: 'env(safe-area-inset-top, 0px)',
+          height: 'calc(56px + env(safe-area-inset-top, 0px))',
+        }}
+      >
         <div className="flex items-center gap-4">
-          <button onClick={() => navigate(-1)} className="p-2 -ml-2 hover:bg-gray-100 rounded-full">
-            <ArrowLeft className="w-5 h-5" />
+          <button
+            onClick={() => navigate(-1)}
+            className={`p-2 -ml-2 rounded-full ${isMerchant ? 'hover:bg-blue-700' : 'hover:bg-gray-100'}`}
+            aria-label="Geri"
+          >
+            <ArrowLeft className={`w-5 h-5 ${isMerchant ? 'text-white' : ''}`} />
           </button>
-          <h1 className="text-xl">Ayarlar</h1>
+          <h1 className={`text-xl ${isMerchant ? 'text-white' : ''}`}>Ayarlar</h1>
         </div>
       </div>
-
-      {/* Location Permission Setting */}
-      <div className="px-4 pt-2" style={{ paddingTop: 'calc(0px + env(safe-area-inset-top, 0px))' }}>
+      {/* Scrollable content under the header (limit flow under Ayarlar band) */}
+      <div
+        className="overflow-y-auto"
+        style={{
+          // leave space for sticky header (status + header height)
+          paddingTop: 'calc(56px + env(safe-area-inset-top, 0px))',
+          maxHeight: 'calc(100vh - (56px + env(safe-area-inset-top, 0px)))',
+          paddingBottom: 'env(safe-area-inset-bottom, 0px)',
+          scrollSnapType: 'y mandatory',
+          WebkitOverflowScrolling: 'touch',
+        }}
+      >
+        {/* Dev indicator - shows current webview URL when connected to a dev server (http) to help debug livereload */}
+        {(import.meta.env.DEV || isDevWebview) && (
+          <div className="p-3 bg-yellow-50 border-l-4 border-yellow-400 text-xs text-gray-700 mb-3 mx-4 rounded">
+            <div className="font-medium">Dev mode</div>
+            <div className="break-all">URL: {typeof window !== 'undefined' ? window.location.origin : 'n/a'}</div>
+            <div className="mt-2">
+              <button
+                onClick={() => {
+                  try {
+                    // Try to reload the webview by navigating to origin
+                    window.location.href = window.location.origin;
+                  } catch {}
+                }}
+                className="text-sm text-yellow-700 underline"
+              >
+                Reload webview
+              </button>
+            </div>
+          </div>
+        )}
+        {/* Location Permission Setting */}
+        <div className="px-4 pt-2" style={{ paddingTop: 'calc(0px + env(safe-area-inset-top, 0px))', scrollSnapAlign: 'start' }}>
         <div className="bg-white rounded-lg p-4 border border-gray-200 mb-4">
           <div className="flex items-center gap-3 mb-4">
             <MapPin className="w-5 h-5 text-gray-600" />
@@ -310,7 +360,7 @@ export default function SettingsScreen() {
       </div>
 
       {/* Search Radius Setting */}
-      <div className="p-4">
+      <div className="p-4" style={{ scrollSnapAlign: 'start' }}>
         <div className="bg-white rounded-lg p-4 border border-gray-200">
           <div className="flex items-center gap-3 mb-4">
             <Search className="w-5 h-5 text-gray-600" />
@@ -357,19 +407,28 @@ export default function SettingsScreen() {
                 Bu ayar, yakındaki en ucuz fiyatları getirirken kullanılır. Varsayılan: 15 km.
               </p>
             </div>
-            <Button
-              onClick={handleSaveSearchRadius}
-              disabled={isSaving}
-              className="w-full bg-green-600 hover:bg-green-700"
-            >
-              {isSaving ? 'Kaydediliyor...' : 'Kaydet'}
-            </Button>
+            {isGuest ? (
+              <div className="text-sm text-gray-600">
+                Misafir hesabı arama genişliğini kaydedemez. Tam hesap için giriş yapın.
+                <div className="mt-2">
+                  <Button onClick={() => navigate('/login')} className="w-full">Giriş / Kayıt Ol</Button>
+                </div>
+              </div>
+            ) : (
+              <Button
+                onClick={handleSaveSearchRadius}
+                disabled={isSaving}
+                className="w-full bg-green-600 hover:bg-green-700"
+              >
+                {isSaving ? 'Kaydediliyor...' : 'Kaydet'}
+              </Button>
+            )}
           </div>
         </div>
       </div>
 
       {/* Notification Settings */}
-      <div className="p-4">
+      <div className="p-4" style={{ scrollSnapAlign: 'start' }}>
         <div className="bg-white rounded-lg p-4 border border-gray-200">
           <div className="flex items-center gap-3 mb-4">
             <Bell className="w-5 h-5 text-gray-600" />
@@ -386,6 +445,10 @@ export default function SettingsScreen() {
                 checked={(user as any)?.preferences?.notifications !== false}
                 onChange={async (e) => {
                   if (!user) return;
+                  if (isGuest) {
+                    toast.error('Misafir hesabı bildirim ayarlarını değiştiremez.');
+                    return;
+                  }
                   try {
                     await usersAPI.update(user.id, {
                       preferences: {
@@ -408,7 +471,7 @@ export default function SettingsScreen() {
       </div>
 
       {/* Settings List */}
-      <div className="p-4 space-y-2">
+      <div className="p-4 space-y-2" style={{ scrollSnapAlign: 'start' }}>
         {settingsItems.filter(item => item.label !== 'Bildirimler').map((item) => (
           <button
             key={item.label}
@@ -429,7 +492,7 @@ export default function SettingsScreen() {
       </div>
 
       {/* Terms of Service Link */}
-      <div className="p-4">
+      <div className="p-4" style={{ scrollSnapAlign: 'start' }}>
         <button
           onClick={() => navigate('/app/terms-of-service')}
           className="w-full bg-white rounded-lg p-4 flex items-center justify-between hover:bg-gray-50 transition-colors border border-gray-200"
@@ -442,26 +505,41 @@ export default function SettingsScreen() {
         </button>
       </div>
 
-      {/* Delete Account Section */}
-      <div className="p-4">
-        <div className="bg-red-50 rounded-lg p-4 border border-red-200">
-          <div className="flex items-center gap-3 mb-3">
-            <Trash2 className="w-5 h-5 text-red-600" />
-            <h2 className="text-lg font-semibold text-red-900">Hesabı Sil</h2>
+      {/* Delete Account Section - only for full users */}
+      {!isGuest && (
+        <div className="p-4" style={{ scrollSnapAlign: 'start' }}>
+          <div className="bg-red-50 rounded-lg p-4 border border-red-200">
+            <div className="flex items-center gap-3 mb-3">
+              <Trash2 className="w-5 h-5 text-red-600" />
+              <h2 className="text-lg font-semibold text-red-900">Hesabı Sil</h2>
+            </div>
+            <p className="text-sm text-red-700 mb-4">
+              Hesabınızı silmek, tüm verilerinizin kalıcı olarak silinmesine neden olur. Bu işlem geri alınamaz.
+            </p>
+            <Button
+              variant="destructive"
+              onClick={() => setIsDeleteDialogOpen(true)}
+              className="w-full bg-red-600 hover:bg-red-700"
+            >
+              <Trash2 className="w-4 h-4 mr-2" />
+              Hesabı Sil
+            </Button>
           </div>
-          <p className="text-sm text-red-700 mb-4">
-            Hesabınızı silmek, tüm verilerinizin kalıcı olarak silinmesine neden olur. Bu işlem geri alınamaz.
-          </p>
-          <Button
-            variant="destructive"
-            onClick={() => setIsDeleteDialogOpen(true)}
-            className="w-full bg-red-600 hover:bg-red-700"
-          >
-            <Trash2 className="w-4 h-4 mr-2" />
-            Hesabı Sil
-          </Button>
         </div>
-      </div>
+      )}
+      {isGuest && (
+        <div className="p-4">
+          <div className="bg-yellow-50 rounded-lg p-4 border border-yellow-200">
+            <h3 className="text-sm font-semibold">Misafir hesabı sınırlamaları</h3>
+            <p className="text-xs text-gray-600 mt-2">
+              Misafir hesaplar bazı ayarları değiştiremez veya hesap silemez. Tam hesap için lütfen kayıt olun veya giriş yapın.
+            </p>
+            <div className="mt-3">
+              <Button onClick={() => navigate('/login')}>Giriş / Kayıt Ol</Button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Delete Account Confirmation Dialog */}
       <Dialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
@@ -544,6 +622,7 @@ export default function SettingsScreen() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      </div>
     </div>
   );
 }
