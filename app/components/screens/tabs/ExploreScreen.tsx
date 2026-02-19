@@ -869,7 +869,7 @@ export default function ExploreScreen() {
             </div>
             <div className="flex-1 min-w-0">
             <h1 className="text-lg font-bold">esnaftaucuz</h1>
-            <p className={`text-xs opacity-90 leading-tight ${isMerchant ? 'text-blue-50' : 'text-green-50'}`}>En iyi fiyatları keşfet — HotReload test</p>
+            <p className={`text-xs opacity-90 leading-tight ${isMerchant ? 'text-blue-50' : 'text-green-50'}`}>En iyi fiyatları keşfet</p>
             </div>
           </div>
           <div className="flex items-center gap-3">
