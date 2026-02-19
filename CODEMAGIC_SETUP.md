@@ -224,3 +224,6 @@ Codemagic dashboard'da şunları görebilirsiniz:
 
 Başarılar! 🚀
 
+
+
+

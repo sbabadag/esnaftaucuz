@@ -5,7 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "check-env": "node scripts/check-env.js",
     "build": "vite build",
+    "build:check": "npm run check-env && vite build",
     "preview": "vite preview",
     "deploy": "npm run build && gh-pages -d dist",
     "mobile:init": "node init-capacitor.js",

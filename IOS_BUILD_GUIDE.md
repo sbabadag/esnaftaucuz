@@ -258,3 +258,6 @@ iOS derleme ile ilgili sorunlar için:
 - [Apple Developer Documentation](https://developer.apple.com/documentation/)
 - [Xcode Help](https://developer.apple.com/xcode/)
 
+
+
+

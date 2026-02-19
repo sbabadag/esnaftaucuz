@@ -9,7 +9,8 @@
     "start": "node dist/server.js",
     "dev": "tsx watch server.ts",
     "type-check": "tsc --noEmit",
-    "fetch-products": "tsx scripts/fetch-products.ts"
+    "fetch-products": "tsx scripts/fetch-products.ts",
+    "seed-bazaar-products": "tsx scripts/seed-turkey-bazaar-products.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.89.0",

@@ -1,4 +1,6 @@
-# Ürün Fetch Script
+# Backend Scripts
+
+## fetch-products
 
 Bu script, Türkiye'deki yaygın ürün isimlerini ve görsellerini toplayıp Supabase veritabanına ekler.
 
@@ -95,6 +97,57 @@ Yeni ürün eklemek için `TURKISH_PRODUCTS` array'ine ekleyin:
 
 Kategoriler: `'Sebze'`, `'Meyve'`, `'Et'`, `'Süt Ürünleri'`, `'Bakliyat'`, `'Temel Gıda'`, `'Diğer'`
 Birimler: `'kg'`, `'adet'`, `'lt'`, `'paket'`
+
+---
+
+## seed-bazaar-products (Turkey Bazaar Seeder)
+
+Collects Turkey bazaar (pazar/hal) product names and adds them to the product database.
+
+### Features
+
+- ✅ 180+ curated Turkey bazaar products: sebze, meyve, bakliyat, kuruyemiş, et, süt ürünleri, temel gıda
+- ✅ Optional: CollectAPI Bazaar API (add `COLLECTAPI_API_KEY` to `.env`)
+- ✅ Idempotent: skips existing products (case-insensitive name match)
+- ✅ No images fetched (fast, DB-only)
+
+### Usage
+
+```bash
+cd backend
+npm run seed-bazaar-products
+```
+
+### CollectAPI (Optional)
+
+To fetch additional products from CollectAPI:
+
+1. Sign up at https://collectapi.com
+2. Go to Profile → Token, copy your API key
+3. Add to `backend/.env`:
+
+```env
+COLLECTAPI_API_KEY=your_api_key_here
+```
+
+**Note:** The script uses a curated list by default. CollectAPI integration may require verifying the correct endpoint at https://docs.collectapi.com
+
+### Photos (Images)
+
+The script fetches product images from **Pexels** (with API key) or **Unsplash** (fallback) and stores them in the `image` column. Add to `backend/.env`:
+
+```env
+PEXELS_API_KEY=your_pexels_api_key
+```
+
+To run without fetching images (faster):
+
+```bash
+npm run seed-bazaar-products -- --skip-images
+```
+
+
+
 
 
 

@@ -28,6 +28,17 @@ export default function AddPriceScreen() {
   const navigate = useNavigate();
   const { user } = useAuth();
   const { getCurrentPosition } = useGeolocation();
+  const isMerchant = (user as any)?.is_merchant === true;
+
+  // Esnaf kontrolü - esnaf ise ürün sayfasına yönlendir
+  useEffect(() => {
+    if (isMerchant) {
+      toast.info('Esnaf sadece ürün sayfasından ürün ekleyebilir', {
+        duration: 3000,
+      });
+      navigate('/app/explore');
+    }
+  }, [isMerchant, navigate]);
   const [currentStep, setCurrentStep] = useState(0);
   const [products, setProducts] = useState<Product[]>([]);
   const [locations, setLocations] = useState<Location[]>([]);
@@ -50,10 +61,22 @@ export default function AddPriceScreen() {
 
   const stepName = steps[currentStep];
 
+  // Esnaf kontrolü - esnaf ise ürün sayfasına yönlendir
   useEffect(() => {
-    loadProducts();
-    loadLocations();
-  }, []);
+    if (isMerchant) {
+      toast.info('Esnaf sadece ürün sayfasından ürün ekleyebilir', {
+        duration: 3000,
+      });
+      navigate('/app/explore');
+    }
+  }, [isMerchant, navigate]);
+
+  useEffect(() => {
+    if (!isMerchant) {
+      loadProducts();
+      loadLocations();
+    }
+  }, [isMerchant]);
 
   const loadProducts = async () => {
     try {
@@ -382,7 +405,7 @@ export default function AddPriceScreen() {
   return (
     <div className="min-h-screen bg-white">
       {/* Header */}
-      <div className="sticky top-0 bg-white border-b border-gray-200 p-4 z-10">
+      <div className="sticky bg-white border-b border-gray-200 p-4 z-10" style={{ top: 'env(safe-area-inset-top, 0px)', paddingTop: 'calc(1rem + env(safe-area-inset-top, 0px))' }}>
         <div className="flex items-center gap-4">
           <button onClick={handleBack} className="p-2 -ml-2 hover:bg-gray-100 rounded-full">
             <ArrowLeft className="w-5 h-5" />
@@ -403,7 +426,7 @@ export default function AddPriceScreen() {
       </div>
 
       {/* Content */}
-      <div className="p-6 pb-24">
+      <div className="p-6 pb-24" style={{ paddingTop: 'calc(64px + env(safe-area-inset-top, 0px))' }}>
         {stepName === 'product' && (
           <div>
             <h2 className="text-2xl mb-2">Ürün seç</h2>

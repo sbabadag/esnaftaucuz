@@ -95,7 +95,7 @@ export default function ContributionsScreen() {
   return (
     <div className="min-h-screen bg-gray-50">
       {/* Header */}
-      <div className="sticky top-0 bg-white border-b border-gray-200 p-4 z-10">
+      <div className="sticky bg-white border-b border-gray-200 p-4 z-10" style={{ top: 'env(safe-area-inset-top, 0px)', paddingTop: 'calc(1rem + env(safe-area-inset-top, 0px))' }}>
         <div className="flex items-center gap-4">
           <button onClick={() => navigate(-1)} className="p-2 -ml-2 hover:bg-gray-100 rounded-full">
             <ArrowLeft className="w-5 h-5" />
@@ -105,7 +105,7 @@ export default function ContributionsScreen() {
       </div>
 
       {/* Content */}
-      <div className="p-4 space-y-3">
+      <div className="p-4 space-y-3" style={{ paddingTop: 'calc(64px + env(safe-area-inset-top, 0px))' }}>
         {prices.length > 0 ? (
           prices.map((item) => {
             const itemId = item.id || item._id || '';
@@ -198,6 +198,9 @@ export default function ContributionsScreen() {
     </div>
   );
 }
+
+
+
 
 
 

@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AAB Uygunluk Analizi – esnaftaucuz</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Segoe UI', system-ui, sans-serif; background: #f0f4f8; color: #1e293b; line-height: 1.6; padding: 32px 16px; }
+  .wrapper { max-width: 900px; margin: 0 auto; }
+  .header { background: linear-gradient(135deg, #1e293b, #334155); color: #fff; border-radius: 16px; padding: 36px 32px; margin-bottom: 24px; }
+  .header h1 { font-size: 1.7rem; font-weight: 700; margin-bottom: 6px; }
+  .header p { color: #94a3b8; font-size: 0.88rem; }
+  .meta-row { display: flex; gap: 24px; margin-top: 18px; flex-wrap: wrap; }
+  .meta-item { background: rgba(255,255,255,0.08); border-radius: 8px; padding: 10px 16px; flex: 1; min-width: 140px; }
+  .meta-item .label { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.06em; color: #94a3b8; }
+  .meta-item .value { font-size: 0.95rem; font-weight: 600; color: #f1f5f9; margin-top: 2px; }
+
+  .summary-bar { display: flex; gap: 12px; margin-bottom: 28px; flex-wrap: wrap; }
+  .summary-card { flex: 1; min-width: 150px; background: #fff; border-radius: 12px; padding: 18px 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); border-top: 4px solid #94a3b8; }
+  .summary-card.critical { border-top-color: #ef4444; }
+  .summary-card.warning { border-top-color: #f59e0b; }
+  .summary-card.ok { border-top-color: #10b981; }
+  .summary-card .num { font-size: 2rem; font-weight: 700; }
+  .summary-card.critical .num { color: #ef4444; }
+  .summary-card.warning .num { color: #f59e0b; }
+  .summary-card.ok .num { color: #10b981; }
+  .summary-card .lbl { font-size: 0.78rem; color: #64748b; text-transform: uppercase; letter-spacing: 0.04em; margin-top: 2px; }
+
+  .section { background: #fff; border-radius: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); margin-bottom: 20px; overflow: hidden; }
+  .section-header { padding: 16px 24px; display: flex; align-items: center; gap: 12px; border-bottom: 1px solid #e2e8f0; }
+  .section-header .icon { width: 36px; height: 36px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 1.1rem; flex-shrink: 0; }
+  .icon.red { background: #fef2f2; color: #ef4444; }
+  .icon.amber { background: #fffbeb; color: #f59e0b; }
+  .icon.green { background: #ecfdf5; color: #10b981; }
+  .icon.blue { background: #eff6ff; color: #3b82f6; }
+  .section-header h2 { font-size: 1rem; font-weight: 600; }
+  .section-header .badge { font-size: 0.7rem; font-weight: 600; padding: 3px 8px; border-radius: 20px; margin-left: auto; }
+  .badge.red { background: #fef2f2; color: #ef4444; }
+  .badge.amber { background: #fffbeb; color: #d97706; }
+  .badge.green { background: #ecfdf5; color: #10b981; }
+
+  .section-body { padding: 20px 24px; }
+
+  .issue { border-radius: 8px; padding: 14px 16px; margin-bottom: 12px; border-left: 4px solid; }
+  .issue:last-child { margin-bottom: 0; }
+  .issue.critical { background: #fef2f2; border-color: #ef4444; }
+  .issue.warning { background: #fffbeb; border-color: #f59e0b; }
+  .issue.ok { background: #ecfdf5; border-color: #10b981; }
+  .issue .issue-title { font-weight: 600; font-size: 0.9rem; margin-bottom: 4px; }
+  .issue.critical .issue-title { color: #dc2626; }
+  .issue.warning .issue-title { color: #d97706; }
+  .issue.ok .issue-title { color: #059669; }
+  .issue .issue-desc { font-size: 0.82rem; color: #475569; }
+  .issue .issue-fix { font-size: 0.78rem; color: #6366f1; margin-top: 6px; font-weight: 500; }
+
+  code { background: #f1f5f9; padding: 2px 6px; border-radius: 4px; font-size: 0.78rem; color: #334155; font-family: 'SF Mono', monospace; }
+  .code-block { background: #1e293b; color: #cbd5e1; border-radius: 8px; padding: 12px 16px; font-family: 'SF Mono', monospace; font-size: 0.75rem; overflow-x: auto; margin-top: 6px; white-space: pre; line-height: 1.5; }
+  .code-block .hl { color: #f472b6; }
+  .code-block .str { color: #86efac; }
+  .code-block .warn { color: #fbbf24; }
+
+  .info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .info-item { display: flex; flex-direction: column; }
+  .info-item .k { font-size: 0.72rem; color: #64748b; text-transform: uppercase; letter-spacing: 0.05em; }
+  .info-item .v { font-size: 0.85rem; font-weight: 500; color: #1e293b; }
+
+  .permission-row { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid #f1f5f9; }
+  .permission-row:last-child { border-bottom: none; }
+  .permission-row .p-badge { font-size: 0.68rem; font-weight: 600; padding: 2px 7px; border-radius: 10px; }
+  .p-badge.dangerous { background: #fef2f2; color: #dc2626; }
+  .p-badge.normal { background: #eff6ff; color: #2563eb; }
+  .p-badge.signature { background: #f3e8ff; color: #7c3aed; }
+  .permission-row .p-name { font-size: 0.82rem; font-family: 'SF Mono', monospace; color: #334155; }
+
+  .footer { text-align: center; color: #94a3b8; font-size: 0.75rem; margin-top: 32px; }
+</style>
+</head>
+<body>
+<div class="wrapper">
+
+  <!-- HEADER -->
+  <div class="header">
+    <h1>📦 AAB Uygunluk Analiz Raporu</h1>
+    <p>Google Play Store Kurallarına Uygunluk Kontrolü</p>
+    <div class="meta-row">
+      <div class="meta-item"><div class="label">Paket Adı</div><div class="value">com.esnaftaucuz.app</div></div>
+      <div class="meta-item"><div class="label">Versiyon</div><div class="value">1.0.3</div></div>
+      <div class="meta-item"><div class="label">Çerçeve</div><div class="value">Capacitor (Ionic)</div></div>
+      <div class="meta-item"><div class="label">Dosya Boyutu</div><div class="value">5.0 MB</div></div>
+    </div>
+  </div>
+
+  <!-- SUMMARY -->
+  <div class="summary-bar">
+    <div class="summary-card critical"><div class="num">3</div><div class="lbl">Kritik Sorun</div></div>
+    <div class="summary-card warning"><div class="num">4</div><div class="lbl">Uyarı</div></div>
+    <div class="summary-card ok"><div class="num">5</div><div class="lbl">Geçti ✓</div></div>
+  </div>
+
+  <!-- 1. KRİTİK: HARDCODED SECRETS -->
+  <div class="section">
+    <div class="section-header">
+      <div class="icon red">🔓</div>
+      <h2>Hardcoded Secrets / API Keyleri</h2>
+      <span class="badge red">KRİTİK</span>
+    </div>
+    <div class="section-body">
+      <div class="issue critical">
+        <div class="issue-title">Google Maps API Key – Açık Kaynak Kodunda</div>
+        <div class="issue-desc">
+          Google Maps API keyi doğrudan JavaScript bundle'ına bölünmemiş şekilde gömülü. Bu key; geocoding ve nearbysearch API çağrılarında birden fazla yerde tekrar edilmektedir. Google, Play Store'da tespit ettiğinde bu keyi otomatik olarak revoke edebilir veya uygulamayı reddedebilir.
+        </div>
+        <div class="code-block"><span class="hl">VITE_GOOGLE_MAPS_API_KEY:</span> <span class="warn">"AIzaSyCGRGdSA0IZHxgGI4PCv00kQ8xJ5dpx7Gc"</span></div>
+        <div class="issue-fix">🔧 Düzeltme: API keyini Google Cloud Console'da kısıtlayın (Android app referrer + SHA-1 ile). Uzun vadeli çözüm olarak key'i bir backend proxy üzerinden kullanın.</div>
+      </div>
+      <div class="issue critical">
+        <div class="issue-title">Supabase Anon Key – Açık Kaynak Kodunda</div>
+        <div class="issue-desc">
+          Supabase anonim anahtarı ve tam Supabase URL'si JS bundle'ına gömülü. Bu anahtarla herhangi biri doğrudan veritabanına sorgu yapabilir; eğer Row Level Security (RLS) yanlış yapılandırılmışsa bu ciddi bir veri güvenlik açığı oluşturabilir.
+        </div>
+        <div class="code-block"><span class="hl">VITE_SUPABASE_URL:</span> <span class="warn">"https://xmskjcdwmwlcmjexnnxw.supabase.co"</span>
+<span class="hl">VITE_SUPABASE_ANON_KEY:</span> <span class="warn">"sb_publishable_aJ6U77lzPTrGZEjQ6WJgUw_PPusa7R-"</span></div>
+        <div class="issue-fix">🔧 Düzeltme: Supabase anon key teknik olarak public-facing tasarlanmış olmakla birlikte, RLS kurallarınızın doğru ve sıkı olduğundan emin olunuz. Hassas verileri mutlaka RLS ile koruyun.</div>
+      </div>
+      <div class="issue critical">
+        <div class="issue-title">Local Dev URL – Production Bundle'da</div>
+        <div class="issue-desc">
+          Geliştirme ortamına ait bir yerel ağ IP adresi production build'ine gömülü kalmış. Bu hem bir güvenlik açığı hem de kullanıcı deneyimi sorunudur – production'da bu URL'ye ulaşılamaz.
+        </div>
+        <div class="code-block"><span class="hl">VITE_API_URL:</span> <span class="warn">"http://192.168.3.13:5000/api"</span></div>
+        <div class="issue-fix">🔧 Düzeltme: .env dosyalarında ortama göre farklı URL kullanın. Production build için .env.production dosyasında gerçek API URL'sini belirleyin ve vite build sırasında doğru env dosyasının yüklendiğini doğrulayın.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 2. UYARI: NETWORK SECURITY -->
+  <div class="section">
+    <div class="section-header">
+      <div class="icon amber">🌐</div>
+      <h2>Network Security &amp; Cleartext Traffic</h2>
+      <span class="badge amber">UYARI</span>
+    </div>
+    <div class="section-body">
+      <div class="issue warning">
+        <div class="issue-title">usesCleartextTraffic = true (Manifest)</div>
+        <div class="issue-desc">
+          AndroidManifest.xml'de <code>usesCleartextTraffic="true"</code> ayarı var. Bu, uygulamanın HTTP (şifresizilenmiş) trafiğe izin verdiğini gösterir. Android 9+ (API 28+) varsayılan olarak bu trafiği engeller, ancak bu flag o engeli kaldırır.
+        </div>
+        <div class="issue-fix">🔧 Düzeltme: Tüm API endpoint'lerini HTTPS'e taşıdıktan sonra bu flag'ı kaldırın veya <code>false</code> yapın.</div>
+      </div>
+      <div class="issue warning">
+        <div class="issue-title">network_security_config.xml'de Geniş Kapsamlı Cleartext İzinleri</div>
+        <div class="issue-desc">
+          network_security_config dosyasında <code>localhost</code>, <code>127.0.0.1</code>, <code>10.0.2.2</code> ve birçok <code>192.168.x.x</code> alt ağı için cleartext (HTTP) trafiğe izin verilmiş. Bazıları (emulator: 10.0.2.2, localhost) geliştirme amaçlı olabilir ancak 192.168.x.x alt ağlarının production'da kalması risk taşır.
+        </div>
+        <div class="issue-fix">🔧 Düzeltme: Sadece gerekli geliştirme adresleri için (localhost, 10.0.2.2) cleartext izni verin. 192.168.x.x satırlarını kaldırın.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 3. UYARI: PERMISSIONS -->
+  <div class="section">
+    <div class="section-header">
+      <div class="icon amber">🛡️</div>
+      <h2>Permissions Analizi</h2>
+      <span class="badge amber">UYARI</span>
+    </div>
+    <div class="section-body">
+      <div class="permission-row">
+        <span class="p-badge dangerous">Tehlikeli</span>
+        <span class="p-name">ACCESS_FINE_LOCATION</span>
+      </div>
+      <div class="permission-row">
+        <span class="p-badge dangerous">Tehlikeli</span>
+        <span class="p-name">ACCESS_COARSE_LOCATION</span>
+      </div>
+      <div class="permission-row">
+        <span class="p-badge normal">Normal</span>
+        <span class="p-name">INTERNET</span>
+      </div>
+      <div class="permission-row">
+        <span class="p-badge normal">Normal</span>
+        <span class="p-name">VIBRATE</span>
+      </div>
+      <div class="permission-row">
+        <span class="p-badge signature">Signature</span>
+        <span class="p-name">DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION</span>
+      </div>
+      <div style="margin-top:14px;">
+        <div class="issue warning">
+          <div class="issue-title">Kamera İzni Manifest'te Yok – Ancak Capacitor Camera Plugin Kullanılıyor</div>
+          <div class="issue-desc">
+            Capacitor Camera plugin aktif olmasına rağmen <code>android.permission.CAMERA</code> doğrudan Manifest'te listelenmemiş. Capacitor runtime'da dinamik olarak talep edebilir, ancak bazı cihazlarda veya Android versiyon öncelerinde bu yetersiz kalabilir. Ayrıca Play Store'da bu iznin açıkça belirtilmesi beklenir.
+          </div>
+          <div class="issue-fix">🔧 Düzeltme: AndroidManifest.xml'e <code>&lt;uses-permission android:name="android.permission.CAMERA"/&gt;</code> ekleyin.</div>
+        </div>
+      </div>
+      <div style="margin-top: 8px;">
+        <div class="issue ok">
+          <div class="issue-title">Location Permissions – Capacitor Config'de Doğru Açıklanmış</div>
+          <div class="issue-desc">
+            Geolocation plugin'in permission mesajları kullanıcıya neden konum bilgisinin gerekli olduğunu Türkçe olarak açıkça anlatmaktadır. Bu Play Store'un "Açıklama Politikası" için olumlu bir nokta.
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 4. UYARI: EXPORTED COMPONENTS -->
+  <div class="section">
+    <div class="section-header">
+      <div class="icon amber">📤</div>
+      <h2>Exported Components</h2>
+      <span class="badge amber">UYARI</span>
+    </div>
+    <div class="section-body">
+      <div class="issue warning">
+        <div class="issue-title">MainActivity – exported="true" (Normal – Launcher Activity)</div>
+        <div class="issue-desc">
+          MainActivity'nin <code>exported="true"</code> olması normal çünkü LAUNCHER intent-filter var. Ancak aynı activity'de <code>scheme="com.esnaftaucuz.app"</code> ile bir custom deep link intent-filter daha var. Bu, dışarıdan bu activity'ye intent gönderilmesine olanak tanır. Deep link data doğrulaması olmalı.
+        </div>
+        <div class="issue-fix">🔧 Düzeltme: Deep link intent-filter'ın geldiği verileri validate edin. Gerekirse ayrı bir Activity kullanın ve <code>exported="false"</code> yapın.</div>
+      </div>
+      <div class="issue warning">
+        <div class="issue-title">ProfileInstallReceiver – exported="true" (androidx)</div>
+        <div class="issue-desc">
+          <code>androidx.profileinstaller.ProfileInstallReceiver</code> exported=true ile gelmiş ancak <code>android.permission.DUMP</code> ile korunmuştur. Bu bir androidx kütüphane standartı olduğundan normal kabul edilebilir, ancak production'da profil installer aktivitelerinin gerekliliği sorgulanabilir.
+        </div>
+      </div>
+      <div class="issue ok">
+        <div class="issue-title">FileProvider &amp; InitializationProvider – exported="false" ✓</div>
+        <div class="issue-desc">
+          Her iki provider da doğru şekilde <code>exported="false"</code> ile tanımlanmış.
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 5. GEÇTI: VERSION / SDK -->
+  <div class="section">
+    <div class="section-header">
+      <div class="icon green">📊</div>
+      <h2>Versioning &amp; SDK Uygunluk</h2>
+      <span class="badge green">GEÇTI</span>
+    </div>
+    <div class="section-body">
+      <div class="info-grid">
+        <div class="info-item"><div class="k">versionName</div><div class="v">1.0.3</div></div>
+        <div class="info-item"><div class="k">compileSdkVersion</div><div class="v">35 (Android 15)</div></div>
+        <div class="info-item"><div class="k">minSdkVersion</div><div class="v">22 (Android 5.1)</div></div>
+        <div class="info-item"><div class="k">targetSdkVersion</div><div class="v">35 (Android 15)</div></div>
+        <div class="info-item"><div class="k">Gradle Plugin</div><div class="v">8.2.1</div></div>
+        <div class="info-item"><div class="k">Play Services</div><div class="v">Location 21.1.0</div></div>
+      </div>
+      <div class="issue ok" style="margin-top:16px;">
+        <div class="issue-title">targetSdkVersion 35 – Google Play Zorunluluğu Karşılanmış ✓</div>
+        <div class="issue-desc">
+          2024 sonrası yeni uygulamalar için Google, targetSdkVersion ≥ 33 zorunlu kılmaktadır. Bu uygulama 35 ile bu gerekliği aşmaktadır.
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 6. GEÇTI: 64-BIT / BUNDLE -->
+  <div class="section">
+    <div class="section-header">
+      <div class="icon green">📦</div>
+      <h2>Bundle &amp; 64-bit Destek</h2>
+      <span class="badge green">GEÇTI</span>
+    </div>
+    <div class="section-body">
+      <div class="issue ok">
+        <div class="issue-title">AAB Formatında Yayınlanmış ✓</div>
+        <div class="issue-desc">
+          Uygulama App Bundle (AAB) formatında, bu da Google Play'in 2021'den bu yana zorunlu kıldığı formattur. Capacitor/WebView tabanlı bir uygulama olduğundan native .so dosyası bulunmamakta, bu da 64-bit sorununu tamamen ortadan kaldırmaktadır.
+        </div>
+      </div>
+      <div class="issue ok">
+        <div class="issue-title">Baseline Profile Mevcut ✓</div>
+        <div class="issue-desc">
+          <code>baseline.prof</code> ve <code>baseline.profm</code> dosyaları bundle'da mevcut. Bu, uygulama başlangıç performansını önemli ölçüde iyileştirir.
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 7. GEÇTI: PRIVACY -->
+  <div class="section">
+    <div class="section-header">
+      <div class="icon green">🔒</div>
+      <h2>Gizlilik Politikası</h2>
+      <span class="badge green">GEÇTI</span>
+    </div>
+    <div class="section-body">
+      <div class="issue ok">
+        <div class="issue-title">Gizlilik Politikası Mevcut ✓</div>
+        <div class="issue-desc">
+          Uygulamada <code>privacy-policy.html</code> dosyası var ve Türkçe olarak hazırlanmıştır. Play Store'a yayın sırasında bu URL eklenmesi gerekecektir.
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 8. UYARI: DEBUG -->
+  <div class="section">
+    <div class="section-header">
+      <div class="icon blue">🐛</div>
+      <h2>Debug Artefaktlar</h2>
+      <span class="badge amber">UYARI</span>
+    </div>
+    <div class="section-body">
+      <div class="issue warning">
+        <div class="issue-title">DebugProbesKt.bin – Kotlin Coroutine Debug Dosyası</div>
+        <div class="issue-desc">
+          <code>DebugProbesKt.bin</code> dosyası release build'de mevcut. Bu Kotlin Coroutine debug probes ile ilgilidir. Release build'de genellikle bu dosya olmayacaktır; varlığı, build'in debug modunda yapıldığını ya da probes kaldırma optimizasyonunun eksik olduğunu düşündürür.
+        </div>
+        <div class="issue-fix">🔧 Düzeltme: <code>build.gradle</code>'da <code>kotlinOptions { freeCompilerArgs += "-Xdebug" }</code> satırının olmadığını doğrulayın. Kotlin coroutine debug probes'u production'da devre dışı bırakın.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- FOOTER -->
+  <div class="footer">
+    Analiz tarihi: 01 Şubat 2026 &nbsp;|&nbsp; Uygulama: esnaftaucuz v1.0.3 &nbsp;|&nbsp; Araç: Manuel AAB analizi
+  </div>
+</div>
+</body>
+</html>

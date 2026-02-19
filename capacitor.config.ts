@@ -1,17 +1,23 @@
 import { CapacitorConfig } from '@capacitor/cli';
 
+// Build config conditionally based on environment
+const isDevelopment = process.env.NODE_ENV === 'development';
+const capacitorServerUrl = process.env.CAPACITOR_SERVER_URL;
+
 const config: CapacitorConfig = {
   appId: 'com.esnaftaucuz.app',
   appName: 'esnaftaucuz',
   webDir: 'dist',
   // Production: No server.url = use bundled files from assets/public
   // androidScheme defaults to 'https' which uses capacitor://localhost
-  // Development: Uncomment below to use dev server for live reload
-  // IMPORTANT: Comment out before production build!
-  server: {
-    url: 'http://192.168.3.13:5173',
-    cleartext: true
-  },
+  // Development: Use dev server for live reload
+  // IMPORTANT: server.url is only set in development mode via environment variable
+  ...(isDevelopment && capacitorServerUrl ? {
+    server: {
+      url: capacitorServerUrl,
+      cleartext: true
+    }
+  } : {}),
   plugins: {
     Camera: {
       permissions: {

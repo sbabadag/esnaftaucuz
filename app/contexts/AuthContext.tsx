@@ -128,16 +128,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           storedUser = localStorage.getItem('user');
           if (storedUser) {
             cachedUser = JSON.parse(storedUser);
-            // Only use cached user if it's not a merchant (to avoid theme flickering)
-            // For merchants, always fetch fresh to ensure is_merchant is correct
-            if (cachedUser && cachedUser.id === session.user.id && !cachedUser.is_merchant) {
-              console.log('⚡ Using cached user from localStorage for faster render (non-merchant)');
+            // Use cached user for immediate UI responsiveness when available
+            // (even for merchant users) and refresh in background to ensure correctness.
+            if (cachedUser && cachedUser.id === session.user.id) {
+              console.log('⚡ Using cached user from localStorage for faster render');
               setUser(cachedUser);
-              setIsLoading(false); // Allow navigation immediately
-              // Continue loading in background to get fresh data
-            } else if (cachedUser && cachedUser.id === session.user.id) {
-              console.log('⚡ Merchant user detected - will fetch fresh profile to ensure is_merchant is correct');
-              // Don't set cached user for merchants - wait for fresh data
+              setIsLoading(false); // Allow navigation immediately while we refresh profile in background
             }
           }
         } catch (e) {
@@ -649,75 +645,34 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const login = async (email: string, password: string) => {
     try {
       const data = await authAPI.login(email, password);
-      console.log('✅ Login successful, user data:', {
-        id: data.user.id,
-        email: data.user.email,
-        is_merchant: (data.user as any).is_merchant,
-        fullUser: data.user,
+      console.log('✅ Login successful, user data (auth API):', {
+        id: data.user?.id,
+        email: data.user?.email,
+        is_merchant: (data.user as any)?.is_merchant,
       });
-      
-      // ALWAYS refresh user profile after login to ensure is_merchant is loaded
-      // This is critical because the API might return a partial user object
-      try {
-        console.log('🔄 Refreshing user profile after login to ensure is_merchant is loaded...');
-        const { data: { session } } = await supabase.auth.getSession();
-        if (session) {
-          const { data: profile, error: profileError } = await supabase
-            .from('users')
-            .select('*')
-            .eq('id', session.user.id)
-            .single();
-          
-          if (profileError) {
-            console.error('❌ Error fetching profile after login:', profileError);
-          } else if (profile) {
-            // Ensure preferences and search_radius are properly set
-            const preferencesRadius = profile.preferences?.searchRadius;
-            const legacyRadius = profile.search_radius;
-            const finalSearchRadius = preferencesRadius !== undefined 
-              ? preferencesRadius 
-              : (legacyRadius !== undefined ? legacyRadius : 15);
-            
-            const userData = {
-              ...profile,
-              is_merchant: profile.is_merchant || false, // CRITICAL: Ensure is_merchant is included
-              preferences: {
-                ...(profile.preferences || {}),
-                searchRadius: finalSearchRadius,
-              },
-              search_radius: finalSearchRadius,
-            };
-            
-            console.log('✅ User profile refreshed after login:', {
-              id: userData.id,
-              email: userData.email,
-              is_merchant: userData.is_merchant,
-              is_merchant_type: typeof userData.is_merchant,
-            });
-            
-            setToken(data.token);
-            setUser(userData);
-            if (data.token) {
-              localStorage.setItem('authToken', data.token);
-            }
-            localStorage.setItem('user', JSON.stringify(userData));
-            console.log('✅ User stored in localStorage with is_merchant:', userData.is_merchant);
-            return; // Success - exit early
-          }
-        }
-      } catch (refreshError) {
-        console.error('❌ Failed to refresh user after login:', refreshError);
-      }
-      
-      // Fallback: Use data from API if refresh failed
-      console.warn('⚠️ Using API response data as fallback');
-      setToken(data.token);
-      setUser(data.user);
+
+      // Store token immediately
       if (data.token) {
+        setToken(data.token);
         localStorage.setItem('authToken', data.token);
       }
-      localStorage.setItem('user', JSON.stringify(data.user));
-      console.log('✅ User stored in localStorage (fallback) with is_merchant:', (data.user as any).is_merchant);
+
+      // Ensure we refresh the authoritative user profile from the database
+      // before returning from login. This guarantees user.is_merchant is correct.
+      try {
+        console.log('🔄 Forcing profile refresh after login (refreshUser)...');
+        await refreshUser();
+        console.log('✅ refreshUser completed successfully after login');
+        return;
+      } catch (refreshErr) {
+        console.error('❌ refreshUser failed after login:', refreshErr);
+        // Fallback to API response if refresh failed
+        if (data.user) {
+          setUser(data.user);
+          localStorage.setItem('user', JSON.stringify(data.user));
+          console.warn('⚠️ Using API response data as fallback for user state');
+        }
+      }
     } catch (error) {
       console.error('Login error:', error);
       throw error;

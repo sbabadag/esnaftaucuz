@@ -58,3 +58,6 @@ ALTER TABLE public.users ENABLE ROW LEVEL SECURITY;
 -- GRANT INSERT ON public.users TO authenticated;
 
 
+
+
+

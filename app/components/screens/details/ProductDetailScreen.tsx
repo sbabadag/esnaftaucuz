@@ -1,12 +1,17 @@
 import { useState, useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, MapPin, Clock, CheckCircle2, ThumbsUp, Flag, Package, Navigation } from 'lucide-react';
+import { ArrowLeft, MapPin, Clock, CheckCircle2, ThumbsUp, Flag, Package, Navigation, Heart, Plus, Camera, X } from 'lucide-react';
 import { Button } from '../../ui/button';
 import { Badge } from '../../ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../ui/select';
 import { Avatar, AvatarImage, AvatarFallback } from '../../ui/avatar';
-import { productsAPI, pricesAPI } from '../../../services/supabase-api';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../../ui/dialog';
+import { Input } from '../../ui/input';
+import { Label } from '../../ui/label';
+import { productsAPI, pricesAPI, favoritesAPI, locationsAPI } from '../../../services/supabase-api';
 import { useAuth } from '../../../contexts/AuthContext';
+import { useGeolocation } from '../../../../src/hooks/useGeolocation';
+import { forwardGeocode } from '../../../utils/geocoding';
 import { supabase } from '../../../lib/supabase';
 import { toast } from 'sonner';
 
@@ -51,12 +56,56 @@ export default function ProductDetailScreen() {
   const [isLoading, setIsLoading] = useState(true);
   const [averagePrice, setAveragePrice] = useState(0);
   const [cheapestToday, setCheapestToday] = useState<Price | null>(null);
+  const [isFavorited, setIsFavorited] = useState(false);
+  const [isTogglingFavorite, setIsTogglingFavorite] = useState(false);
+  const [isAddPriceDialogOpen, setIsAddPriceDialogOpen] = useState(false);
+  const [isSubmittingPrice, setIsSubmittingPrice] = useState(false);
+  const [isGettingLocation, setIsGettingLocation] = useState(false);
+  const { getCurrentPosition } = useGeolocation();
+  const [priceFormData, setPriceFormData] = useState({
+    price: '',
+    unit: 'kg',
+    locationId: '',
+    locationName: '',
+    photo: null as File | null,
+    photoPreview: null as string | null,
+    lat: null as number | null,
+    lng: null as number | null,
+  });
+  const [locations, setLocations] = useState<any[]>([]);
 
   useEffect(() => {
     if (id) {
       loadProductData();
+      checkFavoriteStatus();
     }
-  }, [id, sortBy]);
+  }, [id, sortBy, user]);
+
+  useEffect(() => {
+    if (isAddPriceDialogOpen) {
+      loadLocations();
+    }
+  }, [isAddPriceDialogOpen]);
+
+  useEffect(() => {
+    if (isAddPriceDialogOpen) {
+      loadLocations();
+    }
+  }, [isAddPriceDialogOpen]);
+
+  const checkFavoriteStatus = async () => {
+    if (!user || !id) {
+      setIsFavorited(false);
+      return;
+    }
+
+    try {
+      const favorited = await favoritesAPI.isFavorited(id, user.id);
+      setIsFavorited(favorited);
+    } catch (error) {
+      console.error('Failed to check favorite status:', error);
+    }
+  };
 
   // Supabase Realtime subscription for this product's prices
   useEffect(() => {
@@ -209,6 +258,141 @@ export default function ProductDetailScreen() {
     }
   };
 
+  const handleToggleFavorite = async () => {
+    if (!user) {
+      toast.error('Favorilere eklemek için giriş yapmanız gerekiyor');
+      return;
+    }
+
+    if (!id) return;
+
+    try {
+      setIsTogglingFavorite(true);
+      const newStatus = await favoritesAPI.toggle(id, user.id);
+      setIsFavorited(newStatus);
+      toast.success(newStatus ? 'Favorilere eklendi' : 'Favorilerden kaldırıldı');
+    } catch (error: any) {
+      console.error('Failed to toggle favorite:', error);
+      toast.error('İşlem başarısız oldu');
+    } finally {
+      setIsTogglingFavorite(false);
+    }
+  };
+
+  const isMerchant = (user as any)?.is_merchant === true;
+
+  const loadLocations = async () => {
+    try {
+      const data = await locationsAPI.getAll();
+      setLocations(data);
+    } catch (error) {
+      console.error('Failed to load locations:', error);
+    }
+  };
+
+  const handleGetLocation = async () => {
+    try {
+      setIsGettingLocation(true);
+      const position = await getCurrentPosition();
+      if (position) {
+        setPriceFormData({
+          ...priceFormData,
+          lat: position.latitude,
+          lng: position.longitude,
+        });
+        toast.success('Konum alındı');
+      }
+    } catch (error) {
+      console.error('Failed to get location:', error);
+      toast.error('Konum alınamadı');
+    } finally {
+      setIsGettingLocation(false);
+    }
+  };
+
+  const handleLocationSearch = async (query: string) => {
+    if (query.trim()) {
+      try {
+        const results = await locationsAPI.getAll(query);
+        setLocations(results);
+      } catch (error) {
+        console.error('Location search error:', error);
+      }
+    } else {
+      loadLocations();
+    }
+  };
+
+  const handlePhotoSelect = (file: File | null) => {
+    if (file) {
+      setPriceFormData({
+        ...priceFormData,
+        photo: file,
+        photoPreview: URL.createObjectURL(file),
+      });
+    }
+  };
+
+  const handleAddPrice = async () => {
+    if (!user || !isMerchant) {
+      toast.error('Sadece esnaf ürün ekleyebilir');
+      return;
+    }
+
+    if (!id || !priceFormData.price || !priceFormData.locationId) {
+      toast.error('Lütfen fiyat ve konum bilgilerini girin');
+      return;
+    }
+
+    try {
+      setIsSubmittingPrice(true);
+
+      let lat = priceFormData.lat;
+      let lng = priceFormData.lng;
+
+      if (!lat || !lng) {
+        try {
+          const position = await getCurrentPosition();
+          if (position) {
+            lat = position.latitude;
+            lng = position.longitude;
+          }
+        } catch (error) {
+          console.log('Geolocation not available');
+        }
+      }
+
+      await pricesAPI.create({
+        product: id,
+        price: parseFloat(priceFormData.price),
+        unit: priceFormData.unit,
+        location: priceFormData.locationId,
+        photo: priceFormData.photo || undefined,
+        lat: lat || undefined,
+        lng: lng || undefined,
+      });
+
+      toast.success('Fiyat eklendi');
+      setIsAddPriceDialogOpen(false);
+      setPriceFormData({
+        price: '',
+        unit: 'kg',
+        locationId: '',
+        locationName: '',
+        photo: null,
+        photoPreview: null,
+        lat: null,
+        lng: null,
+      });
+      loadProductData();
+    } catch (error: any) {
+      console.error('Failed to add price:', error);
+      toast.error(error.message || 'Fiyat eklenirken bir hata oluştu');
+    } finally {
+      setIsSubmittingPrice(false);
+    }
+  };
+
   const formatPrice = (price: number) => {
     return price.toFixed(2).replace('.', ',');
   };
@@ -263,7 +447,7 @@ export default function ProductDetailScreen() {
   return (
     <div className="min-h-screen bg-gray-50">
       {/* Header */}
-      <div className="sticky top-0 bg-white border-b border-gray-200 p-4 z-10">
+      <div className="fixed top-0 left-0 right-0 bg-white border-b border-gray-200 p-4 z-10" style={{ paddingTop: 'env(safe-area-inset-top, 0px)' }}>
         <div className="flex items-center gap-4">
           <button onClick={() => navigate(-1)} className="p-2 -ml-2 hover:bg-gray-100 rounded-full">
             <ArrowLeft className="w-5 h-5" />
@@ -285,11 +469,25 @@ export default function ProductDetailScreen() {
             </div>
             <h1 className="text-xl">{product.name}</h1>
           </div>
+          {user && (
+            <button
+              onClick={handleToggleFavorite}
+              disabled={isTogglingFavorite}
+              className={`p-2 rounded-full transition-colors ${
+                isFavorited
+                  ? 'text-red-600 bg-red-50 hover:bg-red-100'
+                  : 'text-gray-400 hover:bg-gray-100'
+              }`}
+              aria-label={isFavorited ? 'Favorilerden kaldır' : 'Favorilere ekle'}
+            >
+              <Heart className={`w-5 h-5 ${isFavorited ? 'fill-current' : ''}`} />
+            </button>
+          )}
         </div>
       </div>
 
       {/* Summary */}
-      <div className="bg-white p-6 border-b border-gray-200">
+      <div className="bg-white p-6 border-b border-gray-200" style={{ marginTop: 'calc(64px + env(safe-area-inset-top, 0px))' }}>
         <div className="flex items-start gap-4">
           <div className="w-20 h-20 rounded-lg bg-gray-100 flex items-center justify-center flex-shrink-0 overflow-hidden">
             {product.image ? (
@@ -306,7 +504,19 @@ export default function ProductDetailScreen() {
             <Package className={`w-10 h-10 text-gray-400 ${product.image ? 'hidden' : ''}`} />
           </div>
           <div className="flex-1">
-            <div className="text-sm text-gray-600 mb-1">Ortalama fiyat</div>
+            <div className="flex items-center justify-between mb-1">
+              <div className="text-sm text-gray-600">Ortalama fiyat</div>
+              {isMerchant && (
+                <Button
+                  size="sm"
+                  onClick={() => setIsAddPriceDialogOpen(true)}
+                  className="bg-green-600 hover:bg-green-700"
+                >
+                  <Plus className="w-4 h-4 mr-1" />
+                  Fiyat Ekle
+                </Button>
+              )}
+            </div>
             <div className="text-3xl text-gray-900 mb-3">
               {formatPrice(averagePrice)} TL
             </div>
@@ -649,6 +859,147 @@ export default function ProductDetailScreen() {
           </div>
         )}
       </div>
+
+      {/* Add Price Dialog for Merchants */}
+      {isMerchant && (
+        <Dialog open={isAddPriceDialogOpen} onOpenChange={setIsAddPriceDialogOpen}>
+          <DialogContent className="max-w-md max-h-[90vh] overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle>Fiyat Ekle</DialogTitle>
+            </DialogHeader>
+            <div className="space-y-4">
+              <div>
+                <Label>Ürün</Label>
+                <Input value={product.name} disabled />
+              </div>
+              <div>
+                <Label>Fiyat *</Label>
+                <Input
+                  type="number"
+                  step="0.01"
+                  placeholder="0.00"
+                  value={priceFormData.price}
+                  onChange={(e) => setPriceFormData({ ...priceFormData, price: e.target.value })}
+                />
+              </div>
+              <div>
+                <Label>Birim</Label>
+                <Select
+                  value={priceFormData.unit}
+                  onValueChange={(value) => setPriceFormData({ ...priceFormData, unit: value })}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="kg">kg</SelectItem>
+                    <SelectItem value="adet">adet</SelectItem>
+                    <SelectItem value="litre">litre</SelectItem>
+                    <SelectItem value="paket">paket</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label>Konum *</Label>
+                <div className="flex gap-2">
+                  <Input
+                    placeholder="Konum ara"
+                    value={priceFormData.locationName}
+                    onChange={(e) => {
+                      setPriceFormData({ ...priceFormData, locationName: e.target.value });
+                      handleLocationSearch(e.target.value);
+                    }}
+                    className="flex-1"
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={handleGetLocation}
+                    disabled={isGettingLocation}
+                  >
+                    <MapPin className="w-4 h-4" />
+                  </Button>
+                </div>
+                {locations.length > 0 && (
+                  <div className="mt-2 max-h-40 overflow-y-auto border rounded-md">
+                    {locations.map((loc) => (
+                      <button
+                        key={loc.id}
+                        type="button"
+                        className="w-full text-left px-3 py-2 hover:bg-gray-100 border-b last:border-b-0"
+                        onClick={() => {
+                          setPriceFormData({
+                            ...priceFormData,
+                            locationId: loc.id,
+                            locationName: loc.name,
+                          });
+                        }}
+                      >
+                        {loc.name}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <div>
+                <Label>Fotoğraf (Opsiyonel)</Label>
+                <div className="flex gap-2">
+                  <label className="flex-1">
+                    <input
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      onChange={(e) => handlePhotoSelect(e.target.files?.[0] || null)}
+                    />
+                    <div className="border-2 border-dashed border-gray-300 rounded-lg p-4 text-center cursor-pointer hover:border-green-600">
+                      {priceFormData.photoPreview ? (
+                        <div className="relative">
+                          <img
+                            src={priceFormData.photoPreview}
+                            alt="Preview"
+                            className="w-full h-32 object-cover rounded"
+                          />
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setPriceFormData({ ...priceFormData, photo: null, photoPreview: null });
+                            }}
+                            className="absolute top-1 right-1 bg-red-500 text-white rounded-full p-1"
+                          >
+                            <X className="w-4 h-4" />
+                          </button>
+                        </div>
+                      ) : (
+                        <div>
+                          <Camera className="w-8 h-8 mx-auto text-gray-400 mb-2" />
+                          <span className="text-sm text-gray-600">Fotoğraf Ekle</span>
+                        </div>
+                      )}
+                    </div>
+                  </label>
+                </div>
+              </div>
+              <div className="flex gap-2 pt-4">
+                <Button
+                  variant="outline"
+                  onClick={() => setIsAddPriceDialogOpen(false)}
+                  className="flex-1"
+                >
+                  İptal
+                </Button>
+                <Button
+                  onClick={handleAddPrice}
+                  disabled={isSubmittingPrice || !priceFormData.price || !priceFormData.locationId}
+                  className="flex-1 bg-green-600 hover:bg-green-700"
+                >
+                  {isSubmittingPrice ? 'Ekleniyor...' : 'Ekle'}
+                </Button>
+              </div>
+            </div>
+          </DialogContent>
+        </Dialog>
+      )}
     </div>
   );
 }

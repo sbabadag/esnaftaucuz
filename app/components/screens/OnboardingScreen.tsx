@@ -33,7 +33,7 @@ export default function OnboardingScreen({ onComplete }: { onComplete: () => voi
   const handleNext = () => {
     if (isLastStep) {
       onComplete();
-      navigate('/location');
+      navigate('/login');
     } else {
       setCurrentStep(currentStep + 1);
     }
@@ -44,6 +44,15 @@ export default function OnboardingScreen({ onComplete }: { onComplete: () => voi
 
   return (
     <div className="min-h-screen bg-white flex flex-col p-6">
+      <div className="flex justify-end">
+        <button
+          aria-label="Skip onboarding"
+          onClick={() => { onComplete(); navigate('/login'); }}
+          className="text-sm text-gray-500 hover:text-gray-700 p-2"
+        >
+          Atla
+        </button>
+      </div>
       <div className="flex-1 flex flex-col items-center justify-center">
         <AnimatePresence mode="wait">
           <motion.div
@@ -74,6 +83,16 @@ export default function OnboardingScreen({ onComplete }: { onComplete: () => voi
             <p className="text-center text-sm text-gray-500">
               {currentData.subtext}
             </p>
+            {/* Replay button on last step */}
+            {isLastStep && (
+              <button
+                aria-label="Replay onboarding"
+                onClick={() => setCurrentStep(0)}
+                className="mt-4 text-sm text-green-600"
+              >
+                Tekrar göster
+              </button>
+            )}
           </motion.div>
         </AnimatePresence>
       </div>

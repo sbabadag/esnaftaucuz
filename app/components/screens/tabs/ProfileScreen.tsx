@@ -6,10 +6,16 @@ import { Badge } from '../../ui/badge';
 import { Button } from '../../ui/button';
 import { useAuth } from '../../../contexts/AuthContext';
 import { toast } from 'sonner';
+import { useTheme } from '../../../contexts/ThemeContext';
+import { useState } from 'react';
 
 export default function ProfileScreen() {
   const navigate = useNavigate();
   const { logout, user } = useAuth();
+  const { theme, toggleTheme } = useTheme();
+  const [locale, setLocale] = useState<string>(() => {
+    try { return localStorage.getItem('locale') || 'tr'; } catch { return 'tr'; }
+  });
 
   // Debug: Log user and is_merchant status
   useEffect(() => {
@@ -66,16 +72,25 @@ export default function ProfileScreen() {
       { icon: Store, label: 'Dükkanım', onClick: () => navigate(`/app/merchant-shop/${user?.id}`) },
     ] : []),
     { icon: Share2, label: 'Katkılarım', onClick: () => navigate('/app/contributions') },
-    { icon: Heart, label: 'Favorilerim', onClick: () => {} },
+    { icon: Heart, label: 'Favorilerim', onClick: () => navigate('/app/favorites') },
     { icon: Award, label: 'Rozetler', onClick: () => {} },
     { icon: Settings, label: 'Ayarlar', onClick: () => navigate('/app/settings') },
-    { icon: Share2, label: 'Destek & Geri Bildirim', onClick: () => {} },
+    { icon: Share2, label: 'Destek & Geri Bildirim', onClick: () => navigate('/app/feedback') },
+    // Theme toggle (not a navigation item)
+    { icon: Share2, label: `Tema: ${theme === 'dark' ? 'Koyu' : 'Açık'}`, onClick: () => toggleTheme() },
+    // Language selector entry (cycles en/tr)
+    { icon: Share2, label: `Dil: ${locale === 'tr' ? 'Türkçe' : 'English'}`, onClick: () => {
+      const next = locale === 'tr' ? 'en' : 'tr';
+      try { localStorage.setItem('locale', next); } catch {}
+      setLocale(next);
+      toast.success('Dil değiştirildi');
+    } },
   ];
 
   return (
     <div className="min-h-screen bg-gray-50">
       {/* Profile Header */}
-      <div className="bg-white p-6 border-b border-gray-200">
+      <div className="bg-white p-6 border-b border-gray-200" style={{ paddingTop: 'calc(1.5rem + env(safe-area-inset-top, 0px))' }}>
         <div className="flex items-center gap-4 mb-6">
           <Avatar className="w-20 h-20">
             <AvatarImage src={user?.avatar || ''} />

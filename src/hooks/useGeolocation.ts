@@ -14,11 +14,28 @@ export const useGeolocation = () => {
     try {
       if (isNative()) {
         // Use Capacitor Geolocation on native
-        // Increased timeout for iOS (20 seconds) to handle slower GPS acquisition
+        // First check and request permissions
+        const permissions = await Geolocation.checkPermissions();
+        console.log('📱 Native: Current permissions:', permissions);
+        
+        if (permissions.location !== 'granted') {
+          console.log('📱 Native: Requesting location permission...');
+          const requestResult = await Geolocation.requestPermissions();
+          console.log('📱 Native: Permission request result:', requestResult);
+          
+          if (requestResult.location !== 'granted') {
+            console.error('📱 Native: Location permission denied');
+            throw new Error('Location permission denied');
+          }
+        }
+        
+        // Increased timeout for Android/iOS (30 seconds) to handle slower GPS acquisition
+        console.log('📱 Native: Getting current position...');
         const position = await Geolocation.getCurrentPosition({
           enableHighAccuracy: true,
-          timeout: 20000, // 20 seconds (increased from 10 for iOS)
+          timeout: 30000, // 30 seconds (increased for better GPS acquisition)
         });
+        console.log('📱 Native: Position obtained:', position);
         return {
           latitude: position.coords.latitude,
           longitude: position.coords.longitude,

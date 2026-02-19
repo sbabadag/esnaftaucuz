@@ -601,7 +601,7 @@ export default function MapScreen() {
       `}</style>
       
       {/* Map Header */}
-      <div className="absolute top-0 left-0 right-0 bg-white/95 backdrop-blur-sm px-3 py-2.5 z-[1000] border-b border-gray-200 flex items-center justify-between gap-2">
+      <div className="absolute left-0 right-0 bg-white/95 backdrop-blur-sm px-3 py-2.5 z-[1000] border-b border-gray-200 flex items-center justify-between gap-2" style={{ top: 'env(safe-area-inset-top, 0px)', paddingTop: 'calc(0.625rem + env(safe-area-inset-top, 0px))' }}>
         <h1 className="font-semibold text-base sm:text-lg flex-1 min-w-0 truncate whitespace-nowrap">En Düşük Fiyatlı Ürünler</h1>
         <div className="flex items-center gap-1.5 flex-shrink-0">
           <Button
@@ -629,7 +629,7 @@ export default function MapScreen() {
         className="w-full relative" 
             style={{
           height: 'calc(100vh - 80px)', 
-          marginTop: '64px',
+          marginTop: 'calc(64px + env(safe-area-inset-top, 0px))',
           zIndex: 1
         }}
       >

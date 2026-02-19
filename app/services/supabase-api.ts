@@ -894,25 +894,22 @@ export const pricesAPI = {
       try {
         console.log('🚀 Starting price creation...');
         
-        // Get current user
+        // Get current user - ALWAYS use auth.getUser() for authenticated users
         console.log('👤 Getting user...');
-        const { data: { user: authUser } } = await supabase.auth.getUser();
-        const token = localStorage.getItem('authToken');
+        const { data: { user: authUser }, error: getUserError } = await supabase.auth.getUser();
         
-        let userId: string | null = null;
-        
-        if (authUser) {
-          userId = authUser.id;
-          console.log('✅ Authenticated user found:', userId);
-        } else if (token && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(token)) {
-          // Guest user
-          userId = token;
-          console.log('✅ Guest user found:', userId);
+        if (getUserError) {
+          console.error('❌ Get user error:', getUserError);
+          throw new Error('Oturum doğrulanamadı. Lütfen tekrar giriş yapın.');
         }
-
-        if (!userId) {
+        
+        if (!authUser) {
+          console.error('❌ No authenticated user');
           throw new Error('Giriş yapmanız gerekiyor');
         }
+        
+        let userId = authUser.id;
+        console.log('✅ Authenticated user found:', userId);
 
       // Find or create product
       console.log('🔍 Finding or creating product...');
@@ -1104,6 +1101,28 @@ export const pricesAPI = {
         console.log('ℹ️ No photo provided, skipping photo upload');
       }
 
+      // Verify user_id matches auth.uid() for RLS policy
+      const { data: { user: currentAuthUser }, error: authError } = await supabase.auth.getUser();
+      
+      if (authError) {
+        console.error('❌ Auth error:', authError);
+        throw new Error('Oturum doğrulanamadı. Lütfen tekrar giriş yapın.');
+      }
+      
+      if (!currentAuthUser) {
+        console.error('❌ No authenticated user found');
+        throw new Error('Oturum bulunamadı. Lütfen tekrar giriş yapın.');
+      }
+      
+      // Always use current auth user ID
+      userId = currentAuthUser.id;
+      console.log('✅ Using authenticated user ID:', userId);
+      
+      if (currentAuthUser.id !== userId) {
+        console.warn('⚠️ User ID mismatch - using auth user ID instead');
+        userId = currentAuthUser.id;
+      }
+
       // Create price
       const priceData: any = {
         product_id: productId,
@@ -1112,6 +1131,7 @@ export const pricesAPI = {
         location_id: locationId,
         user_id: userId,
         photo: photoUrl,
+        is_active: true, // Ensure is_active is set
       };
 
       if (data.lat && data.lng) {
@@ -1122,11 +1142,23 @@ export const pricesAPI = {
         product_id: priceData.product_id,
         location_id: priceData.location_id,
         user_id: priceData.user_id,
+        auth_uid: currentAuthUser?.id,
+        user_id_match: currentAuthUser?.id === priceData.user_id,
         price: priceData.price,
         hasPhoto: !!priceData.photo,
         photoUrl: priceData.photo || 'null',
         hasCoordinates: !!(priceData.coordinates),
       });
+
+      // Double-check auth.uid() before insert
+      if (!currentAuthUser) {
+        throw new Error('Oturum bulunamadı. Lütfen tekrar giriş yapın.');
+      }
+      
+      if (currentAuthUser.id !== priceData.user_id) {
+        console.warn('⚠️ User ID mismatch - correcting user_id');
+        priceData.user_id = currentAuthUser.id;
+      }
 
       console.log('💾 Inserting price into database...');
       const { data: priceRecord, error: priceError } = await supabase
@@ -1149,9 +1181,25 @@ export const pricesAPI = {
       }
 
       if (priceError) {
-        console.error('Price creation error:', priceError);
-        console.error('Price data:', priceData);
-        throw new Error(`Fiyat oluşturulamadı: ${priceError.message}`);
+        console.error('❌ Price creation error:', priceError);
+        console.error('❌ Error code:', priceError.code);
+        console.error('❌ Error message:', priceError.message);
+        console.error('❌ Error details:', priceError.details);
+        console.error('❌ Error hint:', priceError.hint);
+        console.error('❌ Price data:', priceData);
+        console.error('❌ Current auth user:', currentAuthUser?.id);
+        console.error('❌ User ID in price data:', priceData.user_id);
+        console.error('❌ User ID match:', currentAuthUser?.id === priceData.user_id);
+        
+        // Provide more helpful error message
+        let errorMessage = 'Fiyat oluşturulamadı';
+        if (priceError.code === '42501' || priceError.message?.includes('permission denied') || priceError.message?.includes('row-level security')) {
+          errorMessage = 'Yetki hatası: Fiyat ekleme yetkiniz yok. Lütfen tekrar giriş yapın.';
+        } else if (priceError.message) {
+          errorMessage = `Fiyat oluşturulamadı: ${priceError.message}`;
+        }
+        
+        throw new Error(errorMessage);
       }
       
       if (!priceRecord) {
@@ -1425,6 +1473,91 @@ export const usersAPI = {
       throw new Error(error.message || 'Kullanıcı güncellenemedi');
     }
   },
+
+  deleteAccount: async (id: string) => {
+    try {
+      console.log('🗑️ Starting account deletion for user:', id);
+      
+      // Step 1: Delete user-related data (cascade should handle most, but we'll be explicit)
+      // Delete favorites
+      const { error: favoritesError } = await supabase
+        .from('user_favorites')
+        .delete()
+        .eq('user_id', id);
+      
+      if (favoritesError) {
+        console.error('Error deleting favorites:', favoritesError);
+        // Continue - might not exist
+      }
+
+      // Delete notifications
+      const { error: notificationsError } = await supabase
+        .from('notifications')
+        .delete()
+        .eq('user_id', id);
+      
+      if (notificationsError) {
+        console.error('Error deleting notifications:', notificationsError);
+        // Continue - might not exist
+      }
+
+      // Delete prices (user contributions)
+      const { error: pricesError } = await supabase
+        .from('prices')
+        .delete()
+        .eq('user_id', id);
+      
+      if (pricesError) {
+        console.error('Error deleting prices:', pricesError);
+        // Continue - might not exist
+      }
+
+      // Delete merchant products if user is a merchant
+      const { error: merchantProductsError } = await supabase
+        .from('merchant_products')
+        .delete()
+        .eq('merchant_id', id);
+      
+      if (merchantProductsError) {
+        console.error('Error deleting merchant products:', merchantProductsError);
+        // Continue - might not exist
+      }
+
+      // Delete verifications
+      const { error: verificationsError } = await supabase
+        .from('verifications')
+        .delete()
+        .eq('user_id', id);
+      
+      if (verificationsError) {
+        console.error('Error deleting verifications:', verificationsError);
+        // Continue - might not exist
+      }
+
+      // Step 2: Delete user profile from public.users
+      const { error: profileError } = await supabase
+        .from('users')
+        .delete()
+        .eq('id', id);
+
+      if (profileError) {
+        console.error('Error deleting user profile:', profileError);
+        throw new Error('Kullanıcı profili silinemedi: ' + profileError.message);
+      }
+
+      console.log('✅ User profile and related data deleted successfully');
+
+      // Note: Auth user deletion requires admin privileges and must be done server-side
+      // All user data has been deleted from the database
+      // The auth user account will remain but won't have access to any data
+      // For complete deletion, an admin function or Edge Function would be needed
+
+      return { success: true };
+    } catch (error: any) {
+      console.error('❌ Delete account error:', error);
+      throw new Error(error.message || 'Hesap silinirken bir hata oluştu');
+    }
+  },
 };
 
 // ============================================================================
@@ -1642,6 +1775,221 @@ export const searchAPI = {
 };
 
 // ============================================================================
+// FAVORITES API
+// ============================================================================
+
+export const favoritesAPI = {
+  // Add product to favorites
+  add: async (productId: string, userId: string) => {
+    try {
+      const { data, error } = await supabase
+        .from('user_favorites')
+        .insert({
+          user_id: userId,
+          product_id: productId,
+        })
+        .select()
+        .single();
+
+      if (error) throw error;
+      return data;
+    } catch (error: any) {
+      console.error('❌ Add favorite error:', error);
+      throw error;
+    }
+  },
+
+  // Remove product from favorites
+  remove: async (productId: string, userId: string) => {
+    try {
+      const { error } = await supabase
+        .from('user_favorites')
+        .delete()
+        .eq('user_id', userId)
+        .eq('product_id', productId);
+
+      if (error) throw error;
+      return true;
+    } catch (error: any) {
+      console.error('❌ Remove favorite error:', error);
+      throw error;
+    }
+  },
+
+  // Check if product is favorited by user
+  isFavorited: async (productId: string, userId: string) => {
+    try {
+      const { data, error } = await supabase
+        .from('user_favorites')
+        .select('id')
+        .eq('user_id', userId)
+        .eq('product_id', productId)
+        .maybeSingle();
+
+      if (error) throw error;
+      return !!data;
+    } catch (error: any) {
+      console.error('❌ Check favorite error:', error);
+      throw error;
+    }
+  },
+
+  // Get all favorites for a user
+  getByUser: async (userId: string) => {
+    try {
+      const { data, error } = await supabase
+        .from('user_favorites')
+        .select(`
+          *,
+          product:products(*)
+        `)
+        .eq('user_id', userId)
+        .order('created_at', { ascending: false });
+
+      if (error) throw error;
+      return data || [];
+    } catch (error: any) {
+      console.error('❌ Get favorites error:', error);
+      throw error;
+    }
+  },
+
+  // Toggle favorite (add if not exists, remove if exists)
+  toggle: async (productId: string, userId: string) => {
+    try {
+      const isFavorited = await favoritesAPI.isFavorited(productId, userId);
+      if (isFavorited) {
+        await favoritesAPI.remove(productId, userId);
+        return false;
+      } else {
+        await favoritesAPI.add(productId, userId);
+        return true;
+      }
+    } catch (error: any) {
+      console.error('❌ Toggle favorite error:', error);
+      throw error;
+    }
+  },
+};
+
+// ============================================================================
+// NOTIFICATIONS API
+// ============================================================================
+
+export const notificationsAPI = {
+  // Get all notifications for a user
+  getByUser: async (userId: string, limit: number = 50) => {
+    try {
+      const { data, error } = await supabase
+        .from('notifications')
+        .select(`
+          *,
+          product:products(id, name, image, category)
+        `)
+        .eq('user_id', userId)
+        .order('created_at', { ascending: false })
+        .limit(limit);
+
+      if (error) {
+        // If table doesn't exist, return empty array
+        if (error.code === '42P01' || error.message?.includes('does not exist')) {
+          return [];
+        }
+        throw error;
+      }
+      return data || [];
+    } catch (error: any) {
+      // If table doesn't exist, return empty array instead of throwing
+      if (error?.code === '42P01' || error?.message?.includes('does not exist')) {
+        return [];
+      }
+      console.error('❌ Get notifications error:', error);
+      throw error;
+    }
+  },
+
+  // Get unread notifications count
+  getUnreadCount: async (userId: string) => {
+    try {
+      const { count, error } = await supabase
+        .from('notifications')
+        .select('*', { count: 'exact', head: true })
+        .eq('user_id', userId)
+        .eq('is_read', false);
+
+      if (error) {
+        // If table doesn't exist, return 0 instead of throwing
+        if (error.code === '42P01' || error.message?.includes('does not exist')) {
+          return 0;
+        }
+        throw error;
+      }
+      return count || 0;
+    } catch (error: any) {
+      // If table doesn't exist, return 0
+      if (error?.code === '42P01' || error?.message?.includes('does not exist')) {
+        return 0;
+      }
+      console.error('❌ Get unread count error:', error);
+      throw error;
+    }
+  },
+
+  // Mark notification as read
+  markAsRead: async (notificationId: string, userId: string) => {
+    try {
+      const { data, error } = await supabase
+        .from('notifications')
+        .update({ is_read: true })
+        .eq('id', notificationId)
+        .eq('user_id', userId)
+        .select()
+        .single();
+
+      if (error) throw error;
+      return data;
+    } catch (error: any) {
+      console.error('❌ Mark as read error:', error);
+      throw error;
+    }
+  },
+
+  // Mark all notifications as read
+  markAllAsRead: async (userId: string) => {
+    try {
+      const { error } = await supabase
+        .from('notifications')
+        .update({ is_read: true })
+        .eq('user_id', userId)
+        .eq('is_read', false);
+
+      if (error) throw error;
+      return true;
+    } catch (error: any) {
+      console.error('❌ Mark all as read error:', error);
+      throw error;
+    }
+  },
+
+  // Delete notification
+  delete: async (notificationId: string, userId: string) => {
+    try {
+      const { error } = await supabase
+        .from('notifications')
+        .delete()
+        .eq('id', notificationId)
+        .eq('user_id', userId);
+
+      if (error) throw error;
+      return true;
+    } catch (error: any) {
+      console.error('❌ Delete notification error:', error);
+      throw error;
+    }
+  },
+};
+
+// ============================================================================
 // MERCHANT PRODUCTS API
 // ============================================================================
 
@@ -1715,10 +2063,11 @@ export const merchantProductsAPI = {
       if (data.coordinates) {
         insertData.coordinates = `(${data.coordinates.lng},${data.coordinates.lat})`;
       }
-
+      // Use upsert with conflict on (merchant_id, product_id) so adding the same product
+      // for the same merchant will update the existing row instead of throwing a duplicate key error.
       const { data: result, error } = await supabase
         .from('merchant_products')
-        .insert(insertData)
+        .upsert(insertData, { onConflict: 'merchant_id,product_id' })
         .select(`
           *,
           product:products(*),
@@ -1726,7 +2075,11 @@ export const merchantProductsAPI = {
         `)
         .single();
 
-      if (error) throw error;
+      if (error) {
+        console.error('❌ Create/Upsert merchant product error:', error);
+        throw error;
+      }
+
       return result;
     } catch (error: any) {
       console.error('❌ Create merchant product error:', error);
@@ -1865,6 +2218,40 @@ export const merchantProductsAPI = {
     } catch (error: any) {
       console.error('❌ Get all merchant shops error:', error);
       throw error;
+    }
+  },
+};
+
+// ============================================================================
+// FEEDBACK API
+// ============================================================================
+
+export const feedbackAPI = {
+  send: async (data: { user_id: string | null; message: string; platform?: string }) => {
+    try {
+      // Try to insert into feedback table; if table missing, fallback to console/mailto
+      const insert = {
+        user_id: data.user_id,
+        message: data.message,
+        platform: data.platform || 'web',
+        created_at: new Date().toISOString(),
+      };
+
+      const { data: inserted, error } = await supabase
+        .from('feedback')
+        .insert(insert)
+        .select()
+        .single();
+
+      if (error) {
+        // If table doesn't exist or permission denied, log and throw
+        console.warn('Feedback insert error:', error);
+        throw error;
+      }
+      return inserted;
+    } catch (err: any) {
+      console.error('Failed to send feedback:', err);
+      throw err;
     }
   },
 };

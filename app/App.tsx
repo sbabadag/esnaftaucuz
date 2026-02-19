@@ -2,9 +2,9 @@ import React, { useState, useEffect } from 'react';
 import { BrowserRouter, Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom';
 import { Toaster } from './components/ui/sonner';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
+import { ThemeProvider } from './contexts/ThemeContext';
 import SplashScreen from './components/screens/SplashScreen';
 import OnboardingScreen from './components/screens/OnboardingScreen';
-import LocationPermissionScreen from './components/screens/LocationPermissionScreen';
 import LoginScreen from './components/screens/LoginScreen';
 import MainApp from './components/screens/MainApp';
 import { App as CapacitorApp } from '@capacitor/app';
@@ -33,7 +33,6 @@ function AppRoutes() {
   const location = useLocation();
   const navigate = useNavigate();
   const [hasSeenOnboarding, setHasSeenOnboarding] = useState(false);
-  const [hasLocationPermission, setHasLocationPermission] = useState(false);
 
   // Handle OAuth callback redirect - if user is logged in and on root, redirect to explore
   useEffect(() => {
@@ -111,10 +110,6 @@ function AppRoutes() {
       <Route 
         path="/onboarding" 
         element={<OnboardingScreen onComplete={() => setHasSeenOnboarding(true)} />} 
-      />
-      <Route 
-        path="/location" 
-        element={<LocationPermissionScreen onAllow={() => setHasLocationPermission(true)} />} 
       />
       <Route 
         path="/login" 
@@ -313,12 +308,14 @@ function App() {
 
   return (
     <AuthProvider>
-      <BrowserRouter>
-        <div className="min-h-screen bg-background">
-          <AppRoutes />
-          <Toaster />
-        </div>
-      </BrowserRouter>
+      <ThemeProvider>
+        <BrowserRouter>
+          <div className="min-h-screen bg-background">
+            <AppRoutes />
+            <Toaster />
+          </div>
+        </BrowserRouter>
+      </ThemeProvider>
     </AuthProvider>
   );
 }

@@ -156,3 +156,6 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON public.merchant_products TO authenticate
 GRANT SELECT, INSERT, UPDATE, DELETE ON public.merchant_product_verifications TO authenticated;
 
 
+
+
+

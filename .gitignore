@@ -39,6 +39,11 @@ android/
 ios/
 .capacitor/
 
+# Android Keystore (keep keystore files safe!)
+android/key.properties
+android/app/*.jks
+android/app/*.keystore
+
 # Backend
 backend/uploads/
 backend/dist/

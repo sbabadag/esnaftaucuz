@@ -1,6 +1,6 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Search, Bell, Filter, MapPin, Clock, CheckCircle2, Package, RefreshCw, X, Navigation } from 'lucide-react';
+import { Search, Bell, Filter, MapPin, Clock, CheckCircle2, Package, RefreshCw, X, Navigation, ShoppingBag } from 'lucide-react';
 import { Button } from '../../ui/button';
 import { Input } from '../../ui/input';
 import { Badge } from '../../ui/badge';
@@ -63,6 +63,7 @@ export default function ExploreScreen() {
   const navigate = useNavigate();
   const { getCurrentPosition } = useGeolocation();
   const { user } = useAuth();
+  const isMerchant = (user as any)?.is_merchant === true;
   const [searchParams, setSearchParams] = useSearchParams();
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<{
@@ -80,6 +81,8 @@ export default function ExploreScreen() {
   const [pullDistance, setPullDistance] = useState(0);
   const touchStartY = useRef<number | null>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const channelRef = useRef<any>(null);
+  const retryCountRef = useRef<number>(0);
   const [currentLocation, setCurrentLocation] = useState<string>('Konya / Selçuklu');
   const [isGettingLocation, setIsGettingLocation] = useState(false);
   const [userLocation, setUserLocation] = useState<{ lat: number; lng: number } | null>(null);
@@ -92,6 +95,7 @@ export default function ExploreScreen() {
     withPhoto: false,
     verified: false,
   });
+
 
   // Check for search query in URL on mount
   useEffect(() => {
@@ -198,178 +202,9 @@ export default function ExploreScreen() {
     };
   }, []); // Only run once on mount
 
-  // Reload data when user location or search radius changes
-  useEffect(() => {
-    if (userLocation) {
-      console.log('📍 User location or search radius changed, reloading data...', userLocation);
-      loadData();
-    }
-  }, [userLocation?.lat, userLocation?.lng, (user as any)?.search_radius, (user as any)?.preferences?.searchRadius]); // Reload when coordinates or radius change
-
-  useEffect(() => {
-    console.log('🔄 ExploreScreen mounted, loading data...');
-    
-    // Safety timeout - force loading to false after 20 seconds
-    const safetyTimeout = setTimeout(() => {
-      console.warn('⚠️ Safety timeout triggered - forcing loading to false');
-      setIsLoading(false);
-      setIsRefreshing(false);
-      setPullDistance(0);
-      toast.error('Veriler yüklenirken zaman aşımı oluştu. Lütfen tekrar deneyin.');
-    }, 20000);
-    
-    loadData().catch((error) => {
-      console.error('❌ Load data failed in useEffect:', error);
-      setIsLoading(false);
-      setIsRefreshing(false);
-    }).finally(() => {
-      clearTimeout(safetyTimeout);
-    });
-    
-    return () => {
-      clearTimeout(safetyTimeout);
-    };
-  }, []);
-
-  // Supabase Realtime subscription for price updates
-  useEffect(() => {
-    console.log('🔴 Setting up Realtime subscription for prices...');
-    
-    const channel = supabase
-      .channel('prices-changes')
-      .on(
-        'postgres_changes',
-        {
-          event: '*', // Listen to all events (INSERT, UPDATE, DELETE)
-          schema: 'public',
-          table: 'prices',
-        },
-        (payload) => {
-          console.log('🔴 Realtime event received:', payload.eventType, payload);
-          
-          // Handle different event types
-          if (payload.eventType === 'INSERT') {
-            const newPriceId = payload.new.id || payload.new._id;
-            console.log('➕ New price added:', newPriceId);
-            
-            // Fetch full price data with relations instead of using raw payload
-            // Realtime payload doesn't include related data (product, location, user)
-            pricesAPI.getById(newPriceId)
-              .then((fullPrice) => {
-                if (!fullPrice) return;
-                
-                console.log('✅ Full price data fetched:', fullPrice);
-                
-                // Add to recent prices if it matches filters
-                setRecentPrices((prev) => {
-                  // Check if already exists
-                  const exists = prev.some((p) => (p.id || p._id) === (fullPrice.id || fullPrice._id));
-                  if (exists) return prev;
-                  
-                  // Add to beginning of list
-                  return [fullPrice, ...prev].slice(0, 100); // Keep max 100 items
-                });
-                
-                // Show toast notification
-                toast.success('Yeni fiyat eklendi!', {
-                  description: fullPrice.product?.name || 'Yeni bir fiyat paylaşıldı',
-                });
-                
-                // Reload nearby cheapest prices
-                if (userLocation) {
-                  // Priority: preferences.searchRadius (newer) > search_radius (legacy) > default
-                  const searchRadiusKm = (user as any)?.preferences?.searchRadius !== undefined
-                                        ? (user as any).preferences.searchRadius
-                                        : (user as any)?.search_radius !== undefined
-                                        ? (user as any).search_radius
-                                        : 15;
-                  const searchRadiusMeters = searchRadiusKm * 1000;
-                  
-                  searchAPI.getNearbyCheapest(
-                    userLocation.lat, 
-                    userLocation.lng, 
-                    searchRadiusMeters, 
-                    10
-                  ).then((nearby) => {
-                    setNearbyCheapest(nearby);
-                  }).catch((err) => {
-                    console.error('❌ Failed to reload nearby prices:', err);
-                  });
-                }
-              })
-              .catch((err) => {
-                console.error('❌ Failed to fetch full price data:', err);
-                // Fallback: reload all data
-                loadData(true);
-              });
-          } else if (payload.eventType === 'UPDATE') {
-            const updatedPriceId = payload.new.id || payload.new._id;
-            console.log('🔄 Price updated:', updatedPriceId);
-            
-            // Fetch full price data with relations
-            pricesAPI.getById(updatedPriceId)
-              .then((fullPrice) => {
-                if (!fullPrice) return;
-                
-                // Update in recent prices
-                setRecentPrices((prev) =>
-                  prev.map((p) =>
-                    (p.id || p._id) === (fullPrice.id || fullPrice._id) ? fullPrice : p
-                  )
-                );
-                
-                // Update in nearby cheapest
-                setNearbyCheapest((prev) =>
-                  prev.map((p) =>
-                    (p.id || p._id) === (fullPrice.id || fullPrice._id) ? fullPrice : p
-                  )
-                );
-                
-                toast.info('Fiyat güncellendi', {
-                  description: fullPrice.product?.name || 'Bir fiyat güncellendi',
-                });
-              })
-              .catch((err) => {
-                console.error('❌ Failed to fetch updated price data:', err);
-                // Fallback: reload all data
-                loadData(true);
-              });
-          } else if (payload.eventType === 'DELETE') {
-            const deletedPriceId = payload.old.id || payload.old._id;
-            console.log('🗑️ Price deleted:', deletedPriceId);
-            
-            // Remove from recent prices
-            setRecentPrices((prev) =>
-              prev.filter((p) => (p.id || p._id) !== deletedPriceId)
-            );
-            
-            // Remove from nearby cheapest
-            setNearbyCheapest((prev) =>
-              prev.filter((p) => (p.id || p._id) !== deletedPriceId)
-            );
-            
-            toast.info('Fiyat silindi');
-          }
-        }
-      )
-      .subscribe((status) => {
-        console.log('🔴 Realtime subscription status:', status);
-        if (status === 'SUBSCRIBED') {
-          console.log('✅ Realtime subscription active');
-        } else if (status === 'CHANNEL_ERROR') {
-          console.error('❌ Realtime subscription error');
-          toast.error('Gerçek zamanlı güncellemeler bağlanamadı');
-        }
-      });
-    
-    // Cleanup subscription on unmount
-    return () => {
-      console.log('🔴 Cleaning up Realtime subscription...');
-      supabase.removeChannel(channel);
-    };
-  }, [userLocation, user]);
-
-  const loadData = async (isRefresh = false) => {
+  // Define loadData function before using it in useEffect
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const loadData = useCallback(async (isRefresh = false) => {
     // Set loading state immediately
     if (isRefresh) {
       setIsRefreshing(true);
@@ -379,14 +214,14 @@ export default function ExploreScreen() {
     
     console.log('🔄 Loading data...');
     
-    // Force timeout to prevent infinite loading
+    // Force timeout to prevent infinite loading (reduced to 10 seconds)
     const timeoutId = setTimeout(() => {
       console.warn('⚠️ Loading timeout - forcing completion');
       setIsLoading(false);
       setIsRefreshing(false);
       setPullDistance(0);
       toast.error('Veriler yüklenirken zaman aşımı oluştu');
-    }, 15000); // 15 second timeout
+    }, 10000); // 10 second timeout
 
     try {
       // Load trending products with individual timeout
@@ -554,7 +389,227 @@ export default function ExploreScreen() {
       setIsRefreshing(false);
       setPullDistance(0);
     }
-  };
+  }, [userLocation, user]);
+
+  // Reload data when user location or search radius changes
+  useEffect(() => {
+    if (userLocation) {
+      console.log('📍 User location or search radius changed, reloading data...', userLocation);
+      loadData();
+    }
+  }, [userLocation?.lat, userLocation?.lng, (user as any)?.search_radius, (user as any)?.preferences?.searchRadius, loadData]); // Reload when coordinates or radius change
+
+  useEffect(() => {
+    console.log('🔄 ExploreScreen mounted, loading data...');
+    
+    // Safety timeout - force loading to false after 12 seconds
+    const safetyTimeout = setTimeout(() => {
+      console.warn('⚠️ Safety timeout triggered - forcing loading to false');
+      setIsLoading(false);
+      setIsRefreshing(false);
+      setPullDistance(0);
+      toast.error('Veriler yüklenirken zaman aşımı oluştu. Lütfen tekrar deneyin.');
+    }, 12000);
+    
+    loadData().catch((error) => {
+      console.error('❌ Load data failed in useEffect:', error);
+      setIsLoading(false);
+      setIsRefreshing(false);
+    }).finally(() => {
+      clearTimeout(safetyTimeout);
+    });
+    
+    return () => {
+      clearTimeout(safetyTimeout);
+    };
+  }, [loadData]);
+
+  // Supabase Realtime subscription for price updates
+  useEffect(() => {
+    console.log('🔴 Setting up Realtime subscription for prices...');
+    
+    const maxRetries = 3;
+    const retryDelay = 2000; // 2 seconds
+    
+    const setupSubscription = () => {
+      // Clean up existing channel if any
+      if (channelRef.current) {
+        try {
+          supabase.removeChannel(channelRef.current);
+        } catch (e) {
+          console.warn('Failed to remove existing channel:', e);
+        }
+      }
+      
+      channelRef.current = supabase
+        .channel(`prices-changes-${Date.now()}`) // Unique channel name to avoid conflicts
+        .on(
+          'postgres_changes',
+          {
+            event: '*', // Listen to all events (INSERT, UPDATE, DELETE)
+            schema: 'public',
+            table: 'prices',
+          },
+          (payload) => {
+            console.log('🔴 Realtime event received:', payload.eventType, payload);
+            
+            // Handle different event types
+            if (payload.eventType === 'INSERT') {
+              const newPriceId = payload.new.id || payload.new._id;
+              console.log('➕ New price added:', newPriceId);
+              
+              // Fetch full price data with relations instead of using raw payload
+              // Realtime payload doesn't include related data (product, location, user)
+              pricesAPI.getById(newPriceId)
+                .then((fullPrice) => {
+                  if (!fullPrice) return;
+                  
+                  console.log('✅ Full price data fetched:', fullPrice);
+                  
+                  // Add to recent prices if it matches filters
+                  setRecentPrices((prev) => {
+                    // Check if already exists
+                    const exists = prev.some((p) => (p.id || p._id) === (fullPrice.id || fullPrice._id));
+                    if (exists) return prev;
+                    
+                    // Add to beginning of list
+                    return [fullPrice, ...prev].slice(0, 100); // Keep max 100 items
+                  });
+                  
+                  // Show toast notification
+                  toast.success('Yeni fiyat eklendi!', {
+                    description: fullPrice.product?.name || 'Yeni bir fiyat paylaşıldı',
+                  });
+                  
+                  // Reload nearby cheapest prices
+                  if (userLocation) {
+                    // Priority: preferences.searchRadius (newer) > search_radius (legacy) > default
+                    const searchRadiusKm = (user as any)?.preferences?.searchRadius !== undefined
+                                          ? (user as any).preferences.searchRadius
+                                          : (user as any)?.search_radius !== undefined
+                                          ? (user as any).search_radius
+                                          : 15;
+                    const searchRadiusMeters = searchRadiusKm * 1000;
+                    
+                    searchAPI.getNearbyCheapest(
+                      userLocation.lat, 
+                      userLocation.lng, 
+                      searchRadiusMeters, 
+                      10
+                    ).then((nearby) => {
+                      setNearbyCheapest(nearby);
+                    }).catch((err) => {
+                      console.error('❌ Failed to reload nearby prices:', err);
+                    });
+                  }
+                })
+              .catch((err) => {
+                console.error('❌ Failed to fetch full price data:', err);
+                // Fallback: reload all data
+                loadData(true);
+              });
+          } else if (payload.eventType === 'UPDATE') {
+            const updatedPriceId = payload.new.id || payload.new._id;
+            console.log('🔄 Price updated:', updatedPriceId);
+            
+            // Fetch full price data with relations
+            pricesAPI.getById(updatedPriceId)
+              .then((fullPrice) => {
+                if (!fullPrice) return;
+                
+                // Update in recent prices
+                setRecentPrices((prev) =>
+                  prev.map((p) =>
+                    (p.id || p._id) === (fullPrice.id || fullPrice._id) ? fullPrice : p
+                  )
+                );
+                
+                // Update in nearby cheapest
+                setNearbyCheapest((prev) =>
+                  prev.map((p) =>
+                    (p.id || p._id) === (fullPrice.id || fullPrice._id) ? fullPrice : p
+                  )
+                );
+                
+                toast.info('Fiyat güncellendi', {
+                  description: fullPrice.product?.name || 'Bir fiyat güncellendi',
+                });
+              })
+              .catch((err) => {
+                console.error('❌ Failed to fetch updated price data:', err);
+                // Fallback: reload all data
+                loadData(true);
+              });
+          } else if (payload.eventType === 'DELETE') {
+            const deletedPriceId = payload.old.id || payload.old._id;
+            console.log('🗑️ Price deleted:', deletedPriceId);
+            
+            // Remove from recent prices
+            setRecentPrices((prev) =>
+              prev.filter((p) => (p.id || p._id) !== deletedPriceId)
+            );
+            
+            // Remove from nearby cheapest
+            setNearbyCheapest((prev) =>
+              prev.filter((p) => (p.id || p._id) !== deletedPriceId)
+            );
+            
+            toast.info('Fiyat silindi');
+          }
+        }
+      )
+      .subscribe((status) => {
+        console.log('🔴 Realtime subscription status:', status);
+        if (status === 'SUBSCRIBED') {
+          console.log('✅ Realtime subscription active');
+          retryCountRef.current = 0; // Reset retry count on success
+        } else if (status === 'CHANNEL_ERROR') {
+          console.error('❌ Realtime subscription error');
+          
+          // Retry subscription if we haven't exceeded max retries
+          if (retryCountRef.current < maxRetries) {
+            retryCountRef.current++;
+            console.log(`🔄 Retrying realtime subscription (${retryCountRef.current}/${maxRetries})...`);
+            
+            setTimeout(() => {
+              setupSubscription();
+            }, retryDelay * retryCountRef.current); // Exponential backoff
+          } else {
+            console.error('❌ Realtime subscription failed after max retries');
+            // Don't show error toast on every retry, only on final failure
+            // The app will still work without real-time updates
+            console.warn('⚠️ Real-time updates disabled. App will continue to work normally.');
+          }
+        } else if (status === 'TIMED_OUT') {
+          console.warn('⏱️ Realtime subscription timed out');
+          // Retry on timeout
+          if (retryCountRef.current < maxRetries) {
+            retryCountRef.current++;
+            setTimeout(() => {
+              setupSubscription();
+            }, retryDelay * retryCountRef.current);
+          }
+        }
+      });
+    };
+    
+    // Initial subscription setup
+    setupSubscription();
+    
+    // Cleanup subscription on unmount
+    return () => {
+      console.log('🔴 Cleaning up Realtime subscription...');
+      if (channelRef.current) {
+        try {
+          supabase.removeChannel(channelRef.current);
+        } catch (e) {
+          console.warn('Failed to remove channel:', e);
+        }
+      }
+      retryCountRef.current = 0; // Reset retry count on cleanup
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userLocation, user, loadData]);
 
   // Pull-to-refresh handlers
   const handleTouchStart = (e: React.TouchEvent) => {
@@ -721,6 +776,28 @@ export default function ExploreScreen() {
     }
   };
 
+  // Auto-search as the user types (debounced)
+  useEffect(() => {
+    const debounceMs = 350;
+    const handler = setTimeout(() => {
+      const q = searchQuery.trim();
+      if (q) {
+        // perform search for the latest query
+        performSearch(q).catch((err) => {
+          console.error('Debounced search failed:', err);
+        });
+      } else {
+        // Clear results immediately when query is empty
+        setSearchResults(null);
+        setSearchParams({});
+      }
+    }, debounceMs);
+
+    return () => clearTimeout(handler);
+    // Intentionally exclude performSearch from deps to avoid re-creating timer when its identity changes
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchQuery]);
+
   const handleSearch = async () => {
     if (!searchQuery.trim()) {
       setSearchResults(null);
@@ -746,8 +823,9 @@ export default function ExploreScreen() {
       {/* Pull-to-refresh indicator */}
       {pullDistance > 0 && (
         <div 
-          className="absolute top-0 left-0 right-0 flex items-center justify-center bg-white border-b border-gray-200 z-20 transition-transform duration-200"
+          className="absolute left-0 right-0 flex items-center justify-center bg-white border-b border-gray-200 z-20 transition-transform duration-200"
           style={{ 
+            top: 'calc(109px + env(safe-area-inset-top, 0px))',
             transform: `translateY(${Math.min(pullDistance, 120) - 60}px)`,
             height: '60px'
           }}
@@ -769,36 +847,42 @@ export default function ExploreScreen() {
         </div>
       )}
 
-      {/* Header */}
-      <div className="bg-white border-b border-gray-200 sticky top-0 z-10">
-        <div className="px-4 pt-4 pb-3">
-          <div className="flex items-center justify-between mb-3">
-            <div className="flex items-center gap-2 text-sm text-gray-600 flex-1 min-w-0">
-              <MapPin className="w-4 h-4 flex-shrink-0" />
-              <span className="truncate">{currentLocation}</span>
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-6 px-2 text-xs flex-shrink-0"
-                onClick={handleGetCurrentLocation}
-                disabled={isGettingLocation}
-                title="Mevcut konumu al"
-              >
-                {isGettingLocation ? (
-                  <RefreshCw className="w-3 h-3 animate-spin" />
-                ) : (
-                  <Navigation className="w-3 h-3" />
-                )}
-              </Button>
+      {/* Fixed Hero Section */}
+      <div className={`fixed left-0 right-0 ${isMerchant ? 'bg-gradient-to-br from-blue-600 via-blue-500 to-blue-600 text-white' : 'bg-gradient-to-br from-green-600 via-green-500 to-emerald-600 text-white'}`} style={{ 
+        top: 'env(safe-area-inset-top, 0px)',
+        paddingTop: '0.5rem',
+        paddingBottom: '0.5rem',
+        height: 'auto',
+        minHeight: '45px',
+        zIndex: 100
+      }}>
+        <div className="px-4 h-full flex items-center justify-between">
+          <div className="flex items-center gap-3 flex-1 min-w-0">
+            <div className="bg-white/20 rounded-full p-2 flex-shrink-0">
+              <ShoppingBag className="w-5 h-5" />
             </div>
-            <button
-              onClick={() => navigate('/app/notifications')}
-              className="p-2 hover:bg-gray-100 rounded-full flex-shrink-0"
-            >
-              <Bell className="w-5 h-5 text-gray-600" />
-            </button>
+            <div className="flex-1 min-w-0">
+            <h1 className="text-lg font-bold">esnaftaucuz</h1>
+            <p className={`text-xs opacity-90 leading-tight ${isMerchant ? 'text-blue-50' : 'text-green-50'}`}>En iyi fiyatları keşfet</p>
+            </div>
           </div>
+          <button
+            onClick={() => navigate('/app/notifications')}
+            className="p-2 hover:bg-white/20 rounded-full flex-shrink-0 transition-colors"
+          >
+            <Bell className="w-5 h-5" />
+          </button>
+        </div>
+      </div>
 
+      {/* Header - positioned directly below hero with no gap */}
+      <div className="bg-white border-b border-gray-200 sticky" style={{ 
+        top: 'calc(61px + env(safe-area-inset-top, 0px))', 
+        margin: 0, 
+        padding: 0,
+        zIndex: 99
+      }}>
+        <div className="px-4 py-1.5">
           <div className="flex gap-2">
             <div className="flex-1 relative">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
@@ -909,12 +993,58 @@ export default function ExploreScreen() {
       {/* Content */}
       <div 
         ref={scrollContainerRef}
-        className="p-3 sm:p-4 md:p-6 space-y-4 sm:space-y-6 overflow-y-auto max-w-7xl mx-auto"
+        className="px-3 sm:px-4 md:px-6 pb-3 sm:pb-4 md:pb-6 space-y-3 sm:space-y-4 overflow-y-auto max-w-7xl mx-auto"
         style={{ 
-          paddingTop: pullDistance > 0 ? `${Math.min(pullDistance, 60)}px` : '0',
-          transition: pullDistance === 0 ? 'padding-top 0.2s' : 'none'
+          paddingTop: pullDistance > 0 ? `${Math.min(pullDistance, 60)}px` : '0px',
+          marginTop: `calc(84px + env(safe-area-inset-top, 0px))`,
+          minHeight: 'calc(100vh - 84px - env(safe-area-inset-top, 0px))',
+          maxHeight: 'calc(100vh - 84px - env(safe-area-inset-top, 0px))',
+          transition: pullDistance === 0 ? 'padding-top 0.2s' : 'none',
+          position: 'relative',
+          zIndex: 1
         }}
       >
+        {/* Trend Products - En üste taşındı */}
+        {!searchResults && (
+          <section>
+            <h2 className="text-base sm:text-lg mb-2 sm:mb-3 text-gray-900 font-semibold">Bugün En Çok Bakılanlar</h2>
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-2 sm:gap-3">
+              {trendProducts.length > 0 ? (
+                trendProducts.slice(0, 12).map((product) => (
+                  <div
+                    key={product.id || product._id}
+                    onClick={() => navigate(`/app/product/${product.id || product._id}`)}
+                    className="bg-white rounded-lg p-2 sm:p-3 border border-gray-200 hover:border-green-600 hover:shadow-md cursor-pointer transition-all"
+                  >
+                    <div className="flex flex-col gap-1.5 sm:gap-2">
+                      <div className="w-full h-12 sm:h-16 rounded-lg bg-gray-100 flex items-center justify-center overflow-hidden">
+                        {product.image ? (
+                          <img 
+                            src={product.image} 
+                            alt={product.name}
+                            className="w-full h-full object-cover"
+                            onError={(e) => {
+                              (e.target as HTMLImageElement).style.display = 'none';
+                              (e.target as HTMLImageElement).nextElementSibling?.classList.remove('hidden');
+                            }}
+                          />
+                        ) : null}
+                        <Package className={`w-4 h-4 sm:w-6 sm:h-6 text-gray-400 ${product.image ? 'hidden' : ''}`} />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <h3 className="font-medium text-gray-900 truncate text-xs sm:text-sm">{product.name}</h3>
+                        <p className="text-xs text-gray-500 truncate">{product.category}</p>
+                      </div>
+                    </div>
+                  </div>
+                ))
+              ) : (
+                <p className="text-sm text-gray-500 col-span-full">Henüz trend ürün yok</p>
+              )}
+            </div>
+          </section>
+        )}
+
         {/* Search Results */}
         {searchResults && (
           <div className="space-y-4">
@@ -1210,45 +1340,6 @@ export default function ExploreScreen() {
                 </div>
               </section>
             )}
-
-            {/* Trend Products */}
-            <section>
-              <h2 className="text-base sm:text-lg mb-2 sm:mb-3 text-gray-900 font-semibold">Bugün En Çok Bakılanlar</h2>
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-2 sm:gap-3">
-                {trendProducts.length > 0 ? (
-                  trendProducts.slice(0, 12).map((product) => (
-                    <div
-                      key={product.id || product._id}
-                      onClick={() => navigate(`/app/product/${product.id || product._id}`)}
-                      className="bg-white rounded-lg p-2 sm:p-3 border border-gray-200 hover:border-green-600 hover:shadow-md cursor-pointer transition-all"
-                    >
-                      <div className="flex flex-col gap-1.5 sm:gap-2">
-                        <div className="w-full h-12 sm:h-16 rounded-lg bg-gray-100 flex items-center justify-center overflow-hidden">
-                          {product.image ? (
-                            <img 
-                              src={product.image} 
-                              alt={product.name}
-                              className="w-full h-full object-cover"
-                              onError={(e) => {
-                                (e.target as HTMLImageElement).style.display = 'none';
-                                (e.target as HTMLImageElement).nextElementSibling?.classList.remove('hidden');
-                              }}
-                            />
-                          ) : null}
-                          <Package className={`w-4 h-4 sm:w-6 sm:h-6 text-gray-400 ${product.image ? 'hidden' : ''}`} />
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <h3 className="font-medium text-gray-900 truncate text-xs sm:text-sm">{product.name}</h3>
-                          <p className="text-xs text-gray-500 truncate">{product.category}</p>
-                        </div>
-                      </div>
-                    </div>
-                  ))
-                ) : (
-                  <p className="text-sm text-gray-500 col-span-full">Henüz trend ürün yok</p>
-                )}
-              </div>
-            </section>
 
             {/* Nearby Cheap - Only show if user location is available */}
             {userLocation && (

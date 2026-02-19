@@ -21,42 +21,46 @@ interface ForwardGeocodingResult {
  * Reverse geocoding using Google Maps API ONLY
  * OpenStreetMap fallback removed - Google Maps API key is required
  */
-// Fallback API key for web builds (if env var is not available)
-const FALLBACK_API_KEY = 'AIzaSyCGRGdSA0IZHxgGI4PCv00kQ8xJ5dpx7Gc';
+// Fallback API key ONLY for development (never in production builds)
+const FALLBACK_API_KEY = import.meta.env.DEV ? 'AIzaSyCGRGdSA0IZHxgGI4PCv00kQ8xJ5dpx7Gc' : undefined;
 
 export async function reverseGeocode(
   latitude: number,
   longitude: number
 ): Promise<GeocodingResult> {
-  // Try to get API key from environment, fallback to hardcoded key for web
+  // Try to get API key from environment
   let googleApiKey: string | undefined;
   
   try {
     googleApiKey = import.meta.env?.VITE_GOOGLE_MAPS_API_KEY;
   } catch (e) {
-    console.warn('⚠️ import.meta.env not available, using fallback API key');
+    console.warn('⚠️ import.meta.env not available');
   }
   
-  // Use fallback if env var is missing or empty
-  if (!googleApiKey || googleApiKey.trim() === '') {
-    console.warn('⚠️ VITE_GOOGLE_MAPS_API_KEY not found in env, using fallback key');
+  // Use fallback ONLY in development mode
+  if ((!googleApiKey || googleApiKey.trim() === '') && import.meta.env.DEV && FALLBACK_API_KEY) {
+    console.warn('⚠️ VITE_GOOGLE_MAPS_API_KEY not found in env, using fallback key (DEV ONLY)');
     googleApiKey = FALLBACK_API_KEY;
   }
   
-  // Debug: Log API key status
-  console.log('🔑 Google Maps API Key Check:', {
-    exists: !!googleApiKey,
-    length: googleApiKey?.length || 0,
-    firstChars: googleApiKey?.substring(0, 10) || 'N/A',
-    source: import.meta.env?.VITE_GOOGLE_MAPS_API_KEY ? 'env' : 'fallback',
-  });
+  // Debug: Log API key status (only in development)
+  if (import.meta.env.DEV) {
+    console.log('🔑 Google Maps API Key Check:', {
+      exists: !!googleApiKey,
+      length: googleApiKey?.length || 0,
+      firstChars: googleApiKey?.substring(0, 10) || 'N/A',
+      source: import.meta.env?.VITE_GOOGLE_MAPS_API_KEY ? 'env' : (FALLBACK_API_KEY ? 'fallback (DEV)' : 'missing'),
+    });
+  }
   
   // Final check - API key must exist
   if (!googleApiKey || googleApiKey.trim() === '') {
-    console.error('❌ Google Maps API key not found!', {
-      googleApiKey,
-      env: import.meta.env,
-    });
+    if (import.meta.env.DEV) {
+      console.error('❌ Google Maps API key not found!', {
+        googleApiKey,
+        env: import.meta.env,
+      });
+    }
     return {
       success: false,
       error: 'Google Maps API key bulunamadı. Lütfen .env dosyasına VITE_GOOGLE_MAPS_API_KEY ekleyin.',
@@ -254,24 +258,26 @@ async function reverseGeocodeGoogle(
 export async function forwardGeocode(
   address: string
 ): Promise<ForwardGeocodingResult> {
-  // Try to get API key from environment, fallback to hardcoded key for web
+  // Try to get API key from environment
   let googleApiKey: string | undefined;
   
   try {
     googleApiKey = import.meta.env?.VITE_GOOGLE_MAPS_API_KEY;
   } catch (e) {
-    console.warn('⚠️ import.meta.env not available, using fallback API key');
+    console.warn('⚠️ import.meta.env not available');
   }
   
-  // Use fallback if env var is missing or empty
-  if (!googleApiKey || googleApiKey.trim() === '') {
-    console.warn('⚠️ VITE_GOOGLE_MAPS_API_KEY not found in env, using fallback key');
+  // Use fallback ONLY in development mode
+  if ((!googleApiKey || googleApiKey.trim() === '') && import.meta.env.DEV && FALLBACK_API_KEY) {
+    console.warn('⚠️ VITE_GOOGLE_MAPS_API_KEY not found in env, using fallback key (DEV ONLY)');
     googleApiKey = FALLBACK_API_KEY;
   }
   
   // Final check - API key must exist
   if (!googleApiKey || googleApiKey.trim() === '') {
-    console.error('❌ Google Maps API key not found!');
+    if (import.meta.env.DEV) {
+      console.error('❌ Google Maps API key not found!');
+    }
     return {
       success: false,
       error: 'Google Maps API key bulunamadı. Lütfen .env dosyasına VITE_GOOGLE_MAPS_API_KEY ekleyin.',

@@ -10,6 +10,11 @@ import NotificationsScreen from './NotificationsScreen';
 import SettingsScreen from './SettingsScreen';
 import ContributionsScreen from './ContributionsScreen';
 import MerchantShopScreen from './MerchantShopScreen';
+import PrivacyPolicyScreen from './PrivacyPolicyScreen';
+import TermsOfServiceScreen from './TermsOfServiceScreen';
+import AboutScreen from './AboutScreen';
+import FavoritesScreen from './FavoritesScreen';
+import FeedbackScreen from './FeedbackScreen';
 import { useState, useEffect } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
 
@@ -21,11 +26,10 @@ const regularTabs = [
   { path: 'profile', label: 'Profil', icon: User },
 ];
 
-// Merchant tabs - include both "Dükkanım" and "Profil"
+// Merchant tabs - esnaf sadece ürün sayfasından ürün ekleyebilir, + tuşu yok
 const merchantTabs = [
   { path: 'explore', label: 'Keşfet', icon: Compass },
   { path: 'map', label: 'Harita', icon: Map },
-  { path: 'add', label: 'Ekle', icon: Plus },
   { path: 'merchant-shop', label: 'Dükkanım', icon: Store },
   { path: 'profile', label: 'Profil', icon: User },
 ];
@@ -34,27 +38,17 @@ export default function MainApp() {
   const location = useLocation();
   const navigate = useNavigate();
   const { user } = useAuth();
+  const { isLoading } = useAuth();
   const [bannerVisible, setBannerVisible] = useState(true);
   
-  // Check if user is merchant - use blue theme for merchants, green for regular users
-  // Check both user object and localStorage for merchant status
-  const isMerchant = (user as any)?.is_merchant === true || 
-                    (() => {
-                      try {
-                        const storedUser = localStorage.getItem('user');
-                        if (storedUser) {
-                          const parsed = JSON.parse(storedUser);
-                          return parsed?.is_merchant === true;
-                        }
-                      } catch (e) {
-                        // Ignore parse errors
-                      }
-                      return false;
-                    })();
+  // Merchant status is derived directly from the authoritative `user` object
+  // so the UI updates immediately after login.
+  const isMerchant = (user as any)?.is_merchant === true;
   const themeColor = isMerchant ? 'blue' : 'green';
   const themeColorClass = isMerchant ? 'blue-600' : 'green-600';
   const themeGradientFrom = isMerchant ? 'from-blue-600' : 'from-green-600';
   const themeGradientTo = isMerchant ? 'to-blue-500' : 'to-emerald-600';
+  const bannerGradient = isMerchant ? 'bg-gradient-to-r from-blue-600 via-blue-500 to-blue-600' : `bg-gradient-to-r ${themeGradientFrom} ${themeGradientTo}`;
   
   // Check if banner was previously dismissed
   useEffect(() => {
@@ -91,14 +85,22 @@ export default function MainApp() {
     });
   }, [isMerchant, tabs, user]);
   
-  // Hide tab bar on detail screens and add price screen
-  const hideTabBar = location.pathname.includes('/product/') || 
-                     location.pathname.includes('/location/') ||
-                     location.pathname.includes('/notifications') ||
-                     location.pathname.includes('/settings') ||
-                     location.pathname.includes('/contributions') ||
-                     location.pathname.includes('/add') ||
-                     (isMerchant && location.pathname.includes('/merchant-shop/') && location.pathname !== `/app/merchant-shop/${user?.id}`);
+  // Hide tab bar on detail and modal-like screens.
+  const hideTabBar = (
+    location.pathname.includes('/product/') ||
+    location.pathname.includes('/location/') ||
+    location.pathname.includes('/notifications') ||
+    location.pathname.includes('/settings') ||
+    location.pathname.includes('/contributions') ||
+    location.pathname.includes('/privacy-policy') ||
+    location.pathname.includes('/terms-of-service') ||
+    location.pathname.includes('/about') ||
+    location.pathname.includes('/favorites') ||
+    // Add page is only available to regular users; hide tab bar when explicitly on add route.
+    (!isMerchant && location.pathname.includes('/add')) ||
+    // If merchant is viewing another merchant's shop (not their own), hide tabs to avoid confusion.
+    (isMerchant && location.pathname.startsWith('/app/merchant-shop/') && !location.pathname.startsWith(`/app/merchant-shop/${user?.id}`))
+  );
 
   const handleTabClick = (path: string) => {
     console.log('🔘 Tab click handler:', { path, currentPath: location.pathname });
@@ -112,53 +114,34 @@ export default function MainApp() {
     }
   };
   
-  // Check if merchant-shop tab is active
-  const isMerchantShopActive = isMerchant && location.pathname.includes('/merchant-shop/') && location.pathname === `/app/merchant-shop/${user?.id}`;
+  // Check if merchant-shop tab is active (match exact owner shop path)
+  const isMerchantShopActive = isMerchant && location.pathname.startsWith(`/app/merchant-shop/${user?.id}`);
 
   return (
     <div className="min-h-screen bg-gray-50 pb-safe">
-      {/* App Banner */}
-      {bannerVisible && (
-        <div className={`bg-gradient-to-r ${themeGradientFrom} ${themeGradientTo} text-white px-4 py-3 flex items-center justify-between shadow-md z-30 relative`}>
-          <div className="flex items-center gap-3 flex-1">
-            <div className="bg-white/20 rounded-full p-2">
-              <ShoppingBag className="w-5 h-5" />
-            </div>
-            <div className="flex-1">
-              <h2 className="font-bold text-sm">esnaftaucuz</h2>
-              <p className="text-xs text-white/90">Bugün en ucuzu nerede, tek bakışta</p>
-            </div>
-          </div>
-          <button
-            onClick={() => {
-              setBannerVisible(false);
-              localStorage.setItem('appBannerDismissed', 'true');
-            }}
-            className="p-1 hover:bg-white/20 rounded-full transition-colors"
-            aria-label="Banner'ı kapat"
-          >
-            <X className="w-4 h-4" />
-          </button>
-        </div>
-      )}
 
       <main className={hideTabBar ? '' : 'pb-20'}>
         <Routes>
           <Route path="/" element={<Navigate to="/app/explore" replace />} />
           <Route path="explore" element={<ExploreScreen />} />
           <Route path="map" element={<MapScreen />} />
-          <Route path="add" element={<AddPriceScreen />} />
+          {!isMerchant && <Route path="add" element={<AddPriceScreen />} />}
           <Route path="profile" element={<ProfileScreen />} />
           <Route path="product/:id" element={<ProductDetailScreen />} />
           <Route path="location/:id" element={<LocationDetailScreen />} />
           <Route path="notifications" element={<NotificationsScreen />} />
           <Route path="settings" element={<SettingsScreen />} />
+          <Route path="feedback" element={<FeedbackScreen />} />
           <Route path="contributions" element={<ContributionsScreen />} />
           <Route path="merchant-shop/:merchantId" element={<MerchantShopScreen />} />
+          <Route path="privacy-policy" element={<PrivacyPolicyScreen />} />
+          <Route path="terms-of-service" element={<TermsOfServiceScreen />} />
+          <Route path="about" element={<AboutScreen />} />
+          <Route path="favorites" element={<FavoritesScreen />} />
         </Routes>
       </main>
 
-      {!hideTabBar && (
+  {!hideTabBar && !isLoading && (
         <nav className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 safe-area-inset-bottom z-40 shadow-lg">
           <div className="flex items-center h-16">
             {tabs.map((tab, index) => {
