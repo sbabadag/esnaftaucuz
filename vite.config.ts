@@ -1,3 +1,22 @@
+import { defineConfig } from 'vite';
+import react from '@vitejs/plugin-react';
+
+// Vite config tuned for mobile livereload with Capacitor.
+// - server.host=true makes dev server listen on all interfaces so device can reach it.
+// - hmr.clientPort ensures the HMR client connects to the same port.
+export default defineConfig({
+  plugins: [react()],
+  server: {
+    host: true,
+    port: 5173,
+    strictPort: false,
+    hmr: {
+      protocol: 'ws',
+      clientPort: 5173,
+    },
+  },
+});
+
 import { defineConfig } from 'vite'
 import path from 'path'
 import tailwindcss from '@tailwindcss/vite'

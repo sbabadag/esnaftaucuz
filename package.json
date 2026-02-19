@@ -17,8 +17,8 @@
     "mobile:build": "npm run build && npx cap sync",
     "mobile:build-sync": "npm run build && npx cap sync",
     "watch:sync": "npm run build && npx cap sync && echo 'Watching for changes...' && npm run build -- --watch",
-    "dev:android": "npm run dev & npx cap run android --livereload --external",
-    "dev:ios": "npm run dev & npx cap run ios --livereload --external"
+    "dev:android": "concurrently -k \"vite\" \"wait-on http://localhost:5173 && npx cap run android --livereload --external\"",
+    "dev:ios": "concurrently -k \"vite\" \"wait-on http://localhost:5173 && npx cap run ios --livereload --external\""
   },
   "dependencies": {
     "@capacitor/android": "^6.2.1",
@@ -102,7 +102,9 @@
     "gh-pages": "^6.3.0",
     "tailwindcss": "4.1.12",
     "typescript": "^5.9.3",
-    "vite": "6.3.5"
+    "vite": "6.3.5",
+    "concurrently": "^8.2.0",
+    "wait-on": "^7.0.1"
   },
   "peerDependencies": {
     "react": "^18.3.1",
