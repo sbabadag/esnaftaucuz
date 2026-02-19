@@ -120,6 +120,26 @@ export default function MainApp() {
   return (
     <div className="min-h-screen bg-gray-50 pb-safe">
 
+      {/* Top-right username (small) */}
+      {user?.name && (
+        <div
+          className="fixed right-4 z-60"
+          style={{ top: 'calc(env(safe-area-inset-top, 0px) + 8px)' }}
+          title={user.name}
+        >
+          <span
+            className="text-xs font-medium max-w-[160px] block truncate px-2 py-0.5 rounded"
+            style={{
+              color: '#ffffff',
+              background: 'rgba(0,0,0,0.18)',
+              backdropFilter: 'blur(4px)',
+            }}
+          >
+            {String(user.name).split(' ')[0]}
+          </span>
+        </div>
+      )}
+
       <main className={hideTabBar ? '' : 'pb-20'}>
         <Routes>
           <Route path="/" element={<Navigate to="/app/explore" replace />} />
