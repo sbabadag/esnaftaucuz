@@ -305,6 +305,52 @@ function App() {
       };
     }
   }, []);
+    
+    // If running inside Capacitor webview and currently loading from file://,
+    // try to detect a running dev server and redirect the webview to it so
+    // livereload / HMR works even if Capacitor didn't set server.url.
+    const tryRedirectToDevServer = async () => {
+      try {
+        const isNative = typeof window !== 'undefined' && (window as any).Capacitor?.isNativePlatform && (window as any).Capacitor.isNativePlatform();
+        if (!isNative) return;
+        if (!window.location || !window.location.protocol) return;
+        if (!window.location.protocol.startsWith('file')) return;
+
+        const candidates = [
+          process.env.CAPACITOR_SERVER_URL,
+          'http://192.168.3.13:5173',
+          'http://172.31.244.78:5173',
+          'http://localhost:5173',
+        ].filter(Boolean) as string[];
+
+        const timeout = (ms: number, promise: Promise<Response>) =>
+          new Promise<null | Response>((resolve) => {
+            const timer = setTimeout(() => resolve(null), ms);
+            promise.then((res) => {
+              clearTimeout(timer);
+              resolve(res);
+            }).catch(() => resolve(null));
+          });
+
+        for (const url of candidates) {
+          try {
+            const res = await timeout(1500, fetch(url, { method: 'GET', mode: 'no-cors' } as any));
+            // If fetch succeeded (or no-cors responded), redirect
+            if (res !== null) {
+              console.log('🔁 Redirecting webview to dev server:', url);
+              window.location.replace(url);
+              return;
+            }
+          } catch (e) {
+            // ignore and try next
+          }
+        }
+      } catch (err) {
+        console.error('Dev server redirect check failed:', err);
+      }
+    };
+
+    tryRedirectToDevServer();
 
   return (
     <AuthProvider>
