@@ -89,6 +89,10 @@ export default function MerchantShopScreen() {
   const [userVerifications, setUserVerifications] = useState<Record<string, { is_verified: boolean }>>({});
   const [saveProgress, setSaveProgress] = useState<number>(0);
   const [saveStage, setSaveStage] = useState<string>('');
+  const [isCheckingSubscription, setIsCheckingSubscription] = useState(false);
+  const [hasActiveSubscription, setHasActiveSubscription] = useState(true);
+  const [subscriptionPeriodEnd, setSubscriptionPeriodEnd] = useState<string | null>(null);
+  const [subscriptionFeeTl, setSubscriptionFeeTl] = useState(1000);
 
   const isOwnShop = merchantId === user?.id;
   const isMerchant = (user as any)?.is_merchant === true;
@@ -100,6 +104,12 @@ export default function MerchantShopScreen() {
       loadMerchantProducts();
     }
   }, [merchantId]);
+
+  useEffect(() => {
+    if (isOwnShop && isMerchant && user?.id) {
+      checkMerchantSubscription();
+    }
+  }, [isOwnShop, isMerchant, user?.id]);
 
   useEffect(() => {
     if (user && products.length > 0) {
@@ -123,6 +133,38 @@ export default function MerchantShopScreen() {
       toast.error('Ürünler yüklenirken bir hata oluştu');
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const checkMerchantSubscription = async () => {
+    if (!user?.id) return;
+    try {
+      setIsCheckingSubscription(true);
+      const [{ data: isActive, error: rpcError }, { data: profile, error: profileError }] = await Promise.all([
+        supabase.rpc('has_active_merchant_subscription', { p_user_id: user.id }),
+        supabase
+          .from('users')
+          .select('merchant_subscription_current_period_end, merchant_subscription_fee_tl')
+          .eq('id', user.id)
+          .single(),
+      ]);
+
+      if (rpcError) {
+        console.error('Subscription RPC check failed:', rpcError);
+        setHasActiveSubscription(false);
+      } else {
+        setHasActiveSubscription(!!isActive);
+      }
+
+      if (!profileError && profile) {
+        setSubscriptionPeriodEnd(profile.merchant_subscription_current_period_end || null);
+        setSubscriptionFeeTl(profile.merchant_subscription_fee_tl || 1000);
+      }
+    } catch (error) {
+      console.error('Subscription check failed:', error);
+      setHasActiveSubscription(false);
+    } finally {
+      setIsCheckingSubscription(false);
     }
   };
 
@@ -384,6 +426,11 @@ export default function MerchantShopScreen() {
       return;
     }
 
+    if (!hasActiveSubscription) {
+      toast.error(`Esnaf aboneliğiniz aktif değil. Dükkan yönetimi için ${subscriptionFeeTl} TL/ay abonelik gereklidir.`);
+      return;
+    }
+
     try {
       setIsSubmitting(true);
       console.log('🔄 Starting product submit...', { editingProduct: !!editingProduct });
@@ -497,6 +544,11 @@ export default function MerchantShopScreen() {
   };
 
   const handleEdit = (product: MerchantProduct) => {
+    if (!hasActiveSubscription) {
+      toast.error(`Esnaf aboneliğiniz aktif değil. Dükkan yönetimi için ${subscriptionFeeTl} TL/ay abonelik gereklidir.`);
+      return;
+    }
+
     setEditingProduct(product);
     setFormData({
       productId: product.product.id,
@@ -513,6 +565,11 @@ export default function MerchantShopScreen() {
   };
 
   const handleDelete = async (productId: string) => {
+    if (!hasActiveSubscription) {
+      toast.error(`Esnaf aboneliğiniz aktif değil. Dükkan yönetimi için ${subscriptionFeeTl} TL/ay abonelik gereklidir.`);
+      return;
+    }
+
     if (!confirm('Bu ürünü silmek istediğinize emin misiniz?')) return;
 
     try {
@@ -614,6 +671,10 @@ export default function MerchantShopScreen() {
             <div className="flex items-center gap-2">
               <Button
                 onClick={() => {
+                  if (!hasActiveSubscription) {
+                    toast.error(`Esnaf aboneliğiniz aktif değil. ${subscriptionFeeTl} TL/ay abonelik ile devam edebilirsiniz.`);
+                    return;
+                  }
                   setEditingProduct(null);
                   setFormData({
                     productId: '',
@@ -629,6 +690,7 @@ export default function MerchantShopScreen() {
                 }}
                 aria-label="Yeni Ürün Ekle"
                 className={`${primaryBg} text-white rounded-full p-2 shadow-sm inline-flex items-center justify-center`}
+                disabled={!hasActiveSubscription || isCheckingSubscription}
               >
                 <Plus className="w-5 h-5" />
               </Button>
@@ -852,6 +914,21 @@ export default function MerchantShopScreen() {
             <Navigation className="w-4 h-4 mr-2" />
             Dükkana Git
           </Button>
+        </div>
+      )}
+
+      {isOwnShop && isMerchant && (
+        <div className={`mx-3 sm:mx-4 mt-2 rounded-lg border px-4 py-3 text-sm ${hasActiveSubscription ? 'border-green-200 bg-green-50 text-green-800' : 'border-amber-200 bg-amber-50 text-amber-900'}`}>
+          {isCheckingSubscription ? (
+            <span>Abonelik durumu kontrol ediliyor...</span>
+          ) : hasActiveSubscription ? (
+            <span>
+              Abonelik aktif ({subscriptionFeeTl} TL/ay)
+              {subscriptionPeriodEnd ? ` - Bitiş: ${new Date(subscriptionPeriodEnd).toLocaleDateString('tr-TR')}` : ''}
+            </span>
+          ) : (
+            <span>Abonelik pasif. Dükkan yönetimi için {subscriptionFeeTl} TL/ay abonelik gereklidir.</span>
+          )}
         </div>
       )}
 

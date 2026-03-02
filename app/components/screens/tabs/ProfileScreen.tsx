@@ -1,6 +1,6 @@
 import { useNavigate } from 'react-router-dom';
 import { useEffect } from 'react';
-import { Settings, Heart, Award, Share2, LogOut, ChevronRight, Store } from 'lucide-react';
+import { Settings, Heart, Award, Share2, LogOut, ChevronRight, Store, CreditCard } from 'lucide-react';
 import { Avatar, AvatarFallback, AvatarImage } from '../../ui/avatar';
 import { Badge } from '../../ui/badge';
 import { Button } from '../../ui/button';
@@ -64,11 +64,29 @@ export default function ProfileScreen() {
   const isMerchant = (user as any)?.is_merchant === true;
   const themeColor = isMerchant ? 'blue' : 'green';
   const themeColorClass = isMerchant ? 'blue-600' : 'green-600';
+  const merchantSubscriptionStatus = (user as any)?.merchant_subscription_status || 'inactive';
+  const merchantSubscriptionFee = (user as any)?.merchant_subscription_fee_tl || 1000;
+  const merchantSubscriptionPeriodEnd = (user as any)?.merchant_subscription_current_period_end;
+
+  const getMerchantSubscriptionLabel = () => {
+    switch (merchantSubscriptionStatus) {
+      case 'active':
+        return 'Aktif';
+      case 'past_due':
+        return 'Ödeme Bekleniyor';
+      case 'canceled':
+        return 'İptal Edildi';
+      case 'inactive':
+      default:
+        return 'Pasif';
+    }
+  };
 
   const menuItems = [
     // Esnaf için özel menü öğesi
     ...(isMerchant ? [
       { icon: Store, label: t('MY_SHOP'), onClick: () => navigate(`/app/merchant-shop/${user?.id}`) },
+      { icon: CreditCard, label: 'Abonelik ve Ödeme', onClick: () => navigate('/app/merchant-subscription') },
     ] : []),
     { icon: Share2, label: t('CONTRIBUTIONS'), onClick: () => navigate('/app/contributions') },
     { icon: Heart, label: t('FAVORITES_TITLE'), onClick: () => navigate('/app/favorites') },
@@ -111,6 +129,18 @@ export default function ProfileScreen() {
               <span className={`text-sm ${isMerchant ? 'text-white/80' : 'text-gray-600'}`}>{t('LEVEL_LABEL')}</span>
               <Badge variant="secondary">{getLevelBadge()} 🏅</Badge>
             </div>
+            {isMerchant && (
+              <div className={`mt-3 rounded-md border px-3 py-2 text-sm ${isMerchant ? 'border-white/30 bg-white/10 text-white' : 'border-gray-200 bg-white text-gray-700'}`}>
+                <div className="flex items-center justify-between gap-2">
+                  <span>Abonelik</span>
+                  <span className="font-semibold">{getMerchantSubscriptionLabel()}</span>
+                </div>
+                <div className={`${isMerchant ? 'text-white/80' : 'text-gray-500'}`}>
+                  {merchantSubscriptionFee} TL / ay
+                  {merchantSubscriptionPeriodEnd ? ` - Bitiş: ${new Date(merchantSubscriptionPeriodEnd).toLocaleDateString('tr-TR')}` : ''}
+                </div>
+              </div>
+            )}
           </div>
         </div>
 

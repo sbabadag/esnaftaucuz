@@ -15,6 +15,7 @@ import TermsOfServiceScreen from './TermsOfServiceScreen';
 import AboutScreen from './AboutScreen';
 import FavoritesScreen from './FavoritesScreen';
 import FeedbackScreen from './FeedbackScreen';
+import MerchantSubscriptionScreen from './MerchantSubscriptionScreen';
 import { useState, useEffect } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
 import { useLanguage } from '../../contexts/LanguageContext';
@@ -95,6 +96,7 @@ export default function MainApp() {
     location.pathname.includes('/location/') ||
     location.pathname.includes('/notifications') ||
     location.pathname.includes('/settings') ||
+    location.pathname.includes('/merchant-subscription') ||
     location.pathname.includes('/contributions') ||
     location.pathname.includes('/privacy-policy') ||
     location.pathname.includes('/terms-of-service') ||
@@ -158,6 +160,7 @@ export default function MainApp() {
           <Route path="feedback" element={<FeedbackScreen />} />
           <Route path="contributions" element={<ContributionsScreen />} />
           <Route path="merchant-shop/:merchantId" element={<MerchantShopScreen />} />
+          <Route path="merchant-subscription" element={<MerchantSubscriptionScreen />} />
           <Route path="privacy-policy" element={<PrivacyPolicyScreen />} />
           <Route path="terms-of-service" element={<TermsOfServiceScreen />} />
           <Route path="about" element={<AboutScreen />} />

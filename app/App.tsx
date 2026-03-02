@@ -34,6 +34,9 @@ function AppRoutes() {
   const location = useLocation();
   const navigate = useNavigate();
   const [hasSeenOnboarding, setHasSeenOnboarding] = useState(false);
+  const checkoutParams = new URLSearchParams(location.search);
+  const checkoutStatus = checkoutParams.get('checkout');
+  const hasCheckoutRedirect = checkoutStatus === 'success' || checkoutStatus === 'cancel';
 
   // Handle OAuth callback redirect - if user is logged in and on root, redirect to explore
   useEffect(() => {
@@ -50,13 +53,18 @@ function AppRoutes() {
     }
     
     if (user && !isLoading) {
+      if (hasCheckoutRedirect) {
+        console.log('💳 Checkout redirect detected, routing to merchant subscription');
+        navigate(`/app/merchant-subscription${location.search}`, { replace: true });
+        return;
+      }
       // If user is logged in and on root or login page, redirect to explore
       if (location.pathname === '/' || location.pathname === '/login') {
         console.log('✅ User logged in, redirecting to /app/explore');
         navigate('/app/explore', { replace: true });
       }
     }
-  }, [user, isLoading, location.pathname, navigate]);
+  }, [user, isLoading, location.pathname, location.search, hasCheckoutRedirect, navigate]);
 
   // Check if this is an OAuth callback - if so, keep loading until user is ready
   const hashParams = new URLSearchParams(window.location.hash.substring(1));
@@ -78,6 +86,10 @@ function AppRoutes() {
     console.log('✅ AppRoutes: User is logged in, rendering main app routes');
     // If we're on root path and user is logged in, redirect to explore
     if (location.pathname === '/' || location.pathname === '/login') {
+      if (hasCheckoutRedirect) {
+        console.log('💳 AppRoutes: Redirecting checkout callback to /app/merchant-subscription');
+        return <Navigate to={`/app/merchant-subscription${location.search}`} replace />;
+      }
       console.log('✅ AppRoutes: Redirecting from root/login to /app/explore');
       return <Navigate to="/app/explore" replace />;
     }
@@ -256,6 +268,8 @@ function App() {
           // Check for PKCE flow code parameter in query string
           const code = url.searchParams.get('code');
           const error = url.searchParams.get('error') || url.searchParams.get('error_description');
+          const checkout = url.searchParams.get('checkout');
+          const paymentId = url.searchParams.get('paymentId');
           
           // Check for implicit flow access_token in hash fragment
           const hash = url.hash.substring(1);
@@ -265,6 +279,14 @@ function App() {
           
           if (code) {
             handleOAuthCode(code, 'deep link');
+          } else if (checkout === 'success' || checkout === 'cancel') {
+            // Payment deep-link callback from Stripe Checkout
+            const qs = new URLSearchParams();
+            qs.set('checkout', checkout);
+            if (paymentId) qs.set('paymentId', paymentId);
+            window.history.replaceState({}, document.title, `/?${qs.toString()}`);
+            // Trigger route processing in AppRoutes
+            window.location.replace(`/?${qs.toString()}`);
           } else if (accessToken) {
             // Implicit flow - access_token in hash fragment
             console.log('🔐 OAuth implicit callback detected in deep link (access_token)');

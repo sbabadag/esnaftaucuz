@@ -15,6 +15,11 @@ interface User {
   };
   isGuest?: boolean;
   is_merchant?: boolean;
+  merchant_subscription_status?: 'inactive' | 'active' | 'past_due' | 'canceled';
+  merchant_subscription_plan?: string | null;
+  merchant_subscription_fee_tl?: number;
+  merchant_subscription_current_period_start?: string | null;
+  merchant_subscription_current_period_end?: string | null;
   preferences?: {
     notifications?: boolean;
     searchRadius?: number;

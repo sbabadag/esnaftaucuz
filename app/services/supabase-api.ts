@@ -1993,6 +1993,26 @@ export const notificationsAPI = {
 // MERCHANT PRODUCTS API
 // ============================================================================
 
+const MERCHANT_SUBSCRIPTION_MONTHLY_FEE_TL = 1000;
+
+const getMerchantSubscriptionAccessError = () =>
+  `Esnaf aboneliğiniz aktif değil. Dükkanınızı yönetmek için aylık ${MERCHANT_SUBSCRIPTION_MONTHLY_FEE_TL} TL abonelik gereklidir.`;
+
+const ensureMerchantSubscriptionActive = async (merchantId: string) => {
+  const { data, error } = await supabase.rpc('has_active_merchant_subscription', {
+    p_user_id: merchantId,
+  });
+
+  if (error) {
+    console.error('❌ Subscription check RPC error:', error);
+    throw new Error('Abonelik durumu kontrol edilemedi. Lütfen tekrar deneyin.');
+  }
+
+  if (!data) {
+    throw new Error(getMerchantSubscriptionAccessError());
+  }
+};
+
 export const merchantProductsAPI = {
   // Get all merchant products for a specific merchant
   getByMerchant: async (merchantId: string) => {
@@ -2050,6 +2070,8 @@ export const merchantProductsAPI = {
     coordinates?: { lat: number; lng: number };
   }) => {
     try {
+      await ensureMerchantSubscriptionActive(data.merchant_id);
+
       const insertData: any = {
         merchant_id: data.merchant_id,
         product_id: data.product_id,
@@ -2097,6 +2119,19 @@ export const merchantProductsAPI = {
     is_active?: boolean;
   }) => {
     try {
+      const { data: currentProduct, error: currentProductError } = await supabase
+        .from('merchant_products')
+        .select('merchant_id')
+        .eq('id', id)
+        .single();
+
+      if (currentProductError || !currentProduct?.merchant_id) {
+        console.error('❌ Failed to fetch merchant product for subscription check:', currentProductError);
+        throw new Error('Ürün bulunamadı');
+      }
+
+      await ensureMerchantSubscriptionActive(currentProduct.merchant_id);
+
       const updateData: any = {};
 
       if (data.price !== undefined) updateData.price = data.price;
@@ -2132,6 +2167,19 @@ export const merchantProductsAPI = {
   // Delete a merchant product
   delete: async (id: string) => {
     try {
+      const { data: currentProduct, error: currentProductError } = await supabase
+        .from('merchant_products')
+        .select('merchant_id')
+        .eq('id', id)
+        .single();
+
+      if (currentProductError || !currentProduct?.merchant_id) {
+        console.error('❌ Failed to fetch merchant product for subscription check:', currentProductError);
+        throw new Error('Ürün bulunamadı');
+      }
+
+      await ensureMerchantSubscriptionActive(currentProduct.merchant_id);
+
       const { error } = await supabase
         .from('merchant_products')
         .delete()
@@ -2218,6 +2266,222 @@ export const merchantProductsAPI = {
     } catch (error: any) {
       console.error('❌ Get all merchant shops error:', error);
       throw error;
+    }
+  },
+};
+
+// ============================================================================
+// MERCHANT SUBSCRIPTION API
+// ============================================================================
+
+export const merchantSubscriptionAPI = {
+  getStatus: async (userId: string) => {
+    try {
+      const { error: syncError } = await supabase.rpc('sync_merchant_subscription_status', {
+        p_user_id: userId,
+      });
+
+      if (syncError) {
+        console.warn('⚠️ Failed to sync merchant subscription status:', syncError);
+      }
+
+      const [{ data: profile, error: profileError }, { data: isActive, error: activeError }] = await Promise.all([
+        supabase
+          .from('users')
+          .select(`
+            id,
+            is_merchant,
+            merchant_subscription_status,
+            merchant_subscription_plan,
+            merchant_subscription_fee_tl,
+            merchant_subscription_current_period_start,
+            merchant_subscription_current_period_end
+          `)
+          .eq('id', userId)
+          .single(),
+        supabase.rpc('has_active_merchant_subscription', { p_user_id: userId }),
+      ]);
+
+      if (profileError) throw profileError;
+      if (activeError) throw activeError;
+
+      return {
+        ...(profile || {}),
+        is_active: !!isActive,
+      };
+    } catch (error: any) {
+      console.error('❌ Get merchant subscription status error:', error);
+      throw new Error(error.message || 'Abonelik durumu alınamadı');
+    }
+  },
+
+  getPayments: async (userId: string, limit: number = 20) => {
+    try {
+      const { data, error } = await supabase
+        .from('merchant_subscription_payments')
+        .select('*')
+        .eq('user_id', userId)
+        .order('created_at', { ascending: false })
+        .limit(limit);
+
+      if (error) throw error;
+      return data || [];
+    } catch (error: any) {
+      console.error('❌ Get merchant subscription payments error:', error);
+      throw new Error(error.message || 'Ödeme geçmişi alınamadı');
+    }
+  },
+
+  cleanupOldPayments: async () => {
+    try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const accessToken = sessionData?.session?.access_token;
+      if (!accessToken) {
+        throw new Error('Oturum bulunamadı');
+      }
+
+      const { data, error } = await supabase.functions.invoke('merchant-subscription-cleanup', {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
+      });
+
+      if (error) throw error;
+      return data || { deletedCount: 0 };
+    } catch (error: any) {
+      console.error('❌ Cleanup old payments error:', error);
+      throw new Error(error.message || 'Ödeme geçmişi temizlenemedi');
+    }
+  },
+
+  createManualEftPayment: async (data: {
+    userId: string;
+    amountTl?: number;
+    billingPeriodMonths?: number;
+    providerReference?: string;
+    receiptUrl?: string;
+    metadata?: Record<string, any>;
+  }) => {
+    try {
+      const amountTl = data.amountTl || 1000;
+      const billingPeriodMonths = data.billingPeriodMonths || 1;
+
+      const { data: payment, error } = await supabase
+        .from('merchant_subscription_payments')
+        .insert({
+          user_id: data.userId,
+          provider: 'manual_eft',
+          status: 'pending',
+          amount_tl: amountTl,
+          billing_period_months: billingPeriodMonths,
+          provider_reference: data.providerReference || null,
+          receipt_url: data.receiptUrl || null,
+          metadata: data.metadata || {},
+        })
+        .select()
+        .single();
+
+      if (error) throw error;
+      return payment;
+    } catch (error: any) {
+      console.error('❌ Create manual EFT payment error:', error);
+      throw new Error(error.message || 'EFT ödeme kaydı oluşturulamadı');
+    }
+  },
+
+  startProviderCheckout: async (data: {
+    userId: string;
+    amountTl?: number;
+    billingPeriodMonths?: number;
+  }) => {
+    try {
+      const amountTl = data.amountTl || 1000;
+      const billingPeriodMonths = data.billingPeriodMonths || 1;
+      const plan = billingPeriodMonths >= 12
+        ? 'merchant_pro_annual_20_discount'
+        : 'merchant_basic_1000_tl_monthly';
+
+      // Create a pending payment row first so webhook handlers can finalize it.
+      const { data: payment, error: paymentError } = await supabase
+        .from('merchant_subscription_payments')
+        .insert({
+          user_id: data.userId,
+          provider: 'stripe',
+          status: 'pending',
+          amount_tl: amountTl,
+          billing_period_months: billingPeriodMonths,
+          metadata: {
+            source: 'app_checkout_init',
+          },
+        })
+        .select()
+        .single();
+
+      if (paymentError) throw paymentError;
+
+      // Provider checkout session should be created in a secure Edge Function.
+      // The function must return checkoutUrl + providerPaymentId and
+      // update this payment row's provider_payment_id.
+      const { data: sessionData } = await supabase.auth.getSession();
+      const accessToken = sessionData?.session?.access_token;
+      if (!accessToken) {
+        throw new Error('Oturum bulunamadı. Lütfen tekrar giriş yapın.');
+      }
+
+      const { data: fnData, error: fnError } = await supabase.functions.invoke('merchant-subscription-checkout', {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
+        body: {
+          paymentId: payment.id,
+          provider: 'stripe',
+          amountTl,
+          billingPeriodMonths,
+          currency: 'TRY',
+          plan,
+        },
+      });
+
+      if (fnError) {
+        console.error('❌ Checkout function error:', fnError);
+        let detailedMessage = '';
+        try {
+          const contextResponse = (fnError as any)?.context;
+          if (contextResponse) {
+            const errorPayload = await contextResponse.clone().json().catch(() => null);
+            detailedMessage =
+              errorPayload?.error ||
+              errorPayload?.details ||
+              '';
+          }
+        } catch (parseError) {
+          console.warn('⚠️ Could not parse checkout function error payload:', parseError);
+        }
+
+        throw new Error(
+          detailedMessage
+            ? `Ödeme oturumu oluşturulamadı: ${detailedMessage}`
+            : (fnError.message || 'Ödeme oturumu oluşturulamadı.')
+        );
+      }
+
+      if (!fnData?.checkoutUrl) {
+        console.error('❌ Checkout function returned no URL:', fnData);
+        throw new Error(
+          typeof fnData?.error === 'string'
+            ? `Ödeme bağlantısı oluşturulamadı: ${fnData.error}`
+            : 'Ödeme bağlantısı oluşturulamadı. Lütfen Stripe yapılandırmasını kontrol edin.'
+        );
+      }
+
+      return {
+        payment,
+        checkoutUrl: fnData.checkoutUrl,
+        providerPaymentId: fnData?.providerPaymentId || null,
+      };
+    } catch (error: any) {
+      console.error('❌ Start provider checkout error:', error);
+      throw new Error(error.message || 'Ödeme başlatılamadı');
     }
   },
 };
