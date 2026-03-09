@@ -72,7 +72,7 @@ workflows:
           xcode-project build-ipa --workspace "$XCODE_WORKSPACE" --scheme "$XCODE_SCHEME" --disable-xcpretty -v
       - name: Upload IPA to App Store Connect
         script: |
-          app-store-connect publish --path "build/ios/ipa/*.ipa" --max-find-build-wait 0 --max-build-processing-wait 0
+          app-store-connect publish --path "build/ios/ipa/*.ipa" --max-find-build-wait 1 --max-build-processing-wait 1
     artifacts:
       - build/ios/ipa/*.ipa
       - /tmp/xcodebuild_logs/*.log
