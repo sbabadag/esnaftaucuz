@@ -3,6 +3,8 @@ workflows:
     name: iOS App Store Release
     max_build_duration: 120
     instance_type: mac_mini_m1
+    integrations:
+      app_store_connect: codemagic-appstore
     environment:
       groups:
         - supabase_env
