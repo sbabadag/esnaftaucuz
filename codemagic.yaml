@@ -3,8 +3,6 @@ workflows:
     name: iOS App Store Release
     max_build_duration: 120
     instance_type: mac_mini_m1
-    integrations:
-      app_store_connect: codemagic-appstore
     environment:
       groups:
         - supabase_env
@@ -58,10 +56,6 @@ workflows:
       - $HOME/Library/Developer/Xcode/DerivedData/**/Build/**/*.app
       - $HOME/Library/Developer/Xcode/DerivedData/**/Build/**/*.dSYM
     publishing:
-      app_store_connect:
-        auth: integration
-        submit_to_app_store: false
-        submit_to_testflight: true
       email:
         recipients:
           - sbabadag@gmail.com
