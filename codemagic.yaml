@@ -2,9 +2,7 @@ workflows:
   ios-appstore-release:
     name: iOS App Store Release
     max_build_duration: 120
-    instance_type: mac_mini_m2
-    integrations:
-      app_store_connect: codemagic-appstore
+    instance_type: mac_mini_m1
     environment:
       groups:
         - supabase_env
@@ -12,9 +10,6 @@ workflows:
         XCODE_WORKSPACE: "ios/App/App.xcworkspace"
         XCODE_SCHEME: "App"
         BUNDLE_ID: "com.esnaftaucuz.app"
-      node: 20
-      xcode: latest
-      cocoapods: default
     scripts:
       - name: Validate required web env vars
         script: |
