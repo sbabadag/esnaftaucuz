@@ -11,7 +11,7 @@ workflows:
           - certificate: ios_dist_esnaftaucuz_2026
             environment_variable: CM_CERT_PATH
         provisioning_profiles:
-          - profile: cer_name_1
+          - profile: esnaftaucuz_appstore_correct
             environment_variable: CM_PROFILE_PATH
       groups:
         - supabase_env
