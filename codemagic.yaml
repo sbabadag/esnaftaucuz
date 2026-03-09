@@ -12,8 +12,8 @@ workflows:
         XCODE_WORKSPACE: "ios/App/App.xcworkspace"
         XCODE_SCHEME: "App"
         BUNDLE_ID: "com.esnaftaucuz.app"
-      node: 18
-      xcode: 16.4
+      node: "18"
+      xcode: "16.4.x"
       cocoapods: default
     triggering:
       events:
