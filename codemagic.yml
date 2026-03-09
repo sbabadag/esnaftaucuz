@@ -6,6 +6,11 @@ workflows:
     integrations:
       app_store_connect: codemagic-appstore
     environment:
+      ios_signing:
+        certificates:
+          - ios_dist_esnaftaucuz
+        provisioning_profiles:
+          - esnaftaucuz_appstore_profile
       groups:
         - supabase_env
       vars:
@@ -44,20 +49,9 @@ workflows:
           cd ios/App
           pod install
           cd ../..
-      - name: Fetch and configure iOS signing files
+      - name: Configure iOS signing from Codemagic identities
         script: |
           keychain initialize
-          if [ -n "$CERTIFICATE_PRIVATE_KEY" ]; then
-            app-store-connect fetch-signing-files "$BUNDLE_ID" --type IOS_APP_STORE --create --certificate-key @env:CERTIFICATE_PRIVATE_KEY
-          else
-            echo "CERTIFICATE_PRIVATE_KEY not set; fetching existing iOS App Store signing files only."
-            app-store-connect fetch-signing-files "$BUNDLE_ID" --type IOS_APP_STORE
-          fi
-          if ! ls "$HOME/Library/MobileDevice/Provisioning Profiles"/*.mobileprovision >/dev/null 2>&1 && ! ls "$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles"/*.mobileprovision >/dev/null 2>&1; then
-            echo "No iOS App Store provisioning profile was fetched for $BUNDLE_ID."
-            echo "Check App Store Connect API key permissions, Apple Developer team access, and uploaded iOS distribution certificate."
-            exit 1
-          fi
           keychain add-certificates
           xcode-project use-profiles --project "$XCODE_PROJECT" --archive-method app-store --code-signing-setup-verbose-logging
       - name: Build signed IPA
