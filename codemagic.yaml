@@ -11,6 +11,7 @@ workflows:
         bundle_identifier: com.esnaftaucuz.app
       groups:
         - supabase_env
+        - app_store_credentials
       vars:
         XCODE_WORKSPACE: "ios/App/App.xcworkspace"
         XCODE_SCHEME: "App"
@@ -46,9 +47,11 @@ workflows:
           cd ios/App
           pod install
           cd ../..
-      - name: Configure automatic iOS signing
+      - name: Fetch and configure iOS signing files
         script: |
+          app-store-connect fetch-signing-files "$BUNDLE_ID" --type IOS_APP_STORE --create
           keychain initialize
+          keychain add-certificates
           xcode-project use-profiles
       - name: Build signed IPA
         script: |
