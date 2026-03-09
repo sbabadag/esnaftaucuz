@@ -8,9 +8,11 @@ workflows:
     environment:
       ios_signing:
         certificates:
-          - ios_dist_esnaftaucuz_2026
+          - certificate: ios_dist_esnaftaucuz_2026
+            environment_variable: CM_CERT_PATH
         provisioning_profiles:
-          - cer_name_1
+          - profile: cer_name_1
+            environment_variable: CM_PROFILE_PATH
       groups:
         - supabase_env
       vars:
@@ -51,7 +53,11 @@ workflows:
           cd ../..
       - name: Apply provisioning profiles to Xcode project
         script: |
-          xcode-project use-profiles --project "$XCODE_PROJECT" --archive-method app-store --code-signing-setup-verbose-logging
+          if [ -z "$CM_PROFILE_PATH" ] || [ ! -f "$CM_PROFILE_PATH" ]; then
+            echo "Provisioning profile path is missing or invalid: $CM_PROFILE_PATH"
+            exit 1
+          fi
+          xcode-project use-profiles --project "$XCODE_PROJECT" --profile "$CM_PROFILE_PATH" --archive-method app-store --code-signing-setup-verbose-logging
       - name: Build signed IPA
         script: |
           xcode-project build-ipa --workspace "$XCODE_WORKSPACE" --scheme "$XCODE_SCHEME"
