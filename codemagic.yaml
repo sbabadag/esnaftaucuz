@@ -6,6 +6,9 @@ workflows:
     integrations:
       app_store_connect: codemagic-appstore
     environment:
+      ios_signing:
+        distribution_type: app_store
+        bundle_identifier: com.esnaftaucuz.app
       groups:
         - supabase_env
       vars:
@@ -46,7 +49,6 @@ workflows:
       - name: Configure automatic iOS signing
         script: |
           keychain initialize
-          app-store-connect fetch-signing-files "$BUNDLE_ID" --type IOS_APP_STORE --create
           xcode-project use-profiles
       - name: Build signed IPA
         script: |
