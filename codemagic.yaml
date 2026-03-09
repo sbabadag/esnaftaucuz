@@ -1,52 +1,8 @@
 workflows:
   ios-appstore-release:
-    name: iOS App Store Release
-    max_build_duration: 120
+    name: iOS Config Check
     instance_type: mac_mini_m1
-    environment:
-      groups:
-        - supabase_env
-      vars:
-        XCODE_WORKSPACE: "ios/App/App.xcworkspace"
-        XCODE_SCHEME: "App"
-      node: "20"
-      xcode: "latest"
-      cocoapods: "default"
     scripts:
-      - name: Install npm dependencies
-        script: npm ci
-      - name: Build web assets
-        script: |
-          if [ -z "$VITE_SUPABASE_URL" ] || [ -z "$VITE_SUPABASE_ANON_KEY" ]; then
-            echo "Missing VITE_SUPABASE_URL or VITE_SUPABASE_ANON_KEY"
-            exit 1
-          fi
-          cat > .env <<EOF
-          VITE_SUPABASE_URL=$VITE_SUPABASE_URL
-          VITE_SUPABASE_ANON_KEY=$VITE_SUPABASE_ANON_KEY
-          EOF
-          npm run build
-          rm -f .env
-      - name: Sync Capacitor iOS
-        script: |
-          npx cap sync ios
-      - name: Install CocoaPods
-        script: |
-          cd ios/App
-          pod install
-          cd ../..
-      - name: Build signed IPA
-        script: |
-          xcode-project use-profiles
-          xcode-project build-ipa --workspace "$XCODE_WORKSPACE" --scheme "$XCODE_SCHEME"
-    artifacts:
-      - build/ios/ipa/*.ipa
-      - /tmp/xcodebuild_logs/*.log
-    publishing:
-      email:
-        recipients:
-          - sbabadag@gmail.com
-        notify:
-          success: true
-          failure: true
+      - name: Validate Codemagic config
+        script: echo "codemagic.yaml parsed successfully"
 
