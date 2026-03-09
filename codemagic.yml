@@ -47,10 +47,15 @@ workflows:
       - name: Fetch and configure iOS signing files
         script: |
           keychain initialize
-          app-store-connect fetch-signing-files "$BUNDLE_ID" --type IOS_APP_STORE --create
+          if [ -n "$CERTIFICATE_PRIVATE_KEY" ]; then
+            app-store-connect fetch-signing-files "$BUNDLE_ID" --type IOS_APP_STORE --create --certificate-key @env:CERTIFICATE_PRIVATE_KEY
+          else
+            echo "CERTIFICATE_PRIVATE_KEY not set; fetching existing iOS App Store signing files only."
+            app-store-connect fetch-signing-files "$BUNDLE_ID" --type IOS_APP_STORE
+          fi
           if ! ls "$HOME/Library/MobileDevice/Provisioning Profiles"/*.mobileprovision >/dev/null 2>&1 && ! ls "$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles"/*.mobileprovision >/dev/null 2>&1; then
             echo "No iOS App Store provisioning profile was fetched for $BUNDLE_ID."
-            echo "Check App Store Connect API key permissions and Apple Developer team access."
+            echo "Check App Store Connect API key permissions, Apple Developer team access, and uploaded iOS distribution certificate."
             exit 1
           fi
           keychain add-certificates
