@@ -15,13 +15,6 @@ workflows:
       node: "18"
       xcode: "16.4.x"
       cocoapods: default
-    triggering:
-      events:
-        - push
-      branch_patterns:
-        - pattern: main
-          include: true
-      cancel_previous_builds: true
     scripts:
       - name: Validate required web env vars
         script: |
