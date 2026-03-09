@@ -57,19 +57,10 @@ workflows:
             echo "Provisioning profile path is missing or invalid: $CM_PROFILE_PATH"
             exit 1
           fi
-          security cms -D -i "$CM_PROFILE_PATH" > /tmp/cm_profile.plist
-          PROFILE_NAME=$(/usr/libexec/PlistBuddy -c "Print :Name" /tmp/cm_profile.plist)
-          PROFILE_APP_ID=$(/usr/libexec/PlistBuddy -c "Print :Entitlements:application-identifier" /tmp/cm_profile.plist)
-          if [[ "$PROFILE_APP_ID" != *".${BUNDLE_ID}" ]]; then
-            echo "Provisioning profile bundle mismatch. Expected suffix: .$BUNDLE_ID, got: $PROFILE_APP_ID"
-            exit 1
-          fi
-          echo "Using provisioning profile: $PROFILE_NAME ($PROFILE_APP_ID)"
-          echo "CM_PROFILE_NAME=$PROFILE_NAME" >> "$CM_ENV"
-          xcode-project use-profiles --project "$XCODE_PROJECT" --profile "$CM_PROFILE_PATH" --archive-method app-store --code-signing-setup-verbose-logging
+          xcode-project use-profiles --project "$XCODE_PROJECT" --profile "$CM_PROFILE_PATH" --archive-method app-store
       - name: Build signed IPA
         script: |
-          xcode-project build-ipa --workspace "$XCODE_WORKSPACE" --scheme "$XCODE_SCHEME" --disable-xcpretty -v
+          xcode-project build-ipa --workspace "$XCODE_WORKSPACE" --scheme "$XCODE_SCHEME"
       - name: Upload IPA to App Store Connect
         script: |
           app-store-connect publish --path "build/ios/ipa/*.ipa" --max-find-build-wait 1 --max-build-processing-wait 1
