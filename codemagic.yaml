@@ -6,9 +6,6 @@ workflows:
     integrations:
       app_store_connect: codemagic-appstore
     environment:
-      ios_signing:
-        distribution_type: app_store
-        bundle_identifier: com.esnaftaucuz.app
       groups:
         - supabase_env
         - app_store_credentials
