@@ -1,6 +1,14 @@
 workflows:
   ios-appstore-release:
     name: iOS App Store Release
+    triggering:
+      events:
+        - push
+      branch_patterns:
+        - pattern: main
+          include: true
+          source: true
+      cancel_previous_builds: true
     max_build_duration: 120
     instance_type: mac_mini_m2
     integrations:
