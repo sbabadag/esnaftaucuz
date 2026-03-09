@@ -30,6 +30,11 @@ workflows:
           EOF
           npm run build
           rm -f .env
+      - name: Ensure iOS platform exists
+        script: |
+          if [ ! -d "ios" ]; then
+            npx cap add ios
+          fi
       - name: Sync Capacitor iOS
         script: |
           npx cap sync ios
