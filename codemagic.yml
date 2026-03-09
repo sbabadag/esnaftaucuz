@@ -9,6 +9,7 @@ workflows:
       groups:
         - supabase_env
       vars:
+        XCODE_PROJECT: "ios/App/App.xcodeproj"
         XCODE_WORKSPACE: "ios/App/App.xcworkspace"
         XCODE_SCHEME: "App"
         BUNDLE_ID: "com.esnaftaucuz.app"
@@ -45,10 +46,15 @@ workflows:
           cd ../..
       - name: Fetch and configure iOS signing files
         script: |
-          app-store-connect fetch-signing-files "$BUNDLE_ID" --type IOS_APP_STORE --create
           keychain initialize
+          app-store-connect fetch-signing-files "$BUNDLE_ID" --type IOS_APP_STORE --create
+          if ! ls "$HOME/Library/MobileDevice/Provisioning Profiles"/*.mobileprovision >/dev/null 2>&1 && ! ls "$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles"/*.mobileprovision >/dev/null 2>&1; then
+            echo "No iOS App Store provisioning profile was fetched for $BUNDLE_ID."
+            echo "Check App Store Connect API key permissions and Apple Developer team access."
+            exit 1
+          fi
           keychain add-certificates
-          xcode-project use-profiles
+          xcode-project use-profiles --project "$XCODE_PROJECT" --archive-method app-store --code-signing-setup-verbose-logging
       - name: Build signed IPA
         script: |
           xcode-project build-ipa --workspace "$XCODE_WORKSPACE" --scheme "$XCODE_SCHEME"
