@@ -1,0 +1,8 @@
+workflows:
+  ios-appstore-release:
+    name: iOS Config Check
+    instance_type: mac_mini_m1
+    scripts:
+      - name: Validate Codemagic config
+        script: echo "codemagic.yaml parsed successfully"
+
