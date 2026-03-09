@@ -49,10 +49,8 @@ workflows:
           cd ios/App
           pod install
           cd ../..
-      - name: Configure iOS signing from Codemagic identities
+      - name: Apply provisioning profiles to Xcode project
         script: |
-          keychain initialize
-          keychain add-certificates
           xcode-project use-profiles --project "$XCODE_PROJECT" --archive-method app-store --code-signing-setup-verbose-logging
       - name: Build signed IPA
         script: |
