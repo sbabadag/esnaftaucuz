@@ -9,30 +9,24 @@ workflows:
       vars:
         XCODE_WORKSPACE: "ios/App/App.xcworkspace"
         XCODE_SCHEME: "App"
-        BUNDLE_ID: "com.esnaftaucuz.app"
+      node: "20"
+      xcode: "latest"
+      cocoapods: "default"
     scripts:
-      - name: Validate required web env vars
+      - name: Install npm dependencies
+        script: npm ci
+      - name: Build web assets
         script: |
           if [ -z "$VITE_SUPABASE_URL" ] || [ -z "$VITE_SUPABASE_ANON_KEY" ]; then
             echo "Missing VITE_SUPABASE_URL or VITE_SUPABASE_ANON_KEY"
             exit 1
           fi
-      - name: Install npm dependencies
-        script: |
-          npm ci
-      - name: Build web assets
-        script: |
           cat > .env <<EOF
           VITE_SUPABASE_URL=$VITE_SUPABASE_URL
           VITE_SUPABASE_ANON_KEY=$VITE_SUPABASE_ANON_KEY
           EOF
           npm run build
           rm -f .env
-      - name: Ensure iOS platform exists
-        script: |
-          if [ ! -d "ios" ]; then
-            npx cap add ios
-          fi
       - name: Sync Capacitor iOS
         script: |
           npx cap sync ios
@@ -41,20 +35,13 @@ workflows:
           cd ios/App
           pod install
           cd ../..
-      - name: Configure code signing
-        script: |
-          xcode-project use-profiles
       - name: Build signed IPA
         script: |
-          xcode-project build-ipa \
-            --workspace "$XCODE_WORKSPACE" \
-            --scheme "$XCODE_SCHEME" \
-            --archive-flags="-destination generic/platform=iOS"
+          xcode-project use-profiles
+          xcode-project build-ipa --workspace "$XCODE_WORKSPACE" --scheme "$XCODE_SCHEME"
     artifacts:
       - build/ios/ipa/*.ipa
       - /tmp/xcodebuild_logs/*.log
-      - $HOME/Library/Developer/Xcode/DerivedData/**/Build/**/*.app
-      - $HOME/Library/Developer/Xcode/DerivedData/**/Build/**/*.dSYM
     publishing:
       email:
         recipients:
