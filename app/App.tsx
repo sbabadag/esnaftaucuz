@@ -232,11 +232,6 @@ function App() {
       // Listen for app URL open events (deep links)
       const listener = CapacitorApp.addListener('appUrlOpen', (event) => {
         console.log('🔗 App opened with URL:', event.url);
-        // Close OAuth browser if it is still open
-        const nativeBrowser = (window as any)?.Capacitor?.Plugins?.Browser;
-        if (nativeBrowser?.close) {
-          nativeBrowser.close().catch(() => {});
-        }
         
         // Parse the URL to extract OAuth callback parameters
         try {
