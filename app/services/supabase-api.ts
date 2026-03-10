@@ -7,6 +7,7 @@
 
 import { supabase } from '../lib/supabase';
 import { v4 as uuidv4 } from 'uuid';
+import { Browser } from '@capacitor/browser';
 
 // ============================================================================
 // AUTH API - Using Supabase Auth
@@ -326,8 +327,16 @@ export const authAPI = {
       }
       
       console.log('✅ Google OAuth redirect URL:', data.url);
-      // OAuth redirects, so we return the URL
-      return { redirectUrl: data.url };
+
+      // On native mobile, open OAuth in system browser.
+      // The callback deep link is handled by App.tsx via appUrlOpen listener.
+      if (isMobile && data.url) {
+        await Browser.open({ url: data.url });
+        return { redirectUrl: data.url, openedInBrowser: true };
+      }
+
+      // On web, redirect in the same window
+      return { redirectUrl: data.url, openedInBrowser: false };
     } catch (error: any) {
       console.error('Google login error:', error);
       if (error.message?.includes('redirect_uri_mismatch')) {

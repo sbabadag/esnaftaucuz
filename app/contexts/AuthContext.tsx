@@ -687,8 +687,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const googleLogin = async () => {
     try {
       const data = await authAPI.googleLogin();
-      // OAuth redirects, so we just return
-      if (data.redirectUrl) {
+      // Web flow redirects in current window; mobile flow is opened via Capacitor Browser.
+      if (data.redirectUrl && !data.openedInBrowser) {
         window.location.href = data.redirectUrl;
       }
     } catch (error) {
