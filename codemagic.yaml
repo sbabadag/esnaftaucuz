@@ -112,36 +112,34 @@ workflows:
           text = path.read_text(encoding="utf-8")
 
           if "import FirebaseCore" not in text:
-              text = text.replace("import Capacitor", "import Capacitor\nimport FirebaseCore")
+              text = text.replace("import Capacitor", "import Capacitor\\nimport FirebaseCore")
 
           if "FirebaseApp.configure()" not in text:
-              pattern = r"(func application\(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: \[UIApplication\.LaunchOptionsKey: Any\]\?\) -> Bool \{\n(?:\s*//.*\n)?)"
-              repl = r"\1        if FirebaseApp.app() == nil {\n            FirebaseApp.configure()\n        }\n"
+              pattern = r"(func application\\(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: \\[UIApplication\\.LaunchOptionsKey: Any\\]\\?\\) -> Bool \\{\\n(?:\\s*//.*\\n)?)"
+              repl = r"\\1        if FirebaseApp.app() == nil {\\n            FirebaseApp.configure()\\n        }\\n"
               text = re.sub(pattern, repl, text, count=1)
 
           if "didRegisterForRemoteNotificationsWithDeviceToken" not in text:
-              insertion = """
-    func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
-        NotificationCenter.default.post(name: .capacitorDidRegisterForRemoteNotifications, object: deviceToken)
-    }
-
-    func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: Error) {
-        NotificationCenter.default.post(name: .capacitorDidFailToRegisterForRemoteNotifications, object: error)
-    }
-
-    func application(_ application: UIApplication,
-                     didReceiveRemoteNotification userInfo: [AnyHashable : Any],
-                     fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void) {
-        NotificationCenter.default.post(name: Notification.Name("didReceiveRemoteNotification"),
-                                        object: completionHandler,
-                                        userInfo: userInfo)
-    }
-"""
+              methods = (
+                  "\\n    func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {\\n"
+                  "        NotificationCenter.default.post(name: .capacitorDidRegisterForRemoteNotifications, object: deviceToken)\\n"
+                  "    }\\n\\n"
+                  "    func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: Error) {\\n"
+                  "        NotificationCenter.default.post(name: .capacitorDidFailToRegisterForRemoteNotifications, object: error)\\n"
+                  "    }\\n\\n"
+                  "    func application(_ application: UIApplication,\\n"
+                  "                     didReceiveRemoteNotification userInfo: [AnyHashable : Any],\\n"
+                  "                     fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void) {\\n"
+                  "        NotificationCenter.default.post(name: Notification.Name(\\"didReceiveRemoteNotification\\"),\\n"
+                  "                                        object: completionHandler,\\n"
+                  "                                        userInfo: userInfo)\\n"
+                  "    }\\n"
+              )
               text = text.rstrip()
-              text = text[:-1] + insertion + "\n}\n"
+              text = text[:-1] + methods + "\\n}\\n"
 
           path.write_text(text, encoding="utf-8")
-          print("✅ AppDelegate.swift patched for Firebase Messaging")
+          print("AppDelegate.swift patched for Firebase Messaging")
           PY
       - name: Set iOS privacy usage descriptions
         script: |
