@@ -26,7 +26,7 @@ const assertRequiredEnv = () => {
 
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
-  if (req.method !== 'POST') return jsonResponse(200, { error: 'Method not allowed' });
+  if (req.method !== 'POST') return jsonResponse(405, { error: 'Method not allowed' });
 
   try {
     assertRequiredEnv();
@@ -37,19 +37,19 @@ Deno.serve(async (req) => {
       : '';
 
     if (!userToken) {
-      return jsonResponse(200, { error: 'Missing bearer token' });
+      return jsonResponse(401, { error: 'Missing bearer token' });
     }
 
     const serviceClient = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
     const { data: authData, error: authError } = await serviceClient.auth.getUser(userToken);
     if (authError || !authData?.user?.id) {
-      return jsonResponse(200, { error: 'Unauthorized user token' });
+      return jsonResponse(401, { error: 'Unauthorized user token' });
     }
     const userId = authData.user.id;
 
     const body = (await req.json()) as CheckoutBody;
     if (!body?.paymentId || !body?.provider || !body?.amountTl || !body?.billingPeriodMonths) {
-      return jsonResponse(200, { error: 'Invalid payload' });
+      return jsonResponse(400, { error: 'Invalid payload' });
     }
 
     const { data: payment, error: paymentError } = await serviceClient
@@ -59,24 +59,36 @@ Deno.serve(async (req) => {
       .single();
 
     if (paymentError || !payment) {
-      return jsonResponse(200, { error: 'Payment record not found' });
+      return jsonResponse(404, { error: 'Payment record not found' });
     }
 
     if (payment.user_id !== userId) {
-      return jsonResponse(200, { error: 'Payment does not belong to current user' });
+      return jsonResponse(403, { error: 'Payment does not belong to current user' });
     }
 
     if (payment.status !== 'pending') {
-      return jsonResponse(200, { error: 'Payment is not pending' });
+      return jsonResponse(409, { error: 'Payment is not pending' });
     }
 
     if (payment.provider !== body.provider) {
-      return jsonResponse(200, { error: 'Provider mismatch' });
+      return jsonResponse(409, { error: 'Provider mismatch' });
+    }
+
+    if (Number(payment.amount_tl) !== Number(body.amountTl)) {
+      return jsonResponse(409, { error: 'Amount mismatch with pending payment row' });
+    }
+
+    if (Number(payment.billing_period_months) !== Number(body.billingPeriodMonths)) {
+      return jsonResponse(409, { error: 'Billing period mismatch with pending payment row' });
+    }
+
+    if (String(payment.currency || 'TRY').toUpperCase() !== String(body.currency || '').toUpperCase()) {
+      return jsonResponse(409, { error: 'Currency mismatch with pending payment row' });
     }
 
     if (body.provider === 'stripe') {
       if (!STRIPE_SECRET_KEY) {
-        return jsonResponse(200, { error: 'Stripe not configured. Set STRIPE_SECRET_KEY.' });
+        return jsonResponse(500, { error: 'Stripe not configured. Set STRIPE_SECRET_KEY.' });
       }
 
       // Stripe Checkout requires HTTPS return URLs.
@@ -107,13 +119,14 @@ Deno.serve(async (req) => {
         headers: {
           Authorization: `Bearer ${STRIPE_SECRET_KEY}`,
           'Content-Type': 'application/x-www-form-urlencoded',
+          'Idempotency-Key': `merchant-subscription-checkout-${body.paymentId}`,
         },
         body: form.toString(),
       });
 
       const stripeJson = await stripeRes.json();
       if (!stripeRes.ok) {
-        return jsonResponse(200, {
+        return jsonResponse(502, {
           error: 'Stripe session creation failed',
           details: stripeJson?.error?.message || 'Unknown Stripe error',
         });
@@ -142,7 +155,7 @@ Deno.serve(async (req) => {
 
     if (body.provider === 'iyzico') {
       if (!IYZICO_CHECKOUT_BASE_URL) {
-        return jsonResponse(200, { error: 'Iyzico not configured. Set IYZICO_CHECKOUT_BASE_URL.' });
+        return jsonResponse(500, { error: 'Iyzico not configured. Set IYZICO_CHECKOUT_BASE_URL.' });
       }
 
       const providerPaymentId = `iyzico_${crypto.randomUUID()}`;
@@ -166,9 +179,9 @@ Deno.serve(async (req) => {
       });
     }
 
-    return jsonResponse(200, { error: 'Unsupported provider' });
+    return jsonResponse(400, { error: 'Unsupported provider' });
   } catch (error) {
     console.error('merchant-subscription-checkout error:', error);
-    return jsonResponse(200, { error: (error as Error).message || 'Internal error' });
+    return jsonResponse(500, { error: (error as Error).message || 'Internal error' });
   }
 });

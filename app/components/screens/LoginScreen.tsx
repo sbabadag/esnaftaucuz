@@ -77,7 +77,6 @@ export default function LoginScreen({ onLogin }: { onLogin?: () => void }) {
       }
 
       onLogin?.();
-      navigate('/app/explore');
     } catch (error: any) {
       console.error('Auth error:', error);
       const errorMessage = error.message || (mode === 'register' ? 'Kayıt başarısız' : 'Giriş başarısız');

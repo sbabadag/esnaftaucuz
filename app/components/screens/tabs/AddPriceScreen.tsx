@@ -392,11 +392,13 @@ export default function AddPriceScreen() {
         
         toast.success('Mevcut konum alındı');
       } else {
-        toast.error('Konum alınamadı. Lütfen konum iznini kontrol edin.');
+        await createLocation('Mevcut Konum', 37.8667, 32.4833);
+        toast.warning('Konum servisi yanit vermedi, Konya merkezi kullanildi.');
       }
     } catch (error: any) {
       console.error('Location error:', error);
-      toast.error('Konum alınamadı: ' + (error.message || 'Bilinmeyen hata'));
+      await createLocation('Mevcut Konum', 37.8667, 32.4833);
+      toast.warning('Konum hatasi nedeniyle varsayilan konum kullanildi.');
     } finally {
       setIsGettingLocation(false);
     }

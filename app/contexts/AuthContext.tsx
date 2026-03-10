@@ -55,6 +55,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [isOAuthCallback, setIsOAuthCallback] = useState(false);
   const userRef = useRef<User | null>(null);
   const isOAuthCallbackRef = useRef(false);
+  const normalizeMerchantFlag = (value: any): boolean => {
+    if (value === true) return true;
+    if (value === false || value == null) return false;
+    if (typeof value === 'string') {
+      const normalized = value.trim().toLowerCase();
+      return normalized === 'true' || normalized === 't' || normalized === '1';
+    }
+    if (typeof value === 'number') {
+      return value === 1;
+    }
+    return false;
+  };
+  const resolveMerchantStatus = (profile: any): boolean => {
+    const explicit = normalizeMerchantFlag(profile?.is_merchant);
+    const subscriptionStatus = String(profile?.merchant_subscription_status || '').toLowerCase();
+    const hasMerchantSubscription = subscriptionStatus === 'active' || subscriptionStatus === 'past_due';
+    return explicit || hasMerchantSubscription;
+  };
 
   useEffect(() => {
     userRef.current = user;
@@ -94,8 +112,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     // Load user profile helper with timeout protection
     const loadUserProfile = async (session: any, event: string, shouldCleanUrl: boolean = false) => {
+      // Read local cache as fallback only; always resolve authoritative profile from DB.
+      let storedUser: string | null = null;
+      let cachedUser: any = null;
+      try {
+        storedUser = localStorage.getItem('user');
+        if (storedUser) {
+          cachedUser = JSON.parse(storedUser);
+        }
+      } catch (e) {
+        // Invalid JSON, continue with fetch
+        storedUser = null;
+        cachedUser = null;
+      }
+
       // Create fallback user helper
-      const createFallbackUser = () => {
+      const createFallbackUser = (cachedUser?: any) => {
+        if (cachedUser?.id === session?.user?.id) {
+          // Prefer cached profile shape for role/theme stability during transient timeouts.
+          return cachedUser;
+        }
         if (!session?.user) return null;
         const userMetadata = session.user.user_metadata || {};
         return {
@@ -110,7 +146,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             verifications: 0,
           },
           isGuest: false,
-          is_merchant: false,
+          is_merchant: normalizeMerchantFlag(userMetadata.is_merchant),
           preferences: {
             notifications: true,
             searchRadius: 15, // Default search radius
@@ -122,7 +158,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // Safety timeout - force loading to false after 8 seconds (reduced from 15)
       const profileTimeout = setTimeout(() => {
         console.warn('⚠️ Profile load safety timeout - forcing loading to false');
-        const fallbackUser = createFallbackUser();
+        const fallbackUser = createFallbackUser(cachedUser);
         if (fallbackUser) {
           setUser(fallbackUser);
           localStorage.setItem('user', JSON.stringify(fallbackUser));
@@ -136,30 +172,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setToken(session.access_token);
         localStorage.setItem('authToken', session.access_token);
         
-        // Check localStorage first for faster initial render
-        // BUT: Always reload from database to ensure is_merchant is correct
-        // Don't use cached user for merchant users - always fetch fresh
-        let storedUser: string | null = null;
-        let cachedUser: any = null;
-        try {
-          storedUser = localStorage.getItem('user');
-          if (storedUser) {
-            cachedUser = JSON.parse(storedUser);
-            // Use cached user for immediate UI responsiveness when available
-            // (even for merchant users) and refresh in background to ensure correctness.
-            if (cachedUser && cachedUser.id === session.user.id) {
-              console.log('⚡ Using cached user from localStorage for faster render');
-              setUser(cachedUser);
-              setIsLoading(false); // Allow navigation immediately while we refresh profile in background
-            }
-          }
-        } catch (e) {
-          // Invalid JSON, continue with fetch
-          storedUser = null;
-          cachedUser = null;
-        }
-        
-        // Get user profile with explicit timeout using Promise.race (reduced from 10s to 5s)
+        // Get user profile with explicit timeout using Promise.race.
         const profilePromise = supabase
           .from('users')
           .select('*')
@@ -167,7 +180,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           .single();
         
         const timeoutPromise = new Promise((_, reject) => {
-          setTimeout(() => reject(new Error('Profile fetch timeout after 5 seconds')), 5000);
+          setTimeout(() => reject(new Error('Profile fetch timeout after 8 seconds')), 8000);
         });
         
         let profile: any = null;
@@ -192,21 +205,37 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           profile = null;
           profileError = { code: 'TIMEOUT', message: 'Profile fetch timed out' };
         }
+
+        // Timeout/gecici ağ sorununda "profil yok" varsayımına geçmeden önce
+        // tek seferlik güvenli bir yeniden deneme yap.
+        if (!profile && profileError?.code === 'TIMEOUT') {
+          try {
+            console.log('🔄 Retrying profile fetch after timeout...');
+            const { data: retryProfile, error: retryError } = await supabase
+              .from('users')
+              .select('*')
+              .eq('id', session.user.id)
+              .single();
+            if (!retryError && retryProfile) {
+              profile = retryProfile;
+              profileError = null;
+              console.log('✅ Profile fetch retry succeeded');
+            } else {
+              profileError = retryError || profileError;
+              console.warn('⚠️ Profile fetch retry failed:', retryError);
+            }
+          } catch (retryErr) {
+            console.error('❌ Profile fetch retry error:', retryErr);
+          }
+        }
         
-        // If profile doesn't exist (e.g., Google OAuth new user), create it
-        if (!profile && (event === 'SIGNED_IN' || event === 'INITIAL_SESSION')) {
+        // Only create profile when DB explicitly reports "row not found".
+        if (!profile && profileError?.code === 'PGRST116' && (event === 'SIGNED_IN' || event === 'INITIAL_SESSION')) {
           console.log('⚠️ Profile not found, creating new profile for OAuth user...');
           const userMetadata = session.user.user_metadata || {};
           
-          // Show fallback user immediately for better UX
-          const fallbackUser = createFallbackUser();
-          if (fallbackUser) {
-            console.log('⚡ Showing fallback user immediately while creating profile...');
-            setUser(fallbackUser);
-            localStorage.setItem('user', JSON.stringify(fallbackUser));
-            setIsLoading(false); // Allow navigation to proceed
-            profile = fallbackUser; // Set profile so we can update it later
-          }
+          // Keep auth loading until authoritative profile write/read settles to avoid
+          // rendering the wrong role-specific layout during account switches.
           
           // Prepare user data with explicit search_radius (must be integer, 1-1000)
           const newUserData = {
@@ -268,7 +297,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           
           const userData = {
             ...profile,
-            is_merchant: profile.is_merchant || false, // Ensure is_merchant is included
+            is_merchant: resolveMerchantStatus(profile),
             preferences: {
               ...(profile.preferences || {}),
               searchRadius: finalSearchRadius, // Ensure preferences.searchRadius is always set
@@ -278,7 +307,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           
           // Always update user if profile is loaded - ensure is_merchant is always fresh
           // This is critical for merchant users to maintain blue theme
-          const shouldUpdate = !cachedUser || 
+              const shouldUpdate = !cachedUser || 
                               profile.id !== cachedUser.id || 
                               (cachedUser.is_merchant !== userData.is_merchant) ||
                               (userData.preferences && Object.keys(userData.preferences).length > 0);
@@ -299,9 +328,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           }
           setIsLoading(false); // Always set loading false when profile is loaded
         } else {
-          console.warn('⚠️ No profile found and could not create one');
+          console.warn('⚠️ Profile still unavailable after fetch/retry; using conservative fallback');
           // Even if profile creation failed, create a fallback user
           const userMetadata = session.user.user_metadata || {};
+          const preservedMerchant = cachedUser?.id === session.user.id
+            ? normalizeMerchantFlag(cachedUser?.is_merchant)
+            : normalizeMerchantFlag(userMetadata?.is_merchant);
           const fallbackUser = {
             id: session.user.id,
             email: session.user.email || '',
@@ -314,7 +346,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               verifications: 0,
             },
             isGuest: false,
-            is_merchant: false,
+            is_merchant: preservedMerchant,
             preferences: {
               notifications: true,
               searchRadius: 15,
@@ -491,8 +523,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           // 3. It's TOKEN_REFRESHED and user is a merchant (to ensure is_merchant is correct)
           const userForReload = userRef.current;
           const isCurrentUserMerchant = userForReload ? (userForReload as any)?.is_merchant === true : false;
-          const shouldReload = !userForReload || 
-                              event === 'SIGNED_IN' || 
+          const shouldReload = !userForReload ||
+                              event === 'SIGNED_IN' ||
+                              event === 'USER_UPDATED' ||
+                              userForReload.id !== session.user.id ||
                               (event === 'TOKEN_REFRESHED' && isCurrentUserMerchant);
           
           if (shouldReload) {
@@ -578,37 +612,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             } catch (guestError) {
               console.error('Guest user check error:', guestError);
               // Continue to check if we have a user in state
-            }
-          }
-          
-          // If we have a user in state and localStorage, don't clear it
-          // This might be a temporary session issue
-          // BUT: For merchant users, try to reload from database to ensure is_merchant is correct
-          const storedUser = localStorage.getItem('user');
-          if (storedUser) {
-            try {
-              const parsedUser = JSON.parse(storedUser);
-              if (parsedUser && parsedUser.id) {
-                const isStoredUserMerchant = parsedUser.is_merchant === true;
-                console.log('⚠️ Session null but user exists in storage, keeping user state', {
-                  is_merchant: isStoredUserMerchant,
-                });
-                
-                // For merchant users, try to reload from database if session becomes available
-                if (isStoredUserMerchant) {
-                  console.log('🔄 Merchant user detected - will reload profile when session is available');
-                  // Don't set user yet - wait for session to reload
-                } else {
-                  if (stateChangeTimeout) {
-                    clearTimeout(stateChangeTimeout);
-                  }
-                  setUser(parsedUser);
-                  setIsLoading(false);
-                  return;
-                }
-              }
-            } catch (e) {
-              console.error('Failed to parse stored user:', e);
             }
           }
           
@@ -779,7 +782,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         
         const userData = {
           ...profile,
-          is_merchant: profile.is_merchant || false, // Ensure is_merchant is included
+          is_merchant: resolveMerchantStatus(profile),
           preferences: {
             ...(profile.preferences || {}),
             searchRadius: finalSearchRadius, // Ensure preferences.searchRadius is always set

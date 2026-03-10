@@ -9,6 +9,25 @@ import { supabase } from '../lib/supabase';
 import { v4 as uuidv4 } from 'uuid';
 import { Browser } from '@capacitor/browser';
 
+const normalizeMerchantFlag = (value: any): boolean => {
+  if (value === true) return true;
+  if (value === false || value == null) return false;
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase();
+    return normalized === 'true' || normalized === 't' || normalized === '1';
+  }
+  if (typeof value === 'number') {
+    return value === 1;
+  }
+  return false;
+};
+const resolveMerchantStatus = (profile: any): boolean => {
+  const explicit = normalizeMerchantFlag(profile?.is_merchant);
+  const subscriptionStatus = String(profile?.merchant_subscription_status || '').toLowerCase();
+  const hasMerchantSubscription = subscriptionStatus === 'active' || subscriptionStatus === 'past_due';
+  return explicit || hasMerchantSubscription;
+};
+
 // ============================================================================
 // AUTH API - Using Supabase Auth
 // ============================================================================
@@ -112,20 +131,17 @@ export const authAPI = {
             throw new Error('Profil zaten mevcut ancak yüklenemedi. Lütfen giriş yapmayı deneyin.');
           }
           
-          // Use existing profile and update is_merchant if needed
+          // Use existing profile; account type is immutable after first registration.
           if (existingProfile) {
             console.log('✅ Using existing profile');
             profileData = existingProfile;
-            // Update is_merchant if it's different
-            if (existingProfile.is_merchant !== isMerchant) {
-              const { error: updateError } = await supabase
-                .from('users')
-                .update({ is_merchant: isMerchant })
-                .eq('id', existingProfile.id);
-              
-              if (!updateError) {
-                profileData.is_merchant = isMerchant;
-              }
+            if (
+              typeof existingProfile.is_merchant === 'boolean' &&
+              existingProfile.is_merchant !== isMerchant
+            ) {
+              throw new Error(
+                `Bu hesap ${existingProfile.is_merchant ? 'esnaf' : 'normal'} olarak kayitli. Hesap tipi degistirilemez.`
+              );
             }
             // Skip error handling - we have the profile
           } else {
@@ -150,23 +166,30 @@ export const authAPI = {
         throw new Error('Profil oluşturulamadı: ' + (profileError.message || 'Bilinmeyen hata') + ' (Kod: ' + (profileError.code || 'N/A') + ')');
       }
       
-      // Always update is_merchant after successful insert (whether true or false)
-      // This ensures the value is set correctly without causing RLS issues
+      // Keep account type stable once set; only set is_merchant if it's not defined yet.
       if (profileData) {
-        console.log('📝 Updating is_merchant to', isMerchant, 'for user:', profileData.id);
-        const { error: updateError } = await supabase
-          .from('users')
-          .update({ is_merchant: isMerchant })
-          .eq('id', profileData.id);
-        
-        if (updateError) {
-          console.warn('⚠️ Failed to update is_merchant, but profile was created:', updateError);
-          // Don't throw - profile was created successfully, just is_merchant update failed
-          // The default value (false) will be used
+        const existingType = typeof profileData.is_merchant === 'boolean' ? profileData.is_merchant : null;
+        if (existingType !== null && existingType !== isMerchant) {
+          throw new Error(
+            `Bu hesap ${existingType ? 'esnaf' : 'normal'} olarak kayitli. Hesap tipi degistirilemez.`
+          );
+        }
+
+        if (existingType === null) {
+          console.log('📝 Setting initial is_merchant to', isMerchant, 'for user:', profileData.id);
+          const { error: updateError } = await supabase
+            .from('users')
+            .update({ is_merchant: isMerchant })
+            .eq('id', profileData.id);
+
+          if (updateError) {
+            console.warn('⚠️ Failed to set is_merchant, default type will be used:', updateError);
+          } else {
+            profileData.is_merchant = isMerchant;
+            console.log('✅ Initial is_merchant set successfully to', isMerchant);
+          }
         } else {
-          // Update the returned profile data with the correct is_merchant value
-          profileData.is_merchant = isMerchant;
-          console.log('✅ is_merchant updated successfully to', isMerchant);
+          profileData.is_merchant = existingType;
         }
       }
 
@@ -206,7 +229,7 @@ export const authAPI = {
           level: profileData.level,
           points: profileData.points,
           contributions: profileData.contributions,
-          is_merchant: profileData.is_merchant || false, // Include is_merchant in returned user
+          is_merchant: resolveMerchantStatus(profileData),
         },
         token: session?.access_token || null,
         session: session,
@@ -275,7 +298,7 @@ export const authAPI = {
           level: profile.level,
           points: profile.points,
           contributions: profile.contributions,
-          is_merchant: profile.is_merchant || false, // Include is_merchant
+          is_merchant: resolveMerchantStatus(profile),
         },
         token: data.session.access_token,
         session: data.session,
@@ -804,12 +827,88 @@ export const pricesAPI = {
         console.error('❌ Supabase query error:', error);
         console.error('Error code:', error.code);
         console.error('Error message:', error.message);
-        // Return empty array instead of throwing
-        return [];
+        console.warn('⚠️ Falling back to join-less prices query');
+
+        // Fallback: avoid relation joins (users/products/locations) in case one policy breaks the full select.
+        let basicQuery = supabase
+          .from('prices')
+          .select('id, product_id, location_id, price, unit, created_at, is_verified, photo, coordinates, is_active')
+          .order(filters?.sort === 'cheapest' ? 'price' : 'created_at', { ascending: filters?.sort === 'cheapest' })
+          .limit(filters?.limit || 500);
+
+        // Keep core constraints compatible with previous behavior.
+        basicQuery = basicQuery.eq('is_active', true);
+        if (filters?.product) basicQuery = basicQuery.eq('product_id', filters.product);
+        if (filters?.location) basicQuery = basicQuery.eq('location_id', filters.location);
+        if (filters?.verified) basicQuery = basicQuery.eq('is_verified', true);
+        if (filters?.withPhoto) basicQuery = basicQuery.not('photo', 'is', null);
+        if (filters?.todayOnly) {
+          const today = new Date();
+          today.setHours(0, 0, 0, 0);
+          basicQuery = basicQuery.gte('created_at', today.toISOString());
+        }
+
+        const { data: basicRows, error: basicError } = await basicQuery;
+        if (basicError) {
+          console.error('❌ Join-less prices fallback failed:', basicError);
+          return [];
+        }
+
+        const rows = basicRows || [];
+        const productIds = Array.from(new Set(rows.map((r: any) => r.product_id).filter(Boolean)));
+        const locationIds = Array.from(new Set(rows.map((r: any) => r.location_id).filter(Boolean)));
+
+        const [{ data: productsRows }, { data: locationsRows }] = await Promise.all([
+          productIds.length
+            ? supabase.from('products').select('id, name, category, default_unit, image').in('id', productIds)
+            : Promise.resolve({ data: [] as any[] }),
+          locationIds.length
+            ? supabase.from('locations').select('id, name, type, address, coordinates, city, district').in('id', locationIds)
+            : Promise.resolve({ data: [] as any[] }),
+        ]);
+
+        const productsById = new Map((productsRows || []).map((p: any) => [p.id, p]));
+        const locationsById = new Map((locationsRows || []).map((l: any) => [l.id, l]));
+
+        const hydratedFallback = rows.map((row: any) => ({
+          ...row,
+          product: row.product_id ? productsById.get(row.product_id) || null : null,
+          location: row.location_id ? locationsById.get(row.location_id) || null : null,
+        }));
+
+        console.log(`✅ Join-less prices fallback succeeded: ${hydratedFallback.length} rows`);
+        return hydratedFallback;
+      }
+
+      let hydratedData = data || [];
+
+      // Some rows can come with null nested relations; hydrate from foreign keys.
+      const missingProductRows = hydratedData.filter((price: any) => !price?.product && price?.product_id);
+      if (missingProductRows.length > 0) {
+        const productIds = Array.from(
+          new Set(
+            missingProductRows
+              .map((price: any) => price.product_id)
+              .filter((id: any) => typeof id === 'string' && id.length > 0)
+          )
+        );
+        if (productIds.length > 0) {
+          const { data: productsByIdRows } = await supabase
+            .from('products')
+            .select('id, name, category, default_unit, image')
+            .in('id', productIds);
+
+          const productsById = new Map((productsByIdRows || []).map((p: any) => [p.id, p]));
+          hydratedData = hydratedData.map((price: any) => {
+            if (price?.product || !price?.product_id) return price;
+            const product = productsById.get(price.product_id);
+            return product ? { ...price, product } : price;
+          });
+        }
       }
 
       // Normalize coordinates for frontend consumption
-      const normalizedData = (data || []).map((price: any) => {
+      const normalizedData = hydratedData.map((price: any) => {
         let latVal: number | undefined;
         let lngVal: number | undefined;
 
@@ -948,16 +1047,31 @@ export const pricesAPI = {
     const createOperation = async () => {
       try {
         console.log('🚀 Starting price creation...');
+
+        const resolveAuthenticatedUser = async () => {
+          // Primary path: validate token with server.
+          const { data: getUserData, error: getUserError } = await supabase.auth.getUser();
+          if (!getUserError && getUserData?.user) {
+            return getUserData.user;
+          }
+
+          if (getUserError) {
+            console.warn('⚠️ getUser failed, trying session fallback:', getUserError.message);
+          }
+
+          // Fallback path for native resume edge-cases:
+          // use locally persisted session user if available.
+          const { data: sessionData } = await supabase.auth.getSession();
+          if (sessionData?.session?.user) {
+            return sessionData.session.user;
+          }
+
+          return null;
+        };
         
         // Get current user - ALWAYS use auth.getUser() for authenticated users
         console.log('👤 Getting user...');
-        const { data: { user: authUser }, error: getUserError } = await supabase.auth.getUser();
-        
-        if (getUserError) {
-          console.error('❌ Get user error:', getUserError);
-          throw new Error('Oturum doğrulanamadı. Lütfen tekrar giriş yapın.');
-        }
-        
+        const authUser = await resolveAuthenticatedUser();
         if (!authUser) {
           console.error('❌ No authenticated user');
           throw new Error('Giriş yapmanız gerekiyor');
@@ -1157,13 +1271,7 @@ export const pricesAPI = {
       }
 
       // Verify user_id matches auth.uid() for RLS policy
-      const { data: { user: currentAuthUser }, error: authError } = await supabase.auth.getUser();
-      
-      if (authError) {
-        console.error('❌ Auth error:', authError);
-        throw new Error('Oturum doğrulanamadı. Lütfen tekrar giriş yapın.');
-      }
-      
+      const currentAuthUser = await resolveAuthenticatedUser();
       if (!currentAuthUser) {
         console.error('❌ No authenticated user found');
         throw new Error('Oturum bulunamadı. Lütfen tekrar giriş yapın.');
@@ -1262,6 +1370,16 @@ export const pricesAPI = {
       }
       
       console.log('Price created successfully:', priceRecord.id);
+
+      // Server-side fallback dispatcher:
+      // re-computes price-drop recipients and dispatches remote push even if DB webhook chain lags.
+      try {
+        await supabase.functions.invoke('notify-price-drop', {
+          body: { price_id: priceRecord.id },
+        });
+      } catch (notifyError) {
+        console.warn('⚠️ notify-price-drop invoke failed (non-blocking):', notifyError);
+      }
 
       // Update user points
       const { data: userProfile } = await supabase
@@ -1705,8 +1823,34 @@ export const searchAPI = {
       console.log('✅ Nearby prices fetched:', prices?.length || 0);
       console.log('📍 User location:', { lat, lng, radiusKm: radius / 1000 });
 
+      let hydratedPrices = prices || [];
+
+      const missingProductRows = hydratedPrices.filter((price: any) => !price?.product && price?.product_id);
+      if (missingProductRows.length > 0) {
+        const productIds = Array.from(
+          new Set(
+            missingProductRows
+              .map((price: any) => price.product_id)
+              .filter((id: any) => typeof id === 'string' && id.length > 0)
+          )
+        );
+        if (productIds.length > 0) {
+          const { data: productsByIdRows } = await supabase
+            .from('products')
+            .select('id, name, category, default_unit, image')
+            .in('id', productIds);
+
+          const productsById = new Map((productsByIdRows || []).map((p: any) => [p.id, p]));
+          hydratedPrices = hydratedPrices.map((price: any) => {
+            if (price?.product || !price?.product_id) return price;
+            const product = productsById.get(price.product_id);
+            return product ? { ...price, product } : price;
+          });
+        }
+      }
+
       // Normalize coordinates first (same logic as pricesAPI.getAll)
-      const normalizedPrices = (prices || []).map((price: any) => {
+      const normalizedPrices = hydratedPrices.map((price: any) => {
         let latVal: number | undefined = price.lat;
         let lngVal: number | undefined = price.lng;
         
@@ -1805,7 +1949,7 @@ export const searchAPI = {
       // Group by product and get cheapest
       const cheapestByProduct: Record<string, any> = {};
       nearbyPrices.forEach((price: any) => {
-        const productId = price.product?.id;
+        const productId = price.product?.id || price.product_id;
         if (!productId) return;
         if (!cheapestByProduct[productId] || price.price < cheapestByProduct[productId].price) {
           cheapestByProduct[productId] = price;
@@ -2121,11 +2265,46 @@ export const merchantProductsAPI = {
           merchant:users!merchant_products_merchant_id_fkey(id, name, avatar)
         `)
         .eq('merchant_id', merchantId)
-        .eq('is_active', true)
+        // Include legacy rows where is_active is null.
+        .or('is_active.eq.true,is_active.is.null')
         .order('created_at', { ascending: false });
 
       if (error) throw error;
-      return data || [];
+      if (data && data.length > 0) return data;
+
+      // Fallback for cases where relation joins are blocked by policy
+      // and the primary query returns an empty list without an explicit error.
+      const { data: basicRows, error: basicError } = await supabase
+        .from('merchant_products')
+        .select('id, merchant_id, product_id, price, unit, images, location_id, coordinates, verification_count, unverification_count, created_at, is_active')
+        .eq('merchant_id', merchantId)
+        .or('is_active.eq.true,is_active.is.null')
+        .order('created_at', { ascending: false });
+
+      if (basicError) throw basicError;
+      const rows = basicRows || [];
+      if (rows.length === 0) return [];
+
+      const productIds = Array.from(new Set(rows.map((r: any) => r.product_id).filter(Boolean)));
+      const locationIds = Array.from(new Set(rows.map((r: any) => r.location_id).filter(Boolean)));
+
+      const [{ data: productRows }, { data: locationRows }] = await Promise.all([
+        productIds.length
+          ? supabase.from('products').select('id, name, category, image').in('id', productIds)
+          : Promise.resolve({ data: [] as any[] }),
+        locationIds.length
+          ? supabase.from('locations').select('id, name, coordinates').in('id', locationIds)
+          : Promise.resolve({ data: [] as any[] }),
+      ]);
+
+      const productMap = new Map((productRows || []).map((p: any) => [p.id, p]));
+      const locationMap = new Map((locationRows || []).map((l: any) => [l.id, l]));
+
+      return rows.map((row: any) => ({
+        ...row,
+        product: productMap.get(row.product_id) || { id: row.product_id, name: 'Ürün', category: 'Diğer' },
+        location: row.location_id ? (locationMap.get(row.location_id) || null) : null,
+      }));
     } catch (error: any) {
       console.error('❌ Get merchant products error:', error);
       throw error;
@@ -2341,7 +2520,7 @@ export const merchantProductsAPI = {
           merchant:users!merchant_products_merchant_id_fkey(id, name, avatar, email, is_merchant),
           coordinates
         `)
-        .eq('is_active', true)
+        .or('is_active.eq.true,is_active.is.null')
         .limit(limit);
 
       if (error) throw error;
@@ -2349,12 +2528,16 @@ export const merchantProductsAPI = {
       // Group by merchant_id and get unique merchants
       const merchantMap = new Map();
       (data || []).forEach((item: any) => {
-        if (item.merchant && !merchantMap.has(item.merchant.id)) {
-          merchantMap.set(item.merchant.id, {
-            ...item.merchant,
-            coordinates: item.coordinates,
-          });
-        }
+        const merchantId = item?.merchant?.id || item?.merchant_id;
+        if (!merchantId || merchantMap.has(merchantId)) return;
+        merchantMap.set(merchantId, {
+          id: merchantId,
+          name: item?.merchant?.name || 'Esnaf',
+          avatar: item?.merchant?.avatar || null,
+          email: item?.merchant?.email || null,
+          is_merchant: item?.merchant?.is_merchant === true,
+          coordinates: item.coordinates,
+        });
       });
 
       return Array.from(merchantMap.values());

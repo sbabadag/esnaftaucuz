@@ -22,6 +22,7 @@ export default function MerchantSubscriptionScreen() {
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isPaying, setIsPaying] = useState(false);
+  const [isAwaitingConfirmation, setIsAwaitingConfirmation] = useState(false);
   const [statusData, setStatusData] = useState<any>(null);
   const [payments, setPayments] = useState<any[]>([]);
   const [selectedPlan, setSelectedPlan] = useState<'monthly' | 'yearly'>('monthly');
@@ -57,9 +58,6 @@ export default function MerchantSubscriptionScreen() {
     if (!user?.id) return;
     try {
       if (showLoader) setIsLoading(true);
-      await merchantSubscriptionAPI.cleanupOldPayments().catch((cleanupError) => {
-        console.warn('⚠️ Payment cleanup skipped:', cleanupError);
-      });
       const [status, paymentList] = await Promise.all([
         merchantSubscriptionAPI.getStatus(user.id),
         merchantSubscriptionAPI.getPayments(user.id, 10),
@@ -89,7 +87,8 @@ export default function MerchantSubscriptionScreen() {
     const paymentId = params.get('paymentId');
 
     if (checkout === 'success') {
-      toast.success(paymentId ? `Ödeme tamamlandı (Ref: ${paymentId.slice(0, 8)}...)` : 'Ödeme tamamlandı');
+      setIsAwaitingConfirmation(true);
+      toast.info('Odeme alindi, abonelik onayi bekleniyor...');
       loadData(false);
       if (refreshUser) refreshUser();
       navigate('/app/merchant-subscription', { replace: true });
@@ -101,6 +100,55 @@ export default function MerchantSubscriptionScreen() {
       navigate('/app/merchant-subscription', { replace: true });
     }
   }, [location.search]);
+
+  useEffect(() => {
+    if (!isAwaitingConfirmation || !user?.id) return;
+
+    let cancelled = false;
+    let attempts = 0;
+    const maxAttempts = 12;
+
+    const poll = async () => {
+      while (!cancelled && attempts < maxAttempts) {
+        attempts += 1;
+        try {
+          const [status, paymentList] = await Promise.all([
+            merchantSubscriptionAPI.getStatus(user.id),
+            merchantSubscriptionAPI.getPayments(user.id, 10),
+          ]);
+          if (cancelled) return;
+          setStatusData(status);
+          setPayments(paymentList);
+
+          const latestPendingOrConfirmed = (paymentList || []).find(
+            (p: any) => p?.provider === 'stripe' || p?.provider === 'iyzico'
+          );
+
+          if (status?.is_active || latestPendingOrConfirmed?.status === 'confirmed') {
+            toast.success('Odeme onaylandi, abonelik aktif edildi.');
+            if (refreshUser) await refreshUser();
+            setIsAwaitingConfirmation(false);
+            return;
+          }
+        } catch (error) {
+          console.warn('Subscription confirmation poll failed:', error);
+        }
+
+        await new Promise((resolve) => setTimeout(resolve, 2500));
+      }
+
+      if (!cancelled) {
+        toast.warning('Onay biraz gecikiyor olabilir. "Yenile" ile durumu kontrol edebilirsiniz.');
+        setIsAwaitingConfirmation(false);
+      }
+    };
+
+    poll();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isAwaitingConfirmation, user?.id, refreshUser]);
 
   const handleRefresh = async () => {
     if (!user?.id) return;
@@ -169,7 +217,7 @@ export default function MerchantSubscriptionScreen() {
             variant="outline"
             size="sm"
             onClick={handleRefresh}
-            disabled={isRefreshing}
+            disabled={isRefreshing || isAwaitingConfirmation}
             className={isMerchant ? 'bg-white text-blue-700 border-white' : ''}
           >
             <RefreshCw className={`w-4 h-4 mr-1 ${isRefreshing ? 'animate-spin' : ''}`} />
@@ -233,6 +281,11 @@ export default function MerchantSubscriptionScreen() {
           <p className="text-xs text-gray-500 mt-2">
             Google Pay, Stripe Checkout ile güvenli olarak işlenir. Başarılı ödeme sonrası webhook ile abonelik otomatik uzatılır.
           </p>
+          {isAwaitingConfirmation && (
+            <p className="text-xs text-blue-700 mt-2">
+              Odeme alindi. Saglayici onayi bekleniyor, durum otomatik yenileniyor...
+            </p>
+          )}
           {isRenewalLocked && (
             <p className="text-xs text-amber-700 mt-2">
               Aboneliğiniz aktif. Yeni ödeme butonu dönem bitimine 7 gün kala açılır ({daysRemaining} gün kaldı).

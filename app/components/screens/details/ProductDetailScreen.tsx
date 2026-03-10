@@ -87,12 +87,6 @@ export default function ProductDetailScreen() {
     }
   }, [isAddPriceDialogOpen]);
 
-  useEffect(() => {
-    if (isAddPriceDialogOpen) {
-      loadLocations();
-    }
-  }, [isAddPriceDialogOpen]);
-
   const checkFavoriteStatus = async () => {
     if (!user || !id) {
       setIsFavorited(false);
@@ -178,28 +172,21 @@ export default function ProductDetailScreen() {
   }, [id]);
 
   const loadProductData = async () => {
+    const withTimeout = <T,>(promise: Promise<T>, ms: number, label: string): Promise<T> =>
+      Promise.race([
+        promise,
+        new Promise<T>((_, reject) => setTimeout(() => reject(new Error(`${label} timeout`)), ms)),
+      ]);
+
     try {
       setIsLoading(true);
       
       // Load product
-      const productData = await productsAPI.getById(id!);
+      const productData = await withTimeout(productsAPI.getById(id!), 10000, 'product detail');
       setProduct(productData);
 
       // Load prices
-      const priceData = await pricesAPI.getByProduct(id!, sortBy);
-      console.log('📊 ProductDetailScreen - Prices loaded:', priceData);
-      console.log('📍 Location data check:', priceData.map((p: any) => ({
-        id: p.id,
-        location: p.location,
-        locationName: p.location?.name,
-        locationCity: p.location?.city,
-        locationDistrict: p.location?.district,
-        locationId: p.location?.id,
-        hasLocation: !!p.location,
-        lat: p.lat,
-        lng: p.lng,
-        locationCoordinates: p.location?.coordinates,
-      })));
+      const priceData = await withTimeout(pricesAPI.getByProduct(id!, sortBy), 12000, 'product prices');
       setPrices(priceData);
 
       // Calculate average price
@@ -448,11 +435,11 @@ export default function ProductDetailScreen() {
     <div className="min-h-screen bg-gray-50">
       {/* Header */}
       <div className="fixed top-0 left-0 right-0 bg-white border-b border-gray-200 p-4 z-10" style={{ paddingTop: 'env(safe-area-inset-top, 0px)' }}>
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-3">
           <button onClick={() => navigate(-1)} className="p-2 -ml-2 hover:bg-gray-100 rounded-full">
             <ArrowLeft className="w-5 h-5" />
           </button>
-          <div className="flex items-center gap-3 flex-1">
+          <div className="flex items-center gap-3 flex-1 min-w-0">
             <div className="w-10 h-10 rounded-lg bg-gray-100 flex items-center justify-center flex-shrink-0 overflow-hidden">
               {product.image ? (
                 <img 
@@ -467,13 +454,13 @@ export default function ProductDetailScreen() {
               ) : null}
               <Package className={`w-6 h-6 text-gray-400 ${product.image ? 'hidden' : ''}`} />
             </div>
-            <h1 className="text-xl">{product.name}</h1>
+            <h1 className="text-xl leading-tight truncate">{product.name}</h1>
           </div>
           {user && (
             <button
               onClick={handleToggleFavorite}
               disabled={isTogglingFavorite}
-              className={`p-2 rounded-full transition-colors ${
+              className={`p-2 rounded-full transition-colors flex-shrink-0 ${
                 isFavorited
                   ? 'text-red-600 bg-red-50 hover:bg-red-100'
                   : 'text-gray-400 hover:bg-gray-100'
@@ -636,21 +623,6 @@ export default function ProductDetailScreen() {
             const createdAt = item.created_at || item.createdAt || '';
             const isVerified = item.is_verified || item.isVerified || false;
             const userId = item.user?.id || item.user?._id || '';
-            // Debug: Log location data
-            console.log('🔍 Price item location check:', {
-              itemId,
-              location: item.location,
-              locationName: item.location?.name,
-              locationId: item.location?.id,
-              locationCity: item.location?.city,
-              locationDistrict: item.location?.district,
-              locationType: item.location?.type,
-              coordinates: item.location?.coordinates,
-              directLat: item.lat,
-              directLng: item.lng,
-              location_id: (item as any).location_id, // Check if location_id exists
-            });
-            
             // Extract lat/lng from coordinates - prioritize location.coordinates and item.coordinates over item.lat/lng
             // because coordinates strings are the source of truth from the database
             let lat: number | undefined;
@@ -663,7 +635,6 @@ export default function ProductDetailScreen() {
               if (match) {
                 lng = parseFloat(match[1]);
                 lat = parseFloat(match[2]);
-                console.log('📍 Parsed item.coordinates (PostgreSQL POINT):', { raw: coordinates, lat, lng });
               }
             }
             
@@ -673,25 +644,16 @@ export default function ProductDetailScreen() {
               if ((coordinates as any).lat !== undefined && (coordinates as any).lng !== undefined) {
                 lat = (coordinates as any).lat;
                 lng = (coordinates as any).lng;
-                console.log('📍 Using coordinates object:', { lat, lng });
               } else if ((coordinates as any).x !== undefined && (coordinates as any).y !== undefined) {
                 // Old format: x = lng, y = lat
                 lng = (coordinates as any).x;
                 lat = (coordinates as any).y;
-                console.log('📍 Using coordinates x/y format:', { lat, lng });
               } else if (typeof coordinates === 'string') {
                 // PostgreSQL POINT string format: (lng,lat)
                 const match = coordinates.match(/\(([^,]+),([^)]+)\)/);
                 if (match) {
                   lng = parseFloat(match[1]);
                   lat = parseFloat(match[2]);
-                  console.log('📍 Parsed PostgreSQL POINT string:', { 
-                    raw: coordinates, 
-                    match1: match[1], 
-                    match2: match[2], 
-                    lat, 
-                    lng 
-                  });
                 }
               }
             }
@@ -700,23 +662,9 @@ export default function ProductDetailScreen() {
             if (!lat || !lng) {
               lat = item.lat;
               lng = item.lng;
-              console.log('📍 Using fallback item.lat/lng:', { lat, lng });
             }
             
             const hasCoordinates = lat !== undefined && lng !== undefined && !isNaN(lat) && !isNaN(lng);
-            
-            if (hasCoordinates) {
-              console.log('✅ Final coordinates for navigation:', { lat, lng, productName: item.product?.name || product.name });
-            } else {
-              console.warn('⚠️ No valid coordinates found for item:', { 
-                itemId: item.id || item._id,
-                hasCoordinates: !!coordinates,
-                hasItemLat: item.lat !== undefined,
-                hasItemLng: item.lng !== undefined,
-                coordinatesType: typeof coordinates,
-                coordinatesValue: coordinates
-              });
-            }
             
             // Get location name - check multiple sources
             let locationName = 'Konum bilgisi yok';
@@ -735,8 +683,6 @@ export default function ProductDetailScreen() {
               // If location object is missing but location_id exists, show location_id
               locationName = `Konum ID: ${(item as any).location_id}`;
             }
-            
-            console.log('📍 Final location name:', locationName);
             
             return (
               <div key={itemId} className="bg-white rounded-lg p-4 border border-gray-200">
@@ -803,7 +749,6 @@ export default function ProductDetailScreen() {
                           className="w-full sm:w-auto text-xs h-8 px-3 border-green-600 text-green-600 hover:bg-green-50"
                           onClick={() => {
                             const productId = item.product?.id || item.product?._id || product?.id || product?._id;
-                            console.log('🧭 Navigating to map with coordinates:', { lat, lng, productName: item.product?.name || product.name, productId });
                             const url = productId 
                               ? `/app/map?lat=${lat}&lng=${lng}&focus=true&productId=${productId}`
                               : `/app/map?lat=${lat}&lng=${lng}&focus=true`;

@@ -51,24 +51,21 @@ if (!supabaseClient) {
             'x-client-info': 'esnaftaucuz-web',
           },
           fetch: (url, options = {}) => {
-            // Increase timeout for mobile networks
-            const controller = new AbortController();
-            const startTime = Date.now();
-            const timeoutId = setTimeout(() => {
-              const elapsed = Date.now() - startTime;
-              console.error('⚠️ Supabase fetch timeout after', elapsed, 'ms:', url);
-              controller.abort();
-            }, 30000); // 30 second timeout (increased)
-            
-            const urlStr = typeof url === 'string' ? url : url.toString();
-            console.log('🌐 Supabase fetch START:', urlStr.substring(0, 100), options.method || 'GET');
-            console.log('⏱️ Fetch started at:', new Date().toISOString());
-            
-            return fetch(url, {
-              ...options,
-              signal: controller.signal,
-            })
-              .then((response) => {
+            // Mobile networks (especially iOS) can be much slower/intermittent.
+            const runFetchWithTimeout = async (timeoutMs: number) => {
+              const controller = new AbortController();
+              const startTime = Date.now();
+              const timeoutId = setTimeout(() => {
+                const elapsed = Date.now() - startTime;
+                console.error('⚠️ Supabase fetch timeout after', elapsed, 'ms:', url);
+                controller.abort();
+              }, timeoutMs);
+
+              try {
+                const response = await fetch(url, {
+                  ...options,
+                  signal: controller.signal,
+                });
                 const elapsed = Date.now() - startTime;
                 clearTimeout(timeoutId);
                 console.log(`✅ Supabase fetch SUCCESS (${elapsed}ms):`, urlStr.substring(0, 100), response.status);
@@ -76,22 +73,43 @@ if (!supabaseClient) {
                   console.error('❌ Response not OK:', response.status, response.statusText);
                 }
                 return response;
-              })
-              .catch((error) => {
+              } catch (error: any) {
                 const elapsed = Date.now() - startTime;
                 clearTimeout(timeoutId);
-                if (error.name === 'AbortError') {
-                  console.error(`❌ Supabase fetch TIMEOUT (${elapsed}ms):`, urlStr.substring(0, 100));
-                  throw new Error('İstek zaman aşımına uğradı. Lütfen internet bağlantınızı kontrol edin.');
+                throw { error, elapsed };
+              }
+            };
+            
+            const urlStr = typeof url === 'string' ? url : url.toString();
+            console.log('🌐 Supabase fetch START:', urlStr.substring(0, 100), options.method || 'GET');
+            console.log('⏱️ Fetch started at:', new Date().toISOString());
+
+            return runFetchWithTimeout(45000).catch(async (firstFailure: any) => {
+              const firstError = firstFailure?.error || firstFailure;
+              const firstElapsed = firstFailure?.elapsed;
+              if (firstError?.name === 'AbortError') {
+                console.warn(`🔄 Supabase fetch retry after timeout (${firstElapsed}ms):`, urlStr.substring(0, 100));
+                try {
+                  return await runFetchWithTimeout(60000);
+                } catch (secondFailure: any) {
+                  const secondError = secondFailure?.error || secondFailure;
+                  const secondElapsed = secondFailure?.elapsed;
+                  if (secondError?.name === 'AbortError') {
+                    console.error(`❌ Supabase fetch TIMEOUT after retry (${secondElapsed}ms):`, urlStr.substring(0, 100));
+                    throw new Error('İstek zaman aşımına uğradı. Lütfen internet bağlantınızı kontrol edin.');
+                  }
+                  console.error(`❌ Supabase fetch ERROR after retry (${secondElapsed}ms):`, urlStr.substring(0, 100), secondError);
+                  throw secondError;
                 }
-                console.error(`❌ Supabase fetch ERROR (${elapsed}ms):`, urlStr.substring(0, 100), error);
-                console.error('Error details:', {
-                  name: error.name,
-                  message: error.message,
-                  stack: error.stack?.substring(0, 200),
-                });
-                throw error;
+              }
+              console.error(`❌ Supabase fetch ERROR (${firstElapsed}ms):`, urlStr.substring(0, 100), firstError);
+              console.error('Error details:', {
+                name: firstError?.name,
+                message: firstError?.message,
+                stack: firstError?.stack?.substring(0, 200),
               });
+              throw firstError;
+            });
           },
         },
       });

@@ -98,7 +98,13 @@ const getGoogleAccessToken = async () => {
   return tokenJson.access_token as string;
 };
 
-const sendFcmLegacy = async (token: string, title: string, body: string, data: Record<string, string>) => {
+const sendFcmLegacy = async (
+  token: string,
+  title: string,
+  body: string,
+  data: Record<string, string>,
+  badgeCount: number,
+) => {
   const response = await fetch('https://fcm.googleapis.com/fcm/send', {
     method: 'POST',
     headers: {
@@ -112,6 +118,7 @@ const sendFcmLegacy = async (token: string, title: string, body: string, data: R
         title,
         body,
         sound: 'default',
+        ...(badgeCount > 0 ? { badge: String(badgeCount) } : {}),
       },
       data,
     }),
@@ -127,10 +134,60 @@ const sendFcmLegacy = async (token: string, title: string, body: string, data: R
 const sendFcmV1 = async (
   accessToken: string,
   token: string,
+  platform: string,
   title: string,
   body: string,
   data: Record<string, string>,
+  badgeCount: number,
 ) => {
+  const productId = data.product_id || '';
+  const webLink = productId ? `/app/product/${productId}` : '/app/notifications';
+
+  const message: any = {
+    token,
+    notification: { title, body },
+    data: {
+      ...data,
+      title,
+      message: body,
+    },
+    android: {
+      priority: 'high',
+      ttl: '120s',
+      notification: {
+        sound: 'default',
+        channel_id: 'price_alerts',
+        notification_priority: 'PRIORITY_MAX',
+        default_vibrate_timings: true,
+      },
+    },
+    apns: {
+      headers: {
+        'apns-push-type': 'alert',
+        'apns-priority': '10',
+      },
+      payload: {
+        aps: {
+          sound: 'default',
+          ...(badgeCount > 0 ? { badge: badgeCount } : {}),
+        },
+      },
+    },
+  };
+
+  if (platform === 'web') {
+    message.webpush = {
+      notification: {
+        title,
+        body,
+        icon: '/favicon.ico',
+      },
+      fcm_options: {
+        link: webLink,
+      },
+    };
+  }
+
   const response = await fetch(`https://fcm.googleapis.com/v1/projects/${FCM_PROJECT_ID}/messages:send`, {
     method: 'POST',
     headers: {
@@ -138,22 +195,7 @@ const sendFcmV1 = async (
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      message: {
-        token,
-        notification: { title, body },
-        data,
-        android: {
-          priority: 'high',
-          notification: { sound: 'default' },
-        },
-        apns: {
-          payload: {
-            aps: {
-              sound: 'default',
-            },
-          },
-        },
-      },
+      message,
     }),
   });
 
@@ -222,14 +264,21 @@ Deno.serve(async (req) => {
       click_action: 'OPEN_NOTIFICATIONS',
     };
 
+    const { count: unreadCount } = await client
+      .from('notifications')
+      .select('id', { count: 'exact', head: true })
+      .eq('user_id', notification.user_id)
+      .eq('is_read', false);
+    const badgeCount = unreadCount || 0;
+
     let sent = 0;
     const invalidTokenIds: string[] = [];
     const accessToken = hasV1 ? await getGoogleAccessToken() : null;
 
     for (const row of tokenRows) {
       const result = accessToken
-        ? await sendFcmV1(accessToken, row.token, notification.title, notification.message, payloadData)
-        : await sendFcmLegacy(row.token, notification.title, notification.message, payloadData);
+        ? await sendFcmV1(accessToken, row.token, row.platform, notification.title, notification.message, payloadData, badgeCount)
+        : await sendFcmLegacy(row.token, notification.title, notification.message, payloadData, badgeCount);
       if (result.ok) {
         sent += 1;
       } else if (result.invalidToken) {

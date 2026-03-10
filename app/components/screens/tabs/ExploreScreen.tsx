@@ -8,7 +8,7 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from '../.
 import { Checkbox } from '../../ui/checkbox';
 import { Label } from '../../ui/label';
 import { Avatar, AvatarImage, AvatarFallback } from '../../ui/avatar';
-import { productsAPI, pricesAPI, searchAPI, merchantProductsAPI } from '../../../services/supabase-api';
+import { productsAPI, pricesAPI, searchAPI, merchantProductsAPI, notificationsAPI } from '../../../services/supabase-api';
 import { useGeolocation } from '../../../../src/hooks/useGeolocation';
 import { useAuth } from '../../../contexts/AuthContext';
 import { useLanguage } from '../../../contexts/LanguageContext';
@@ -78,6 +78,7 @@ export default function ExploreScreen() {
   const [nearbyCheapest, setNearbyCheapest] = useState<Price[]>([]);
   const [recentPrices, setRecentPrices] = useState<Price[]>([]);
   const [merchantShops, setMerchantShops] = useState<any[]>([]);
+  const [unreadNotificationCount, setUnreadNotificationCount] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [pullDistance, setPullDistance] = useState(0);
@@ -91,9 +92,12 @@ export default function ExploreScreen() {
   const HEADER_OVERLAP = 0; // pixels to pull content up so it starts immediately under the search box
   const HEADER_GAP = 8; // small extra gap to avoid overlap
   const retryCountRef = useRef<number>(0);
+  const lastSlowToastAtRef = useRef<number>(0);
+  const restoredCacheRef = useRef<boolean>(false);
   const [currentLocation, setCurrentLocation] = useState<string>('Konya / Selçuklu');
   const [isGettingLocation, setIsGettingLocation] = useState(false);
   const [userLocation, setUserLocation] = useState<{ lat: number; lng: number } | null>(null);
+  const exploreCacheKey = `explore-cache:${user?.id || 'anon'}`;
   const [filters, setFilters] = useState({
     pazar: false,
     manav: false,
@@ -103,6 +107,111 @@ export default function ExploreScreen() {
     withPhoto: false,
     verified: false,
   });
+  const hasAnyData =
+    trendProducts.length > 0 ||
+    recentPrices.length > 0 ||
+    nearbyCheapest.length > 0 ||
+    merchantShops.length > 0;
+  const hasSearchMatches = !!searchResults && (
+    (searchResults.products?.length || 0) > 0 ||
+    (searchResults.prices?.length || 0) > 0 ||
+    (searchResults.locations?.length || 0) > 0
+  );
+  const isNativePlatform =
+    typeof window !== 'undefined' &&
+    !!(window as any).Capacitor?.isNativePlatform &&
+    (window as any).Capacitor.isNativePlatform();
+  const showSlowLoadingToast = () => {
+    // Web'de veri sonunda geldigi icin bu toast gürültü üretiyor.
+    if (!isNativePlatform) return;
+    // If we already rendered something (including cache), don't show scary timeout toast.
+    if (hasAnyData || restoredCacheRef.current) return;
+    // Pull-to-refresh flow should stay silent.
+    if (isRefreshing) return;
+    const now = Date.now();
+    if (now - lastSlowToastAtRef.current < 30000) return;
+    lastSlowToastAtRef.current = now;
+    toast.error('Veriler gec yukleniyor, lutfen tekrar deneyin');
+  };
+
+  useEffect(() => {
+    if (!user?.id) {
+      setUnreadNotificationCount(0);
+      return;
+    }
+
+    let mounted = true;
+
+    const refreshUnreadCount = async () => {
+      try {
+        const count = await notificationsAPI.getUnreadCount(user.id);
+        if (mounted) setUnreadNotificationCount(count || 0);
+      } catch (error) {
+        console.error('Failed to refresh unread notification count:', error);
+      }
+    };
+
+    refreshUnreadCount();
+
+    const channel = supabase
+      .channel(`explore-unread-count-${user.id}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'notifications',
+          filter: `user_id=eq.${user.id}`,
+        },
+        () => {
+          refreshUnreadCount();
+        }
+      )
+      .subscribe();
+
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible') refreshUnreadCount();
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
+
+    return () => {
+      mounted = false;
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+      supabase.removeChannel(channel);
+    };
+  }, [user?.id]);
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(exploreCacheKey);
+      if (!raw) return;
+      const parsed = JSON.parse(raw);
+      let restoredAny = false;
+      if (Array.isArray(parsed?.trendProducts) && parsed.trendProducts.length > 0) {
+        setTrendProducts(parsed.trendProducts);
+        restoredAny = true;
+      }
+      if (Array.isArray(parsed?.recentPrices) && parsed.recentPrices.length > 0) {
+        setRecentPrices(parsed.recentPrices);
+        restoredAny = true;
+      }
+      if (Array.isArray(parsed?.nearbyCheapest) && parsed.nearbyCheapest.length > 0) {
+        setNearbyCheapest(parsed.nearbyCheapest);
+        restoredAny = true;
+      }
+      if (Array.isArray(parsed?.merchantShops) && parsed.merchantShops.length > 0) {
+        setMerchantShops(parsed.merchantShops);
+        restoredAny = true;
+      }
+      if (restoredAny) {
+        // Render cached content immediately while fresh network calls continue.
+        restoredCacheRef.current = true;
+        setIsLoading(false);
+      }
+    } catch (e) {
+      console.warn('Failed to restore explore cache:', e);
+    }
+  }, [exploreCacheKey]);
 
 
   // Check for search query in URL on mount
@@ -222,21 +331,161 @@ export default function ExploreScreen() {
     
     console.log('🔄 Loading data...');
     
-    // Force timeout to prevent infinite loading (reduced to 10 seconds)
+    const hasRenderableData = () =>
+      trendProducts.length > 0 ||
+      recentPrices.length > 0 ||
+      nearbyCheapest.length > 0 ||
+      merchantShops.length > 0;
+
+    // Force timeout to prevent infinite loading, but keep UX tolerant on slow networks.
     const timeoutId = setTimeout(() => {
       console.warn('⚠️ Loading timeout - forcing completion');
       setIsLoading(false);
       setIsRefreshing(false);
       setPullDistance(0);
-      toast.error('Veriler yüklenirken zaman aşımı oluştu');
-    }, 10000); // 10 second timeout
+      // Do not show immediate scary toast here; a longer safety timer handles it.
+    }, 25000);
 
     try {
-      // Load trending products with individual timeout
-      const trendingPromise = productsAPI.getTrending().catch((err) => {
-        console.error('❌ Failed to load trending products:', err);
-        return [];
-      });
+      // Primary source: server-side feed (service-role) to avoid client-side RLS/join issues.
+      try {
+        const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string;
+        const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
+        let feedData: any = null;
+        let feedError: any = null;
+
+        if (supabaseUrl && supabaseAnonKey) {
+          try {
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), 10000);
+            const response = await fetch(`${supabaseUrl}/functions/v1/explore-feed`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                apikey: supabaseAnonKey,
+                Authorization: `Bearer ${supabaseAnonKey}`,
+              },
+              body: JSON.stringify({ limitRecent: 20, limitTrending: 12, limitShops: 20 }),
+              signal: controller.signal,
+            });
+            clearTimeout(timer);
+            const json = await response.json().catch(() => null);
+            if (response.ok && json?.ok) {
+              feedData = json;
+            } else {
+              feedError = json || new Error(`explore-feed http ${response.status}`);
+            }
+          } catch (directFetchError) {
+            feedError = directFetchError;
+          }
+        }
+
+        // Secondary: invoke client API only if direct call failed.
+        if (!feedData?.ok) {
+          const invokeRes = await Promise.race([
+            supabase.functions.invoke('explore-feed', {
+              body: { limitRecent: 20, limitTrending: 12, limitShops: 20 },
+            }),
+            new Promise<any>((_, reject) => setTimeout(() => reject(new Error('explore-feed invoke timeout')), 10000)),
+          ]) as any;
+          if (!invokeRes?.error && invokeRes?.data?.ok) {
+            feedData = invokeRes.data;
+            feedError = null;
+          } else {
+            feedError = invokeRes?.error || feedError;
+          }
+        }
+
+        if (!feedError && feedData?.ok) {
+          const recentFromFn = Array.isArray(feedData.recentPrices) ? feedData.recentPrices : [];
+          const trendFromFn = Array.isArray(feedData.trendProducts) ? feedData.trendProducts : [];
+          const shopsFromFn = Array.isArray(feedData.merchantShops) ? feedData.merchantShops : [];
+          let shopsToUse = shopsFromFn;
+
+          try {
+            const shopsFromApi = await Promise.race([
+              merchantProductsAPI.getAllMerchantShops(20),
+              new Promise<any[]>((_, reject) => setTimeout(() => reject(new Error('merchant-shops timeout')), 8000)),
+            ]);
+            if (Array.isArray(shopsFromApi)) {
+              // Prefer API shops because they are derived from merchant_products
+              // and guaranteed to have at least one product.
+              shopsToUse = shopsFromApi;
+            }
+          } catch (shopsErr) {
+            console.warn('⚠️ Merchant shops API fallback failed, using function shops:', shopsErr);
+          }
+
+          if (trendFromFn.length > 0) setTrendProducts(trendFromFn);
+          if (recentFromFn.length > 0) setRecentPrices(recentFromFn);
+          if (shopsToUse.length > 0) setMerchantShops(shopsToUse);
+          if (recentFromFn.length > 0) setNearbyCheapest(recentFromFn.slice(0, 8));
+
+          if (trendFromFn.length > 0 || recentFromFn.length > 0 || shopsToUse.length > 0) {
+            try {
+              localStorage.setItem(
+                exploreCacheKey,
+                JSON.stringify({
+                  trendProducts: trendFromFn,
+                  recentPrices: recentFromFn,
+                  nearbyCheapest: recentFromFn.slice(0, 8),
+                  merchantShops: shopsToUse,
+                  savedAt: new Date().toISOString(),
+                })
+              );
+            } catch (_) {}
+
+            if (isRefresh) toast.success('Yenilendi');
+            return;
+          }
+        }
+      } catch (feedPrimaryError) {
+        console.warn('⚠️ Primary explore-feed path failed, falling back to legacy loaders:', feedPrimaryError);
+      }
+
+      const enrichPricesWithProducts = async (rows: any[]) => {
+        const list = Array.isArray(rows) ? rows : [];
+        const missingProductRows = list.filter((row: any) => !row?.product && row?.product_id);
+        if (missingProductRows.length === 0) return list;
+
+        const productIds = Array.from(
+          new Set(
+            missingProductRows
+              .map((row: any) => row?.product_id)
+              .filter((id: any) => typeof id === 'string' && id.length > 0)
+          )
+        );
+        if (productIds.length === 0) return list;
+
+        const { data: productsByIdRows, error: productsByIdError } = await supabase
+          .from('products')
+          .select('id, name, category, image')
+          .in('id', productIds);
+
+        if (productsByIdError) {
+          console.error('❌ Failed to enrich prices with products:', productsByIdError);
+          return list;
+        }
+
+        const productsById = new Map((productsByIdRows || []).map((p: any) => [p.id, p]));
+        return list.map((row: any) => {
+          if (row?.product || !row?.product_id) return row;
+          const product = productsById.get(row.product_id);
+          return product ? { ...row, product } : row;
+        });
+      };
+
+      const withTimeout = async <T,>(promise: Promise<T>, label: string, ms: number = 12000): Promise<T> => {
+        return await Promise.race([
+          promise,
+          new Promise<T>((_, reject) =>
+            setTimeout(() => reject(new Error(`${label} timeout after ${ms}ms`)), ms)
+          ),
+        ]);
+      };
+
+      // Load with per-request timeout to avoid one hung call blocking the whole screen.
+      const trendingPromise = withTimeout(productsAPI.getTrending(), 'trending', 12000);
       
       // Get user's search radius preference (default: 15 km = 15000 meters)
       // Priority: preferences.searchRadius (newer) > search_radius (legacy) > default
@@ -268,50 +517,30 @@ export default function ExploreScreen() {
         hasUserLocation: !!(userLat && userLng)
       }));
       
-      // Load recent prices - with location filter if available, otherwise show all recent
-      const recentPromise = (userLat && userLng) 
-        ? pricesAPI.getAll({
-            sort: 'newest',
-            limit: 100, // Load more to filter by location
-            todayOnly: false, // Show all recent prices, not just today
-            lat: userLat,
-            lng: userLng,
-            radius: searchRadiusMeters,
-          }).catch((err) => {
-            console.error('❌ Failed to load recent prices:', err);
-            return [];
-          })
-        : pricesAPI.getAll({
-            sort: 'newest',
-            limit: 20, // Load recent prices even without location
-            todayOnly: false, // Show all recent prices, not just today
-          }).catch((err) => {
-            console.error('❌ Failed to load recent prices (no location):', err);
-            return [];
-          });
+      // Load recent prices globally. "Recent" should not disappear when location filters are strict.
+      const recentPromise = withTimeout(pricesAPI.getAll({
+        sort: 'newest',
+        limit: 20,
+        todayOnly: false,
+      }), 'recent-prices', 12000);
       
       // Load nearby cheapest - with location filter if available, otherwise show cheapest overall
       const nearbyPromise = (userLat && userLng)
-        ? searchAPI.getNearbyCheapest(userLat, userLng, searchRadiusMeters, 10).catch((err) => {
-            console.error('❌ Failed to load nearby prices:', err);
-            return [];
-          })
-        : pricesAPI.getAll({
-            sort: 'cheapest',
-            limit: 10, // Show cheapest prices even without location
-          }).catch((err) => {
-            console.error('❌ Failed to load cheapest prices (no location):', err);
-            return [];
-          });
+        ? withTimeout(searchAPI.getNearbyCheapest(userLat, userLng, searchRadiusMeters, 10), 'nearby-prices', 12000)
+        : withTimeout(
+            pricesAPI.getAll({
+              sort: 'cheapest',
+              limit: 10, // Show cheapest prices even without location
+            }),
+            'cheapest-prices',
+            12000
+          );
       
       // Load merchant shops
-      const merchantShopsPromise = merchantProductsAPI.getAllMerchantShops(20).catch((err) => {
-        console.error('❌ Failed to load merchant shops:', err);
-        return [];
-      });
+      const merchantShopsPromise = withTimeout(merchantProductsAPI.getAllMerchantShops(20), 'merchant-shops', 12000);
 
       // Wait for all promises (with individual error handling)
-      const [trending, recent, nearby, merchantShops] = await Promise.allSettled([
+      const [trending, recent, nearby, merchantShopsResult] = await Promise.allSettled([
         trendingPromise,
         recentPromise,
         nearbyPromise,
@@ -319,34 +548,84 @@ export default function ExploreScreen() {
       ]);
 
       // Process results
+      let nextTrendProducts = trendProducts;
+      let nextRecentPrices = recentPrices;
+      let nextNearbyCheapest = nearbyCheapest;
+      let nextMerchantShops = merchantShops;
+      const recentPricesData = recent.status === 'fulfilled' ? (recent.value || []) : [];
+
       if (trending.status === 'fulfilled') {
-        console.log('📦 Trending products loaded:', trending.value?.length || 0);
-        setTrendProducts(trending.value || []);
+        const trendingProducts = trending.value || [];
+        console.log('📦 Trending products loaded:', trendingProducts.length);
+
+        if (trendingProducts.length > 0) {
+          nextTrendProducts = trendingProducts;
+          setTrendProducts(trendingProducts);
+        } else {
+          // Fallback: derive products from recent prices when trending is empty.
+          let fallbackProducts = Array.from(
+            new Map(
+              recentPricesData
+                .map((price: any) => price?.product)
+                .filter((product: any) => product?.id)
+                .map((product: any) => [product.id, product])
+            ).values()
+          ).slice(0, 6) as Product[];
+
+          // If recent rows do not include expanded product objects, fetch by product_id.
+          if (fallbackProducts.length === 0) {
+            const productIds = Array.from(
+              new Set(
+                recentPricesData
+                  .map((price: any) => price?.product_id)
+                  .filter((id: any) => typeof id === 'string' && id.length > 0)
+              )
+            ).slice(0, 12);
+
+            if (productIds.length > 0) {
+              const { data: fallbackQueryProducts, error: fallbackQueryError } = await supabase
+                .from('products')
+                .select('id, name, category, image')
+                .in('id', productIds)
+                .limit(6);
+
+              if (fallbackQueryError) {
+                console.error('❌ Trending fallback product query failed:', fallbackQueryError);
+              } else {
+                fallbackProducts = (fallbackQueryProducts || []) as Product[];
+              }
+            }
+          }
+
+          console.log('📦 Trending fallback products loaded from recent prices:', fallbackProducts.length);
+          nextTrendProducts = fallbackProducts;
+          setTrendProducts(fallbackProducts);
+        }
       } else {
         console.error('❌ Trending products failed:', trending.reason);
-        setTrendProducts([]);
       }
 
       if (recent.status === 'fulfilled') {
-        const recentPricesData = recent.value || [];
-        console.log('📦 Recent prices loaded:', recentPricesData.length);
-        console.log('📦 Recent prices sample:', recentPricesData.slice(0, 3).map((p: any) => ({
+        const enrichedRecent = await enrichPricesWithProducts(recentPricesData);
+        console.log('📦 Recent prices loaded:', enrichedRecent.length);
+        console.log('📦 Recent prices sample:', enrichedRecent.slice(0, 3).map((p: any) => ({
           id: p.id,
           product: p.product?.name,
           price: p.price,
           location: p.location?.name,
         })));
-        setRecentPrices(recentPricesData);
+        nextRecentPrices = enrichedRecent;
+        setRecentPrices(enrichedRecent);
       } else {
         console.error('❌ Recent prices failed:', recent.reason);
-        setRecentPrices([]);
       }
 
       if (nearby.status === 'fulfilled') {
         const nearbyPricesData = nearby.value || [];
-        console.log('📦 Nearby prices loaded:', nearbyPricesData.length);
-        if (nearbyPricesData.length > 0) {
-          console.log('📦 Nearby prices sample:', nearbyPricesData.slice(0, 3).map((p: any) => ({
+        const enrichedNearby = await enrichPricesWithProducts(nearbyPricesData);
+        console.log('📦 Nearby prices loaded:', enrichedNearby.length);
+        if (enrichedNearby.length > 0) {
+          console.log('📦 Nearby prices sample:', enrichedNearby.slice(0, 3).map((p: any) => ({
             id: p.id,
             product: p.product?.name,
             price: p.price,
@@ -357,18 +636,116 @@ export default function ExploreScreen() {
         } else {
           console.log('⚠️ No nearby prices found - check location and radius settings');
         }
-        setNearbyCheapest(nearbyPricesData);
+        nextNearbyCheapest = enrichedNearby;
+        setNearbyCheapest(enrichedNearby);
       } else {
         console.error('❌ Nearby prices failed:', nearby.reason);
-        setNearbyCheapest([]);
       }
 
-      if (merchantShops.status === 'fulfilled') {
-        console.log('🏪 Merchant shops loaded:', merchantShops.value?.length || 0);
-        setMerchantShops(merchantShops.value || []);
+      if (merchantShopsResult.status === 'fulfilled') {
+        console.log('🏪 Merchant shops loaded:', merchantShopsResult.value?.length || 0);
+        nextMerchantShops = merchantShopsResult.value || [];
+        setMerchantShops(nextMerchantShops);
       } else {
-        console.error('❌ Merchant shops failed:', merchantShops.reason);
-        setMerchantShops([]);
+        console.error('❌ Merchant shops failed:', merchantShopsResult.reason);
+      }
+
+      // Final safety net: if network wrappers return empty/rejected, fetch minimal data directly.
+      if (nextRecentPrices.length === 0) {
+        const { data: fallbackRecentRows, error: fallbackRecentError } = await supabase
+          .from('prices')
+          .select(`
+            id,
+            price,
+            unit,
+            created_at,
+            is_verified,
+            photo,
+            coordinates,
+            product_id,
+            location_id,
+            product:products(id, name, category, image),
+            location:locations(id, name, type, city, district)
+          `)
+          .order('created_at', { ascending: false })
+          .limit(20);
+
+        if (fallbackRecentError) {
+          console.error('❌ Fallback recent prices query failed:', fallbackRecentError);
+        } else if (Array.isArray(fallbackRecentRows) && fallbackRecentRows.length > 0) {
+          const enrichedFallbackRecent = await enrichPricesWithProducts(fallbackRecentRows as any[]);
+          nextRecentPrices = enrichedFallbackRecent as Price[];
+          setRecentPrices(nextRecentPrices);
+          console.log('✅ Fallback recent prices loaded:', nextRecentPrices.length);
+        }
+      }
+
+      if (nextTrendProducts.length === 0 && nextRecentPrices.length > 0) {
+        const derivedProducts = Array.from(
+          new Map(
+            nextRecentPrices
+              .map((row: any) => row?.product)
+              .filter((p: any) => p?.id)
+              .map((p: any) => [p.id, p])
+          ).values()
+        ).slice(0, 8) as Product[];
+        if (derivedProducts.length > 0) {
+          nextTrendProducts = derivedProducts;
+          setTrendProducts(derivedProducts);
+          console.log('✅ Fallback trending derived from recent:', derivedProducts.length);
+        }
+      }
+
+      if (nextNearbyCheapest.length === 0 && nextRecentPrices.length > 0) {
+        nextNearbyCheapest = nextRecentPrices.slice(0, 8);
+        setNearbyCheapest(nextNearbyCheapest);
+      }
+
+      // Ultimate fallback via service-role edge function when client-side queries cannot read data.
+      if (nextRecentPrices.length === 0 && nextTrendProducts.length === 0) {
+        try {
+          const { data: feedData, error: feedError } = await supabase.functions.invoke('explore-feed', {
+            body: { limitRecent: 20, limitTrending: 12, limitShops: 20 },
+          });
+          if (!feedError && feedData?.ok) {
+            const recentFromFn = Array.isArray(feedData.recentPrices) ? feedData.recentPrices : [];
+            const trendFromFn = Array.isArray(feedData.trendProducts) ? feedData.trendProducts : [];
+            const shopsFromFn = Array.isArray(feedData.merchantShops) ? feedData.merchantShops : [];
+            if (recentFromFn.length > 0) {
+              nextRecentPrices = recentFromFn;
+              setRecentPrices(recentFromFn);
+            }
+            if (trendFromFn.length > 0) {
+              nextTrendProducts = trendFromFn;
+              setTrendProducts(trendFromFn);
+            }
+            if (shopsFromFn.length > 0) {
+              nextMerchantShops = shopsFromFn;
+              setMerchantShops(shopsFromFn);
+            }
+            if (nextNearbyCheapest.length === 0 && recentFromFn.length > 0) {
+              nextNearbyCheapest = recentFromFn.slice(0, 8);
+              setNearbyCheapest(nextNearbyCheapest);
+            }
+          }
+        } catch (fnErr) {
+          console.error('❌ explore-feed fallback failed:', fnErr);
+        }
+      }
+
+      try {
+        localStorage.setItem(
+          exploreCacheKey,
+          JSON.stringify({
+            trendProducts: nextTrendProducts,
+            recentPrices: nextRecentPrices,
+            nearbyCheapest: nextNearbyCheapest,
+            merchantShops: nextMerchantShops,
+            savedAt: new Date().toISOString(),
+          })
+        );
+      } catch (cacheErr) {
+        console.warn('Failed to persist explore cache:', cacheErr);
       }
 
       console.log('✅ Data loading completed');
@@ -384,12 +761,8 @@ export default function ExploreScreen() {
         name: error.name,
       });
       
-      // Set empty arrays to prevent infinite loading
-      setTrendProducts([]);
-      setRecentPrices([]);
-      setNearbyCheapest([]);
-      
-      toast.error(error.message || 'Veriler yüklenirken bir hata oluştu');
+      // Preserve previously rendered lists on transient failures.
+      toast.error(error.message || 'Veriler yuklenirken bir hata olustu');
     } finally {
       clearTimeout(timeoutId);
       console.log('🏁 Setting loading states to false');
@@ -397,7 +770,7 @@ export default function ExploreScreen() {
       setIsRefreshing(false);
       setPullDistance(0);
     }
-  }, [userLocation, user]);
+  }, [userLocation, user, exploreCacheKey]);
 
   // Reload data when user location or search radius changes
   useEffect(() => {
@@ -410,14 +783,16 @@ export default function ExploreScreen() {
   useEffect(() => {
     console.log('🔄 ExploreScreen mounted, loading data...');
     
-    // Safety timeout - force loading to false after 12 seconds
+    // Safety timeout - force loading to false on very slow networks.
     const safetyTimeout = setTimeout(() => {
       console.warn('⚠️ Safety timeout triggered - forcing loading to false');
       setIsLoading(false);
       setIsRefreshing(false);
       setPullDistance(0);
-      toast.error('Veriler yüklenirken zaman aşımı oluştu. Lütfen tekrar deneyin.');
-    }, 12000);
+      if (trendProducts.length === 0 && recentPrices.length === 0 && nearbyCheapest.length === 0 && merchantShops.length === 0) {
+        showSlowLoadingToast();
+      }
+    }, 45000);
     
     loadData().catch((error) => {
       console.error('❌ Load data failed in useEffect:', error);
@@ -457,7 +832,7 @@ export default function ExploreScreen() {
       clearTimeout(safetyTimeout);
       if (ro && headerRef.current) ro.disconnect();
     };
-  }, [loadData]);
+  }, [loadData, trendProducts.length, recentPrices.length, nearbyCheapest.length, merchantShops.length]);
 
   // Supabase Realtime subscription for price updates
   useEffect(() => {
@@ -800,8 +1175,18 @@ export default function ExploreScreen() {
     try {
       setIsSearching(true);
       const results = await searchAPI.search(query, 'all');
-      setSearchResults(results);
-      setSearchParams({ search: query });
+      const hasMatches =
+        (results?.products?.length || 0) > 0 ||
+        (results?.prices?.length || 0) > 0 ||
+        (results?.locations?.length || 0) > 0;
+      if (hasMatches) {
+        setSearchResults(results);
+        setSearchParams({ search: query });
+      } else {
+        // Do not trap the screen in an empty-search state; keep showing normal feed.
+        setSearchResults(null);
+        setSearchParams({});
+      }
     } catch (error: any) {
       console.error('Search error:', error);
       toast.error(error.message || 'Arama yapılırken bir hata oluştu');
@@ -917,9 +1302,14 @@ export default function ExploreScreen() {
             )}
             <button
               onClick={() => navigate('/app/notifications')}
-              className="p-2 hover:bg-white/20 rounded-full flex-shrink-0 transition-colors"
+              className="p-2 hover:bg-white/20 rounded-full flex-shrink-0 transition-colors relative"
             >
               <Bell className="w-5 h-5" />
+              {unreadNotificationCount > 0 && (
+                <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-red-600 text-white text-[10px] leading-[18px] text-center font-semibold">
+                  {unreadNotificationCount > 99 ? '99+' : unreadNotificationCount}
+                </span>
+              )}
             </button>
             <button
               onClick={() => setLang(lang === 'tr' ? 'en' : 'tr')}
@@ -1173,6 +1563,16 @@ export default function ExploreScreen() {
                     </h3>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                       {searchResults.prices.map((item) => (
+                        (() => {
+                          const productDisplayName =
+                            item.product?.name ||
+                            (item as any).product_name ||
+                            (item as any).productName ||
+                            (item as any).name ||
+                            'Urun';
+                          const productImage = item.product?.image;
+                          const previewImage = item.photo || productImage;
+                          return (
                         <div
                           key={item.id || item._id}
                           onClick={() => navigate(`/app/product/${item.product?.id || item.product?._id || ''}`)}
@@ -1180,30 +1580,32 @@ export default function ExploreScreen() {
                         >
                           <div className="flex gap-3 sm:gap-4">
                             <div className="relative w-14 h-14 sm:w-16 sm:h-16 rounded-lg bg-gray-100 flex items-center justify-center flex-shrink-0 overflow-hidden">
-                              {item.photo ? (
+                              {previewImage ? (
                                 <>
                                   <img 
-                                    src={item.photo} 
-                                    alt={`${item.product?.name || 'Ürün'} - Kullanıcı fotoğrafı`}
+                                    src={previewImage} 
+                                    alt={`${productDisplayName} - Gorsel`}
                                     className="w-full h-full object-cover"
-                                    title="Kullanıcı tarafından yüklenen fotoğraf"
+                                    title={item.photo ? 'Kullanici tarafindan yuklenen fotograf' : 'Urun gorseli'}
                                     onError={(e) => {
-                                      console.error('User photo failed to load:', item.photo);
+                                      console.error('Card image failed to load:', previewImage);
                                       (e.target as HTMLImageElement).style.display = 'none';
                                       (e.target as HTMLImageElement).nextElementSibling?.classList.remove('hidden');
                                     }}
                                   />
-                                  <div className="absolute top-1 right-1 bg-green-600 text-white text-[8px] sm:text-[10px] px-1 sm:px-1.5 py-0.5 rounded-full font-semibold shadow-md">
-                                    📷
-                                  </div>
+                                  {item.photo && (
+                                    <div className="absolute top-1 right-1 bg-green-600 text-white text-[8px] sm:text-[10px] px-1 sm:px-1.5 py-0.5 rounded-full font-semibold shadow-md">
+                                      📷
+                                    </div>
+                                  )}
                                 </>
                               ) : null}
-                              <Package className={`w-6 h-6 sm:w-8 sm:h-8 text-gray-400 ${item.photo ? 'hidden' : ''}`} />
+                              <Package className={`w-6 h-6 sm:w-8 sm:h-8 text-gray-400 ${previewImage ? 'hidden' : ''}`} />
                             </div>
                             <div className="flex-1 min-w-0">
                               <div className="flex justify-between items-start mb-1.5 sm:mb-2">
                                 <div className="flex-1 min-w-0">
-                                  <h3 className="text-base sm:text-lg text-gray-900 font-medium truncate">{item.product?.name || 'Bilinmeyen Ürün'}</h3>
+                                  <h3 className="text-base sm:text-lg text-gray-900 font-medium truncate">{productDisplayName}</h3>
                                   <p className="text-xl sm:text-2xl text-green-600 font-semibold mt-1">
                                     {formatPrice(item.price)} TL{' '}
                                     <span className="text-xs sm:text-sm text-gray-500 font-normal">/ {item.unit}</span>
@@ -1307,6 +1709,8 @@ export default function ExploreScreen() {
                             </div>
                           </div>
                         </div>
+                          );
+                        })()
                       ))}
                     </div>
                   </section>
@@ -1362,9 +1766,9 @@ export default function ExploreScreen() {
         )}
 
         {/* Normal Content (when not searching) */}
-        {!searchResults && (
+        {(!searchResults || (!isSearching && !hasSearchMatches)) && (
           <>
-            {isLoading ? (
+            {isLoading && !hasAnyData ? (
               <div className="text-center py-8 text-gray-500">{t('LOADING')}</div>
             ) : (
               <>
@@ -1373,10 +1777,13 @@ export default function ExploreScreen() {
               <section>
                 <h2 className="text-base sm:text-lg mb-2 sm:mb-3 text-gray-900 font-semibold">{t('STORES_TITLE')}</h2>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  {merchantShops.map((shop) => (
+                  {merchantShops.map((shop) => {
+                    const merchantId = shop?.id || shop?.merchant_id || shop?.merchant?.id;
+                    if (!merchantId) return null;
+                    return (
                     <div
-                      key={shop.id}
-                      onClick={() => navigate(`/app/merchant-shop/${shop.id}`)}
+                      key={merchantId}
+                      onClick={() => navigate(`/app/merchant-shop/${merchantId}`)}
                       className="bg-white rounded-lg p-4 border border-gray-200 hover:border-green-600 hover:shadow-md cursor-pointer transition-all"
                     >
                       <div className="flex items-center gap-3">
@@ -1395,22 +1802,76 @@ export default function ExploreScreen() {
                         </div>
                       </div>
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </section>
             )}
+
+            {/* Recent Prices - always visible even without location permission */}
+            <section>
+              <h2 className="text-base sm:text-lg mb-2 sm:mb-3 text-gray-900 font-semibold">Son Eklenen Fiyatlar</h2>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {recentPrices.length > 0 ? (
+                  recentPrices.slice(0, 8).map((item) => {
+                    if (!item) return null;
+                    const productName =
+                      item.product?.name ||
+                      (item as any).product_name ||
+                      (item as any).productName ||
+                      (item as any).name ||
+                      'Urun';
+                    return (
+                      <div
+                        key={item.id || item._id}
+                        onClick={() => navigate(`/app/product/${item.product?.id || item.product?._id || ''}`)}
+                        className="bg-white rounded-lg p-3 sm:p-4 border border-gray-200 hover:border-green-600 hover:shadow-md cursor-pointer transition-all"
+                      >
+                        <div className="flex justify-between items-start mb-1.5 sm:mb-2">
+                          <div className="flex-1 min-w-0">
+                            <h3 className="text-base sm:text-lg text-gray-900 font-medium truncate">{productName}</h3>
+                            <p className="text-xl sm:text-2xl text-green-600 font-semibold mt-1">
+                              {formatPrice(item.price)} TL{' '}
+                              <span className="text-xs sm:text-sm text-gray-500 font-normal">/ {item.unit}</span>
+                            </p>
+                          </div>
+                          {isToday(item.created_at || item.createdAt || '') && (
+                            <Badge className="bg-green-600 ml-2 flex-shrink-0 text-xs">BUGÜN</Badge>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-3 sm:gap-4 text-xs sm:text-sm text-gray-500">
+                          <span className="flex items-center gap-1 min-w-0 flex-1">
+                            <MapPin className="w-3 h-3 sm:w-4 sm:h-4 flex-shrink-0" />
+                            <span className="truncate">{item.location?.name || 'Konum bilgisi yok'}</span>
+                          </span>
+                          <span className="flex items-center gap-1 flex-shrink-0">
+                            <Clock className="w-3 h-3 sm:w-4 sm:h-4" />
+                            {formatTimeAgo(item.created_at || item.createdAt || '')}
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })
+                ) : (
+                  <p className="text-sm text-gray-500 col-span-full">Henuz fiyat verisi bulunamadi</p>
+                )}
+              </div>
+            </section>
 
             {/* Nearby Cheap - Only show if user location is available */}
             {userLocation && (
             <section>
               <h2 className="text-base sm:text-lg mb-2 sm:mb-3 text-gray-900 font-semibold">Sana Yakın En Ucuz</h2>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                {nearbyCheapest.length > 0 ? (
-                  nearbyCheapest.slice(0, 4).map((item) => {
-                    // Ensure item has required fields
-                    if (!item || !item.product) {
-                      return null;
-                    }
+                {(nearbyCheapest.length > 0 ? nearbyCheapest : recentPrices).length > 0 ? (
+                  (nearbyCheapest.length > 0 ? nearbyCheapest : recentPrices).slice(0, 4).map((item) => {
+                    if (!item) return null;
+                    const fallbackProductName =
+                      item.product?.name ||
+                      (item as any).product_name ||
+                      (item as any).productName ||
+                      (item as any).name ||
+                      'Urun';
                     return (
                       <div
                         key={item.id || item._id}
@@ -1422,7 +1883,7 @@ export default function ExploreScreen() {
                             {item.product?.image ? (
                               <img 
                                 src={item.product.image} 
-                                alt={item.product?.name || 'Ürün'}
+                                alt={fallbackProductName}
                                 className="w-full h-full object-cover"
                                 onError={(e) => {
                                   (e.target as HTMLImageElement).style.display = 'none';
@@ -1435,7 +1896,7 @@ export default function ExploreScreen() {
                           <div className="flex-1 min-w-0">
                             <div className="flex justify-between items-start mb-1.5 sm:mb-2">
                               <div className="flex-1 min-w-0">
-                                <h3 className="text-base sm:text-lg text-gray-900 font-medium truncate">{item.product?.name || 'Bilinmeyen Ürün'}</h3>
+                                <h3 className="text-base sm:text-lg text-gray-900 font-medium truncate">{fallbackProductName}</h3>
                                 <p className="text-xl sm:text-2xl text-green-600 font-semibold mt-1">
                                   {formatPrice(item.price)} TL{' '}
                                   <span className="text-xs sm:text-sm text-gray-500 font-normal">/ {item.unit}</span>

@@ -23,12 +23,19 @@ Deno.serve(async (req) => {
 
     const userId = authData.user.id;
 
-    // Remove non-confirmed old records and keep a clean history.
+    // Conservative cleanup to avoid deleting in-flight payments:
+    // - pending only if older than 24 hours
+    // - failed/canceled/refunded only if older than 30 days
     const { data: deletedRows, error: deleteError } = await service
       .from('merchant_subscription_payments')
       .delete()
       .eq('user_id', userId)
-      .neq('status', 'confirmed')
+      .or(
+        [
+          `and(status.eq.pending,created_at.lt.${new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()})`,
+          `and(status.in.(failed,canceled,refunded),created_at.lt.${new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()})`,
+        ].join(','),
+      )
       .select('id');
 
     if (deleteError) return jsonResponse(200, { error: deleteError.message });

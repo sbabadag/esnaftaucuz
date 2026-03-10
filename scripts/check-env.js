@@ -59,6 +59,13 @@ const requiredVars = {
 
 const optionalVars = {
   VITE_API_URL: 'Backend API URL (optional if using Supabase only)',
+  VITE_FIREBASE_API_KEY: 'Firebase Web API key (required for browser push notifications)',
+  VITE_FIREBASE_AUTH_DOMAIN: 'Firebase Auth domain for web push setup',
+  VITE_FIREBASE_PROJECT_ID: 'Firebase project id for web push setup',
+  VITE_FIREBASE_STORAGE_BUCKET: 'Firebase storage bucket for web push setup',
+  VITE_FIREBASE_MESSAGING_SENDER_ID: 'Firebase messaging sender id for web push setup',
+  VITE_FIREBASE_APP_ID: 'Firebase app id for web push setup',
+  VITE_FIREBASE_WEB_PUSH_VAPID_KEY: 'Firebase Web Push VAPID key',
 };
 
 console.log('🔍 Checking environment variables...\n');

@@ -10,57 +10,69 @@ import NotificationsScreen from './NotificationsScreen';
 import SettingsScreen from './SettingsScreen';
 import ContributionsScreen from './ContributionsScreen';
 import MerchantShopScreen from './MerchantShopScreen';
-import PrivacyPolicyScreen from './PrivacyPolicyScreen';
-import TermsOfServiceScreen from './TermsOfServiceScreen';
-import AboutScreen from './AboutScreen';
-import FavoritesScreen from './FavoritesScreen';
-import FeedbackScreen from './FeedbackScreen';
-import MerchantSubscriptionScreen from './MerchantSubscriptionScreen';
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
-import { useLanguage } from '../../contexts/LanguageContext';
 import { supabase } from '../../lib/supabase';
-import { favoritesAPI, notificationsAPI, pushTokensAPI } from '../../services/supabase-api';
-import { FirebaseMessaging } from '@capacitor-firebase/messaging';
-import { Capacitor } from '@capacitor/core';
-import { toast } from 'sonner';
 
-// Regular user tabs (labelKey will be translated via LanguageContext)
-  const regularTabs = [
-  { path: 'explore', labelKey: 'EXPLORE', icon: Compass },
-  { path: 'map', labelKey: 'MAP', icon: Map },
-  { path: 'add', labelKey: 'ADD', icon: Plus },
-  { path: 'profile', labelKey: 'PROFILE', icon: User },
+// Regular user tabs
+const regularTabs = [
+  { path: 'explore', label: 'Keşfet', icon: Compass },
+  { path: 'map', label: 'Harita', icon: Map },
+  { path: 'add', label: 'Ekle', icon: Plus },
+  { path: 'profile', label: 'Profil', icon: User },
 ];
 
-// Merchant tabs - esnaf sadece ürün sayfasından ürün ekleyebilir, + tuşu yok
+// Merchant tabs - include both "Dükkanım" and "Profil"
 const merchantTabs = [
-  { path: 'explore', labelKey: 'TREND_TITLE', icon: Compass },
-  { path: 'map', labelKey: 'MAP', icon: Map },
-  { path: 'merchant-shop', labelKey: 'MY_SHOP', icon: Store },
-  { path: 'profile', labelKey: 'PROFILE', icon: User },
+  { path: 'explore', label: 'Keşfet', icon: Compass },
+  { path: 'map', label: 'Harita', icon: Map },
+  { path: 'add', label: 'Ekle', icon: Plus },
+  { path: 'merchant-shop', label: 'Dükkanım', icon: Store },
+  { path: 'profile', label: 'Profil', icon: User },
 ];
 
 export default function MainApp() {
   const location = useLocation();
   const navigate = useNavigate();
   const { user } = useAuth();
-  const { isLoading } = useAuth();
   const [bannerVisible, setBannerVisible] = useState(true);
-  const [favoriteProductIds, setFavoriteProductIds] = useState<string[]>([]);
-  const shownNotificationIdsRef = useRef<Set<string>>(new Set());
-  const processedFavoritePriceEventsRef = useRef<Set<string>>(new Set());
-  const knownNotificationIdsRef = useRef<Set<string>>(new Set());
-  const notificationsPollingBootstrappedRef = useRef(false);
+  const [resolvedMerchantRole, setResolvedMerchantRole] = useState<boolean | null>(null);
   
-  // Merchant status is derived directly from the authoritative `user` object
-  // so the UI updates immediately after login.
-  const isMerchant = (user as any)?.is_merchant === true;
+  useEffect(() => {
+    let cancelled = false;
+    const resolveRole = async () => {
+      if (!user?.id) {
+        setResolvedMerchantRole(null);
+        return;
+      }
+
+      // Start with auth context value immediately.
+      setResolvedMerchantRole((user as any)?.is_merchant === true);
+      try {
+        const { data, error } = await supabase
+          .from('users')
+          .select('is_merchant, merchant_subscription_status')
+          .eq('id', user.id)
+          .maybeSingle();
+        if (cancelled || error || !data) return;
+        const status = String((data as any)?.merchant_subscription_status || '').toLowerCase();
+        setResolvedMerchantRole((data as any)?.is_merchant === true || status === 'active' || status === 'past_due');
+      } catch {
+        // Keep fallback value from context.
+      }
+    };
+
+    resolveRole();
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.id, (user as any)?.is_merchant]);
+
+  const isMerchant = resolvedMerchantRole ?? ((user as any)?.is_merchant === true);
   const themeColor = isMerchant ? 'blue' : 'green';
   const themeColorClass = isMerchant ? 'blue-600' : 'green-600';
   const themeGradientFrom = isMerchant ? 'from-blue-600' : 'from-green-600';
   const themeGradientTo = isMerchant ? 'to-blue-500' : 'to-emerald-600';
-  const bannerGradient = isMerchant ? 'bg-gradient-to-r from-blue-600 via-blue-500 to-blue-600' : `bg-gradient-to-r ${themeGradientFrom} ${themeGradientTo}`;
   
   // Check if banner was previously dismissed
   useEffect(() => {
@@ -84,11 +96,14 @@ export default function MainApp() {
   const pathParts = location.pathname.split('/').filter(Boolean);
   const currentPath = pathParts[pathParts.length - 1] || 'explore';
 
-  // Language
-  const { t } = useLanguage();
-
   // Get tabs based on user type
   const tabs = isMerchant ? merchantTabs : regularTabs;
+
+  useEffect(() => {
+    if (isMerchant && location.pathname.includes('/app/add')) {
+      navigate('/app/explore', { replace: true });
+    }
+  }, [isMerchant, location.pathname, navigate]);
   
   // Debug: Log tabs
   useEffect(() => {
@@ -99,336 +114,15 @@ export default function MainApp() {
       user_is_merchant: (user as any)?.is_merchant,
     });
   }, [isMerchant, tabs, user]);
-
-  // Realtime notifications: show instant toast when a new notification arrives.
-  useEffect(() => {
-    if (!user?.id) return;
-
-    const channel = supabase
-      .channel(`user-notifications-${user.id}`)
-      .on(
-        'postgres_changes',
-        {
-          event: 'INSERT',
-          schema: 'public',
-          table: 'notifications',
-          filter: `user_id=eq.${user.id}`,
-        },
-        (payload) => {
-          const inserted = payload.new as any;
-          if (!inserted?.id) return;
-
-          // Avoid duplicate toasts when channel reconnects.
-          if (shownNotificationIdsRef.current.has(inserted.id)) return;
-          shownNotificationIdsRef.current.add(inserted.id);
-
-          toast.success(inserted.title || 'Yeni bildirim', {
-            description: inserted.message || 'Detaylari gormek icin bildirimler sayfasini ac.',
-            duration: 5000,
-          });
-        }
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, [user?.id]);
-
-  // Register native push token (required for remote notifications while app is closed).
-  useEffect(() => {
-    if (!user?.id) return;
-    if (!Capacitor.isNativePlatform()) return;
-
-    const platform = Capacitor.getPlatform() as 'ios' | 'android' | 'web';
-    if (platform !== 'ios' && platform !== 'android') return;
-
-    let isMounted = true;
-    let tokenReceivedHandle: any = null;
-    let notificationReceivedHandle: any = null;
-
-    const setupPush = async () => {
-      try {
-        const permission = await FirebaseMessaging.requestPermissions();
-        if (permission.receive !== 'granted') {
-          console.warn('⚠️ Push notification permission not granted');
-          return;
-        }
-
-        tokenReceivedHandle = await FirebaseMessaging.addListener('tokenReceived', async (event) => {
-          if (!isMounted) return;
-          if (!event?.token) return;
-          await pushTokensAPI.upsert(user.id, event.token, platform);
-          console.log('✅ Push token registered for remote notifications');
-        });
-
-        const tokenResult = await FirebaseMessaging.getToken();
-        if (tokenResult?.token) {
-          await pushTokensAPI.upsert(user.id, tokenResult.token, platform);
-          console.log('✅ Push token fetched and registered for remote notifications');
-        }
-
-        // Keep existing token fresh in case app resumes with refreshed credentials.
-        notificationReceivedHandle = await FirebaseMessaging.addListener('notificationReceived', async () => {
-          const refreshed = await FirebaseMessaging.getToken();
-          if (refreshed?.token) {
-            await pushTokensAPI.upsert(user.id, refreshed.token, platform);
-          }
-        });
-      } catch (error) {
-        console.error('❌ Push setup failed:', error);
-      }
-    };
-
-    setupPush();
-
-    return () => {
-      isMounted = false;
-      if (tokenReceivedHandle?.remove) tokenReceivedHandle.remove();
-      if (notificationReceivedHandle?.remove) notificationReceivedHandle.remove();
-    };
-  }, [user?.id]);
-
-  // iOS/Safari can occasionally miss realtime events; poll notifications as fallback.
-  useEffect(() => {
-    if (!user?.id) {
-      knownNotificationIdsRef.current.clear();
-      notificationsPollingBootstrappedRef.current = false;
-      return;
-    }
-
-    let isActive = true;
-
-    const syncNotifications = async (allowToast: boolean) => {
-      try {
-        const rows = await notificationsAPI.getByUser(user.id, 20);
-        if (!isActive) return;
-
-        const latest = Array.isArray(rows) ? rows : [];
-        const latestIds = new Set<string>();
-        latest.forEach((item: any) => {
-          if (item?.id) latestIds.add(item.id);
-        });
-
-        if (!notificationsPollingBootstrappedRef.current) {
-          knownNotificationIdsRef.current = latestIds;
-          notificationsPollingBootstrappedRef.current = true;
-          return;
-        }
-
-        if (allowToast) {
-          latest.forEach((item: any) => {
-            if (!item?.id) return;
-            if (knownNotificationIdsRef.current.has(item.id)) return;
-            if (shownNotificationIdsRef.current.has(item.id)) return;
-
-            shownNotificationIdsRef.current.add(item.id);
-            toast.success(item.title || 'Yeni bildirim', {
-              description: item.message || 'Detaylari gormek icin bildirimler sayfasini ac.',
-              duration: 5000,
-            });
-          });
-        }
-
-        knownNotificationIdsRef.current = latestIds;
-      } catch (error) {
-        console.error('Notification polling fallback failed:', error);
-      }
-    };
-
-    // Prime without toasts so existing notifications do not spam.
-    syncNotifications(false);
-
-    const intervalId = setInterval(() => {
-      syncNotifications(true);
-    }, 10000);
-
-    const onVisibilityChange = () => {
-      if (document.visibilityState === 'visible') {
-        syncNotifications(true);
-      }
-    };
-
-    document.addEventListener('visibilitychange', onVisibilityChange);
-
-    return () => {
-      isActive = false;
-      clearInterval(intervalId);
-      document.removeEventListener('visibilitychange', onVisibilityChange);
-    };
-  }, [user?.id]);
-
-  // Keep favorite product IDs in sync so we can watch price drops in real-time.
-  useEffect(() => {
-    if (!user?.id) {
-      setFavoriteProductIds([]);
-      return;
-    }
-
-    const loadFavorites = async () => {
-      try {
-        const favorites = await favoritesAPI.getByUser(user.id);
-        const ids = Array.from(
-          new Set(
-            (favorites || [])
-              .map((fav: any) => fav?.product_id)
-              .filter((id: any) => typeof id === 'string' && id.length > 0)
-          )
-        );
-        setFavoriteProductIds(ids);
-      } catch (error) {
-        console.error('Failed to load favorites for realtime price tracking:', error);
-      }
-    };
-
-    loadFavorites();
-
-    const favoritesChannel = supabase
-      .channel(`favorites-sync-${user.id}`)
-      .on(
-        'postgres_changes',
-        {
-          event: 'INSERT',
-          schema: 'public',
-          table: 'user_favorites',
-          filter: `user_id=eq.${user.id}`,
-        },
-        (payload) => {
-          const productId = (payload.new as any)?.product_id;
-          if (!productId) return;
-          setFavoriteProductIds((prev) => (prev.includes(productId) ? prev : [...prev, productId]));
-        }
-      )
-      .on(
-        'postgres_changes',
-        {
-          event: 'DELETE',
-          schema: 'public',
-          table: 'user_favorites',
-          filter: `user_id=eq.${user.id}`,
-        },
-        (payload) => {
-          const productId = (payload.old as any)?.product_id;
-          if (!productId) return;
-          setFavoriteProductIds((prev) => prev.filter((id) => id !== productId));
-        }
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(favoritesChannel);
-    };
-  }, [user?.id]);
-
-  // Fallback realtime price-drop notifier for favorited products.
-  // This ensures notifications stay live even if DB trigger rollout lags.
-  useEffect(() => {
-    if (!user?.id || favoriteProductIds.length === 0) return;
-
-    const onPriceChangeForFavorite = async (payload: any) => {
-      const row = payload?.new as any;
-      if (!row?.id || !row?.product_id) return;
-      if (row.is_active !== true) return;
-      if (row.user_id === user.id) return;
-
-      const eventKey = `${payload.eventType}:${row.id}:${row.updated_at || row.created_at || row.price}`;
-      if (processedFavoritePriceEventsRef.current.has(eventKey)) return;
-      processedFavoritePriceEventsRef.current.add(eventKey);
-
-      try {
-        // Compare with previous minimum active price for the same product.
-        const { data: prevMinRow, error: prevMinError } = await supabase
-          .from('prices')
-          .select('price')
-          .eq('product_id', row.product_id)
-          .eq('is_active', true)
-          .neq('id', row.id)
-          .order('price', { ascending: true })
-          .limit(1)
-          .maybeSingle();
-
-        if (prevMinError || !prevMinRow?.price) return;
-        if (Number(row.price) >= Number(prevMinRow.price)) return;
-
-        // Avoid duplicate inserts when server-side trigger already created this.
-        const { data: existing } = await supabase
-          .from('notifications')
-          .select('id')
-          .eq('user_id', user.id)
-          .eq('type', 'price_drop')
-          .eq('price_id', row.id)
-          .maybeSingle();
-
-        if (existing?.id) return;
-
-        const { data: product } = await supabase
-          .from('products')
-          .select('name')
-          .eq('id', row.product_id)
-          .maybeSingle();
-
-        await supabase.from('notifications').insert({
-          user_id: user.id,
-          type: 'price_drop',
-          title: 'Fiyat Dustu! 🎉',
-          message: `${product?.name || 'Urun'} icin yeni dusuk fiyat: ${row.price} TL (onceki en dusuk: ${prevMinRow.price} TL)`,
-          product_id: row.product_id,
-          price_id: row.id,
-        });
-      } catch (error) {
-        console.error('Realtime favorite price-drop notification fallback failed:', error);
-      }
-    };
-
-    const priceChannel = supabase.channel(`favorite-price-watch-${user.id}`);
-
-    favoriteProductIds.forEach((productId) => {
-      priceChannel.on(
-        'postgres_changes',
-        {
-          event: 'INSERT',
-          schema: 'public',
-          table: 'prices',
-          filter: `product_id=eq.${productId}`,
-        },
-        onPriceChangeForFavorite
-      );
-      priceChannel.on(
-        'postgres_changes',
-        {
-          event: 'UPDATE',
-          schema: 'public',
-          table: 'prices',
-          filter: `product_id=eq.${productId}`,
-        },
-        onPriceChangeForFavorite
-      );
-    });
-
-    priceChannel.subscribe();
-
-    return () => {
-      supabase.removeChannel(priceChannel);
-    };
-  }, [user?.id, favoriteProductIds]);
   
-  // Hide tab bar on detail and modal-like screens.
-  const hideTabBar = (
-    location.pathname.includes('/product/') ||
-    location.pathname.includes('/location/') ||
-    location.pathname.includes('/notifications') ||
-    location.pathname.includes('/settings') ||
-    location.pathname.includes('/merchant-subscription') ||
-    location.pathname.includes('/contributions') ||
-    location.pathname.includes('/privacy-policy') ||
-    location.pathname.includes('/terms-of-service') ||
-    location.pathname.includes('/about') ||
-    location.pathname.includes('/favorites') ||
-    // Add page is only available to regular users; hide tab bar when explicitly on add route.
-    (!isMerchant && location.pathname.includes('/add')) ||
-    // If merchant is viewing another merchant's shop (not their own), hide tabs to avoid confusion.
-    (isMerchant && location.pathname.startsWith('/app/merchant-shop/') && !location.pathname.startsWith(`/app/merchant-shop/${user?.id}`))
-  );
+  // Hide tab bar on detail screens and add price screen
+  const hideTabBar = location.pathname.includes('/product/') || 
+                     location.pathname.includes('/location/') ||
+                     location.pathname.includes('/notifications') ||
+                     location.pathname.includes('/settings') ||
+                     location.pathname.includes('/contributions') ||
+                     location.pathname.includes('/add') ||
+                     (isMerchant && location.pathname.includes('/merchant-shop/') && location.pathname !== `/app/merchant-shop/${user?.id}`);
 
   const handleTabClick = (path: string) => {
     console.log('🔘 Tab click handler:', { path, currentPath: location.pathname });
@@ -442,29 +136,33 @@ export default function MainApp() {
     }
   };
   
-  // Check if merchant-shop tab is active (match exact owner shop path)
-  const isMerchantShopActive = isMerchant && location.pathname.startsWith(`/app/merchant-shop/${user?.id}`);
+  // Check if merchant-shop tab is active
+  const isMerchantShopActive = isMerchant && location.pathname.includes('/merchant-shop/') && location.pathname === `/app/merchant-shop/${user?.id}`;
 
   return (
     <div className="min-h-screen bg-gray-50 pb-safe">
-
-      {/* Top-right username (small) */}
-      {user?.name && (
-        <div
-          className="fixed right-4 z-60"
-          style={{ top: 'calc(env(safe-area-inset-top, 0px) + 8px)' }}
-          title={user.name}
-        >
-          <span
-            className="text-xs font-medium max-w-[160px] block truncate px-2 py-0.5 rounded"
-            style={{
-              color: '#ffffff',
-              background: 'rgba(0,0,0,0.18)',
-              backdropFilter: 'blur(4px)',
+      {/* App Banner */}
+      {bannerVisible && (
+        <div className={`bg-gradient-to-r ${themeGradientFrom} ${themeGradientTo} text-white px-4 py-3 flex items-center justify-between shadow-md z-30 relative`}>
+          <div className="flex items-center gap-3 flex-1">
+            <div className="bg-white/20 rounded-full p-2">
+              <ShoppingBag className="w-5 h-5" />
+            </div>
+            <div className="flex-1">
+              <h2 className="font-bold text-sm">esnaftaucuz</h2>
+              <p className="text-xs text-white/90">Bugün en ucuzu nerede, tek bakışta</p>
+            </div>
+          </div>
+          <button
+            onClick={() => {
+              setBannerVisible(false);
+              localStorage.setItem('appBannerDismissed', 'true');
             }}
+            className="p-1 hover:bg-white/20 rounded-full transition-colors"
+            aria-label="Banner'ı kapat"
           >
-            {String(user.name).split(' ')[0]}
-          </span>
+            <X className="w-4 h-4" />
+          </button>
         </div>
       )}
 
@@ -479,18 +177,12 @@ export default function MainApp() {
           <Route path="location/:id" element={<LocationDetailScreen />} />
           <Route path="notifications" element={<NotificationsScreen />} />
           <Route path="settings" element={<SettingsScreen />} />
-          <Route path="feedback" element={<FeedbackScreen />} />
           <Route path="contributions" element={<ContributionsScreen />} />
           <Route path="merchant-shop/:merchantId" element={<MerchantShopScreen />} />
-          <Route path="merchant-subscription" element={<MerchantSubscriptionScreen />} />
-          <Route path="privacy-policy" element={<PrivacyPolicyScreen />} />
-          <Route path="terms-of-service" element={<TermsOfServiceScreen />} />
-          <Route path="about" element={<AboutScreen />} />
-          <Route path="favorites" element={<FavoritesScreen />} />
         </Routes>
       </main>
 
-  {!hideTabBar && !isLoading && (
+      {!hideTabBar && (
         <nav className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 safe-area-inset-bottom z-40 shadow-lg">
           <div className="flex items-center h-16">
             {tabs.map((tab, index) => {
@@ -522,7 +214,7 @@ export default function MainApp() {
                 >
                   <div className="flex flex-col items-center justify-center gap-0.5">
                     <Icon className={`w-5 h-5 flex-shrink-0 ${tab.path === 'add' && (isMerchant ? 'bg-blue-600' : 'bg-green-600')} ${tab.path === 'add' && 'text-white rounded-full p-1 w-8 h-8'}`} />
-                    <span className="text-[10px] leading-tight font-medium whitespace-nowrap">{t(tab.labelKey || tab.label || '')}</span>
+                    <span className="text-[10px] leading-tight font-medium whitespace-nowrap">{tab.label}</span>
                   </div>
                   {isActive && (
                     <div className={`absolute top-0 left-0 right-0 h-0.5 ${isMerchant ? 'bg-blue-600' : 'bg-green-600'}`} />

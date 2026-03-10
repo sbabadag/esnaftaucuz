@@ -35,7 +35,10 @@ function AppRoutes() {
   const { user, isLoading } = useAuth(); // useAuth handles live-reload cases internally
   const location = useLocation();
   const navigate = useNavigate();
-  const [hasSeenOnboarding, setHasSeenOnboarding] = useState(false);
+  const [hasSeenOnboarding, setHasSeenOnboarding] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    return localStorage.getItem('hasSeenOnboarding') === 'true';
+  });
   const [showLoggedInLaunchIntro, setShowLoggedInLaunchIntro] = useState(false);
   const [loggedInIntroShown, setLoggedInIntroShown] = useState(false);
   const checkoutParams = new URLSearchParams(location.search);
@@ -53,6 +56,12 @@ function AppRoutes() {
 
     return () => clearTimeout(timer);
   }, [user, isLoading, loggedInIntroShown]);
+
+  useEffect(() => {
+    if (user) return;
+    setShowLoggedInLaunchIntro(false);
+    setLoggedInIntroShown(false);
+  }, [user]);
 
   // Handle OAuth callback redirect - if user is logged in and on root, redirect to explore
   useEffect(() => {
@@ -79,6 +88,11 @@ function AppRoutes() {
         console.log('✅ User logged in, redirecting to /app/explore');
         navigate('/app/explore', { replace: true });
       }
+      return;
+    }
+
+    if (!user && !isLoading && location.pathname.startsWith('/app')) {
+      navigate('/login', { replace: true });
     }
   }, [user, isLoading, location.pathname, location.search, hasCheckoutRedirect, navigate]);
 
@@ -112,7 +126,7 @@ function AppRoutes() {
     
     return (
       <Routes>
-        <Route path="/app/*" element={<MainApp />} />
+        <Route path="/app/*" element={<MainApp key={`${user.id}:${(user as any)?.is_merchant ? 'merchant' : 'normal'}`} />} />
         <Route path="*" element={<Navigate to="/app/explore" replace />} />
       </Routes>
     );
@@ -136,19 +150,26 @@ function AppRoutes() {
     return <SplashScreen autoNavigateToOnboarding={false} />;
   }
 
+  const handleOnboardingComplete = () => {
+    setHasSeenOnboarding(true);
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('hasSeenOnboarding', 'true');
+    }
+  };
+
   // If not authenticated, show auth flow
   return (
     <Routes>
-      <Route path="/" element={<SplashScreen />} />
+      <Route path="/" element={<Navigate to={hasSeenOnboarding ? "/login" : "/onboarding"} replace />} />
       <Route 
         path="/onboarding" 
-        element={<OnboardingScreen onComplete={() => setHasSeenOnboarding(true)} />} 
+        element={hasSeenOnboarding ? <Navigate to="/login" replace /> : <OnboardingScreen onComplete={handleOnboardingComplete} />} 
       />
       <Route 
         path="/login" 
         element={<LoginScreen onLogin={() => {}} />} 
       />
-      <Route path="/app/*" element={<ProtectedRoute><MainApp /></ProtectedRoute>} />
+      <Route path="/app/*" element={<ProtectedRoute><MainApp key={user?.id || 'anon'} /></ProtectedRoute>} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );
@@ -199,11 +220,15 @@ function App() {
     // Check current URL for OAuth callback (handles case where we're already on callback page)
     const checkCurrentUrlForOAuth = () => {
       const currentUrl = window.location.href;
-      console.log('🔍 Checking current URL for OAuth callback:', currentUrl);
+      const hasOAuthHint =
+        currentUrl.includes('supabase.co/auth/v1/callback') ||
+        currentUrl.includes('code=') ||
+        currentUrl.includes('access_token=') ||
+        currentUrl.includes('error=');
       
       // Check if we're on a Supabase callback page
       if (currentUrl.includes('supabase.co/auth/v1/callback')) {
-        console.log('🔍 Detected Supabase callback page');
+        console.log('🔍 Detected Supabase callback page:', currentUrl);
         
         // Try to extract OAuth parameters from current URL
         try {
@@ -242,7 +267,7 @@ function App() {
         }
       }
       
-      return false;
+      return hasOAuthHint;
     };
     
     // Check immediately on mount (in case we're already on callback page)
@@ -345,12 +370,18 @@ function App() {
         }
       });
       
-      // Also check periodically (in case app state change doesn't fire)
+      // Also check periodically for a short window (in case app state change doesn't fire).
+      // Keeping this forever creates unnecessary JS work on native screens.
+      let intervalChecks = 0;
       const intervalId = setInterval(() => {
+        intervalChecks += 1;
         if (document.visibilityState === 'visible') {
-          checkCurrentUrlForOAuth();
+          const relevant = checkCurrentUrlForOAuth();
+          if (!relevant || intervalChecks >= 6) {
+            clearInterval(intervalId);
+          }
         }
-      }, 1000); // Check every second
+      }, 5000);
       
       return () => {
         listener.remove();

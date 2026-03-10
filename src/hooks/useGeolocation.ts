@@ -42,7 +42,7 @@ export const useGeolocation = () => {
         };
       } else {
         // Use HTML5 Geolocation API on web
-        return new Promise((resolve, reject) => {
+        const webPosition = await new Promise<Position>((resolve, reject) => {
           if (!navigator.geolocation) {
             reject(new Error('Geolocation is not supported'));
             return;
@@ -97,6 +97,8 @@ export const useGeolocation = () => {
             }
           );
         });
+
+        return webPosition;
       }
     } catch (error) {
       console.error('Geolocation error:', error);
