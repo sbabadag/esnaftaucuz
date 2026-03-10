@@ -54,6 +54,25 @@ workflows:
       - name: Sync Capacitor iOS
         script: |
           npx cap sync ios
+      - name: Set iOS privacy usage descriptions
+        script: |
+          PLIST_PATH="ios/App/App/Info.plist"
+          if [ ! -f "$PLIST_PATH" ]; then
+            echo "Info.plist not found at $PLIST_PATH"
+            exit 1
+          fi
+
+          set_or_add_plist_string() {
+            local key="$1"
+            local value="$2"
+            /usr/libexec/PlistBuddy -c "Set :$key '$value'" "$PLIST_PATH" 2>/dev/null || \
+            /usr/libexec/PlistBuddy -c "Add :$key string '$value'" "$PLIST_PATH"
+          }
+
+          set_or_add_plist_string "NSCameraUsageDescription" "esnaftaucuz needs camera access to take product and price photos."
+          set_or_add_plist_string "NSPhotoLibraryUsageDescription" "esnaftaucuz needs photo library access so you can select product images."
+          set_or_add_plist_string "NSPhotoLibraryAddUsageDescription" "esnaftaucuz needs photo library write access to save captured images when requested."
+          set_or_add_plist_string "NSLocationWhenInUseUsageDescription" "esnaftaucuz needs your location while using the app to show nearby prices."
       - name: Install CocoaPods
         script: |
           cd ios/App
