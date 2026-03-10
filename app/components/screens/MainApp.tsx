@@ -20,6 +20,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
 import { useLanguage } from '../../contexts/LanguageContext';
 import { supabase } from '../../lib/supabase';
+import { favoritesAPI } from '../../services/supabase-api';
 import { toast } from 'sonner';
 
 // Regular user tabs (labelKey will be translated via LanguageContext)
@@ -44,7 +45,9 @@ export default function MainApp() {
   const { user } = useAuth();
   const { isLoading } = useAuth();
   const [bannerVisible, setBannerVisible] = useState(true);
+  const [favoriteProductIds, setFavoriteProductIds] = useState<string[]>([]);
   const shownNotificationIdsRef = useRef<Set<string>>(new Set());
+  const processedFavoritePriceEventsRef = useRef<Set<string>>(new Set());
   
   // Merchant status is derived directly from the authoritative `user` object
   // so the UI updates immediately after login.
@@ -127,6 +130,160 @@ export default function MainApp() {
       supabase.removeChannel(channel);
     };
   }, [user?.id]);
+
+  // Keep favorite product IDs in sync so we can watch price drops in real-time.
+  useEffect(() => {
+    if (!user?.id) {
+      setFavoriteProductIds([]);
+      return;
+    }
+
+    const loadFavorites = async () => {
+      try {
+        const favorites = await favoritesAPI.getByUser(user.id);
+        const ids = Array.from(
+          new Set(
+            (favorites || [])
+              .map((fav: any) => fav?.product_id)
+              .filter((id: any) => typeof id === 'string' && id.length > 0)
+          )
+        );
+        setFavoriteProductIds(ids);
+      } catch (error) {
+        console.error('Failed to load favorites for realtime price tracking:', error);
+      }
+    };
+
+    loadFavorites();
+
+    const favoritesChannel = supabase
+      .channel(`favorites-sync-${user.id}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'user_favorites',
+          filter: `user_id=eq.${user.id}`,
+        },
+        (payload) => {
+          const productId = (payload.new as any)?.product_id;
+          if (!productId) return;
+          setFavoriteProductIds((prev) => (prev.includes(productId) ? prev : [...prev, productId]));
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: 'DELETE',
+          schema: 'public',
+          table: 'user_favorites',
+          filter: `user_id=eq.${user.id}`,
+        },
+        (payload) => {
+          const productId = (payload.old as any)?.product_id;
+          if (!productId) return;
+          setFavoriteProductIds((prev) => prev.filter((id) => id !== productId));
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(favoritesChannel);
+    };
+  }, [user?.id]);
+
+  // Fallback realtime price-drop notifier for favorited products.
+  // This ensures notifications stay live even if DB trigger rollout lags.
+  useEffect(() => {
+    if (!user?.id || favoriteProductIds.length === 0) return;
+
+    const onPriceChangeForFavorite = async (payload: any) => {
+      const row = payload?.new as any;
+      if (!row?.id || !row?.product_id) return;
+      if (row.is_active !== true) return;
+      if (row.user_id === user.id) return;
+
+      const eventKey = `${payload.eventType}:${row.id}:${row.updated_at || row.created_at || row.price}`;
+      if (processedFavoritePriceEventsRef.current.has(eventKey)) return;
+      processedFavoritePriceEventsRef.current.add(eventKey);
+
+      try {
+        // Compare with previous minimum active price for the same product.
+        const { data: prevMinRow, error: prevMinError } = await supabase
+          .from('prices')
+          .select('price')
+          .eq('product_id', row.product_id)
+          .eq('is_active', true)
+          .neq('id', row.id)
+          .order('price', { ascending: true })
+          .limit(1)
+          .maybeSingle();
+
+        if (prevMinError || !prevMinRow?.price) return;
+        if (Number(row.price) >= Number(prevMinRow.price)) return;
+
+        // Avoid duplicate inserts when server-side trigger already created this.
+        const { data: existing } = await supabase
+          .from('notifications')
+          .select('id')
+          .eq('user_id', user.id)
+          .eq('type', 'price_drop')
+          .eq('price_id', row.id)
+          .maybeSingle();
+
+        if (existing?.id) return;
+
+        const { data: product } = await supabase
+          .from('products')
+          .select('name')
+          .eq('id', row.product_id)
+          .maybeSingle();
+
+        await supabase.from('notifications').insert({
+          user_id: user.id,
+          type: 'price_drop',
+          title: 'Fiyat Dustu! 🎉',
+          message: `${product?.name || 'Urun'} icin yeni dusuk fiyat: ${row.price} TL (onceki en dusuk: ${prevMinRow.price} TL)`,
+          product_id: row.product_id,
+          price_id: row.id,
+        });
+      } catch (error) {
+        console.error('Realtime favorite price-drop notification fallback failed:', error);
+      }
+    };
+
+    const priceChannel = supabase.channel(`favorite-price-watch-${user.id}`);
+
+    favoriteProductIds.forEach((productId) => {
+      priceChannel.on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'prices',
+          filter: `product_id=eq.${productId}`,
+        },
+        onPriceChangeForFavorite
+      );
+      priceChannel.on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'prices',
+          filter: `product_id=eq.${productId}`,
+        },
+        onPriceChangeForFavorite
+      );
+    });
+
+    priceChannel.subscribe();
+
+    return () => {
+      supabase.removeChannel(priceChannel);
+    };
+  }, [user?.id, favoriteProductIds]);
   
   // Hide tab bar on detail and modal-like screens.
   const hideTabBar = (
