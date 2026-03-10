@@ -250,28 +250,23 @@ function App() {
     }
     
     if (isMobile) {
-      // Listen for app URL open events (deep links)
-      const listener = CapacitorApp.addListener('appUrlOpen', (event) => {
-        console.log('🔗 App opened with URL:', event.url);
-        
-        // Parse the URL to extract OAuth callback parameters
+      const handleIncomingDeepLink = (incomingUrl: string, source: string) => {
+        console.log(`🔗 App opened with URL (${source}):`, incomingUrl);
         try {
           // Fix URL format if needed (com.esnaftaucuz.app:?code=... -> com.esnaftaucuz.app://?code=...)
-          let urlString = event.url;
+          let urlString = incomingUrl;
           console.log('🔗 Raw deep link URL:', urlString);
-          
-          // Handle different URL formats
+
           if (urlString.includes('com.esnaftaucuz.app:') && !urlString.includes('://')) {
             urlString = urlString.replace('com.esnaftaucuz.app:', 'com.esnaftaucuz.app://');
             console.log('🔧 Fixed URL format:', urlString);
           }
-          
-          // Handle URL without protocol
+
           if (!urlString.includes('://')) {
             urlString = `com.esnaftaucuz.app://${urlString}`;
             console.log('🔧 Added protocol:', urlString);
           }
-          
+
           const url = new URL(urlString);
           console.log('🔗 Parsed URL:', {
             protocol: url.protocol,
@@ -280,44 +275,54 @@ function App() {
             search: url.search,
             hash: url.hash,
           });
-          
-          // Check for PKCE flow code parameter in query string
+
           const code = url.searchParams.get('code');
           const error = url.searchParams.get('error') || url.searchParams.get('error_description');
           const checkout = url.searchParams.get('checkout');
           const paymentId = url.searchParams.get('paymentId');
-          
-          // Check for implicit flow access_token in hash fragment
+
           const hash = url.hash.substring(1);
           const hashParams = new URLSearchParams(hash);
           const accessToken = hashParams.get('access_token');
           const hashError = hashParams.get('error');
-          
+
           if (code) {
-            handleOAuthCode(code, 'deep link');
+            handleOAuthCode(code, `${source} deep link`);
           } else if (checkout === 'success' || checkout === 'cancel') {
-            // Payment deep-link callback from Stripe Checkout
             const qs = new URLSearchParams();
             qs.set('checkout', checkout);
             if (paymentId) qs.set('paymentId', paymentId);
             window.history.replaceState({}, document.title, `/?${qs.toString()}`);
-            // Trigger route processing in AppRoutes
             window.location.replace(`/?${qs.toString()}`);
           } else if (accessToken) {
-            // Implicit flow - access_token in hash fragment
             console.log('🔐 OAuth implicit callback detected in deep link (access_token)');
             window.location.hash = hash;
           } else if (error || hashError) {
             console.error('❌ OAuth error in deep link:', error || hashError);
-            // Show error to user
             window.location.hash = `error=${encodeURIComponent(error || hashError || 'Unknown error')}`;
           } else {
             console.log('⚠️ No OAuth parameters found in deep link URL');
           }
         } catch (e) {
           console.error('❌ Failed to parse deep link URL:', e);
-          console.error('URL was:', event.url);
+          console.error('URL was:', incomingUrl);
         }
+      };
+
+      // iOS can cold-start app from OAuth callback before listener is attached.
+      CapacitorApp.getLaunchUrl()
+        .then((result) => {
+          if (result?.url) {
+            handleIncomingDeepLink(result.url, 'launch');
+          }
+        })
+        .catch((e) => {
+          console.warn('⚠️ Failed to read launch URL:', e);
+        });
+
+      // Listen for app URL open events (deep links)
+      const listener = CapacitorApp.addListener('appUrlOpen', (event) => {
+        handleIncomingDeepLink(event.url, 'appUrlOpen');
       });
       
       // Also listen for when the app comes back to foreground
@@ -325,6 +330,13 @@ function App() {
       const appStateListener = CapacitorApp.addListener('appStateChange', (state) => {
         console.log('📱 App state changed:', state.isActive ? 'active' : 'inactive');
         if (state.isActive) {
+          CapacitorApp.getLaunchUrl()
+            .then((result) => {
+              if (result?.url) {
+                handleIncomingDeepLink(result.url, 'resume');
+              }
+            })
+            .catch(() => {});
           // Check if we're on a Supabase callback page
           checkCurrentUrlForOAuth();
         }
