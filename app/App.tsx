@@ -10,6 +10,7 @@ import OnboardingScreen from './components/screens/OnboardingScreen';
 import LoginScreen from './components/screens/LoginScreen';
 import MainApp from './components/screens/MainApp';
 import { App as CapacitorApp } from '@capacitor/app';
+import { Browser } from '@capacitor/browser';
 import { supabase } from './lib/supabase';
 
 // Protected route wrapper - redirects to login if not authenticated
@@ -252,6 +253,8 @@ function App() {
     if (isMobile) {
       const handleIncomingDeepLink = (incomingUrl: string, source: string) => {
         console.log(`🔗 App opened with URL (${source}):`, incomingUrl);
+        // Close in-app browser if OAuth returns via deep link.
+        Browser.close().catch(() => {});
         try {
           // Fix URL format if needed (com.esnaftaucuz.app:?code=... -> com.esnaftaucuz.app://?code=...)
           let urlString = incomingUrl;

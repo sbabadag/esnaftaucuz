@@ -7,7 +7,7 @@
 
 import { supabase } from '../lib/supabase';
 import { v4 as uuidv4 } from 'uuid';
-import { App as CapacitorApp } from '@capacitor/app';
+import { Browser } from '@capacitor/browser';
 
 // ============================================================================
 // AUTH API - Using Supabase Auth
@@ -333,16 +333,11 @@ export const authAPI = {
       // On native mobile, open OAuth in system browser.
       // The callback deep link is handled by App.tsx via appUrlOpen listener.
       if (isMobile && data.url) {
-        const maybeOpenUrl = (CapacitorApp as any)?.openUrl;
-        if (typeof maybeOpenUrl === 'function') {
-          try {
-            await maybeOpenUrl({ url: data.url });
-            return { redirectUrl: data.url, openedInBrowser: true };
-          } catch (nativeOpenError) {
-            console.warn('⚠️ Native openUrl failed, falling back to browser redirect:', nativeOpenError);
-          }
-        } else {
-          console.warn('⚠️ Capacitor App.openUrl is unavailable, using browser fallback');
+        try {
+          await Browser.open({ url: data.url });
+          return { redirectUrl: data.url, openedInBrowser: true };
+        } catch (browserOpenError) {
+          console.warn('⚠️ Capacitor Browser.open failed, using fallback:', browserOpenError);
         }
 
         // Fallback: try opening an external browser tab/window.
