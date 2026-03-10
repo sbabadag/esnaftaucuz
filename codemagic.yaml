@@ -96,6 +96,14 @@ workflows:
           set_or_add_plist_string "NSPhotoLibraryAddUsageDescription" "esnaftaucuz needs photo library write access to save captured images when requested."
           set_or_add_plist_string "NSLocationWhenInUseUsageDescription" "esnaftaucuz needs your location while using the app to show nearby prices."
           set_or_add_plist_bool "ITSAppUsesNonExemptEncryption" "false"
+
+          # Ensure custom URL scheme exists for OAuth deep-link callback.
+          /usr/libexec/PlistBuddy -c "Delete :CFBundleURLTypes" "$PLIST_PATH" 2>/dev/null || true
+          /usr/libexec/PlistBuddy -c "Add :CFBundleURLTypes array" "$PLIST_PATH"
+          /usr/libexec/PlistBuddy -c "Add :CFBundleURLTypes:0 dict" "$PLIST_PATH"
+          /usr/libexec/PlistBuddy -c "Add :CFBundleURLTypes:0:CFBundleURLName string $BUNDLE_ID" "$PLIST_PATH"
+          /usr/libexec/PlistBuddy -c "Add :CFBundleURLTypes:0:CFBundleURLSchemes array" "$PLIST_PATH"
+          /usr/libexec/PlistBuddy -c "Add :CFBundleURLTypes:0:CFBundleURLSchemes:0 string com.esnaftaucuz.app" "$PLIST_PATH"
       - name: Install CocoaPods
         script: |
           cd ios/App
