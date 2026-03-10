@@ -73,6 +73,8 @@ workflows:
           fi
           mkdir -p ios/App/App
           echo "$FIREBASE_IOS_GOOGLESERVICE_INFO_PLIST_B64" | base64 --decode > ios/App/App/GoogleService-Info.plist
+          # Some Xcode project setups reference the plist under ios/App/.
+          echo "$FIREBASE_IOS_GOOGLESERVICE_INFO_PLIST_B64" | base64 --decode > ios/App/GoogleService-Info.plist
       - name: Sync Capacitor iOS
         script: |
           if [ ! -f "dist/index.html" ]; then
