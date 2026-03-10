@@ -333,7 +333,24 @@ export const authAPI = {
       // On native mobile, open OAuth in system browser.
       // The callback deep link is handled by App.tsx via appUrlOpen listener.
       if (isMobile && data.url) {
-        await CapacitorApp.openUrl({ url: data.url });
+        const maybeOpenUrl = (CapacitorApp as any)?.openUrl;
+        if (typeof maybeOpenUrl === 'function') {
+          try {
+            await maybeOpenUrl({ url: data.url });
+            return { redirectUrl: data.url, openedInBrowser: true };
+          } catch (nativeOpenError) {
+            console.warn('⚠️ Native openUrl failed, falling back to browser redirect:', nativeOpenError);
+          }
+        } else {
+          console.warn('⚠️ Capacitor App.openUrl is unavailable, using browser fallback');
+        }
+
+        // Fallback: try opening an external browser tab/window.
+        const popup = window.open(data.url, '_blank', 'noopener,noreferrer');
+        if (!popup) {
+          // Last fallback: navigate current webview.
+          window.location.assign(data.url);
+        }
         return { redirectUrl: data.url, openedInBrowser: true };
       }
 
