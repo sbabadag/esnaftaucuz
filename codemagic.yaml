@@ -45,6 +45,14 @@ workflows:
           VITE_SUPABASE_ANON_KEY=$VITE_SUPABASE_ANON_KEY
           EOF
           npm run build
+          if [ ! -f "dist/index.html" ]; then
+            echo "dist/index.html missing after npm run build; retrying with npx vite build..."
+            npx vite build --outDir dist
+          fi
+          if [ ! -f "dist/index.html" ]; then
+            echo "Build failed: dist/index.html was not generated."
+            exit 1
+          fi
           rm -f .env
       - name: Ensure iOS platform exists
         script: |
@@ -53,6 +61,14 @@ workflows:
           fi
       - name: Sync Capacitor iOS
         script: |
+          if [ ! -f "dist/index.html" ]; then
+            echo "dist/index.html missing before sync; running npm run build..."
+            npm run build
+          fi
+          if [ ! -f "dist/index.html" ]; then
+            echo "Cannot sync iOS: dist/index.html still missing."
+            exit 1
+          fi
           npx cap sync ios
       - name: Set iOS privacy usage descriptions
         script: |
