@@ -20,7 +20,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
 import { useLanguage } from '../../contexts/LanguageContext';
 import { supabase } from '../../lib/supabase';
-import { favoritesAPI } from '../../services/supabase-api';
+import { favoritesAPI, notificationsAPI } from '../../services/supabase-api';
 import { toast } from 'sonner';
 
 // Regular user tabs (labelKey will be translated via LanguageContext)
@@ -48,6 +48,8 @@ export default function MainApp() {
   const [favoriteProductIds, setFavoriteProductIds] = useState<string[]>([]);
   const shownNotificationIdsRef = useRef<Set<string>>(new Set());
   const processedFavoritePriceEventsRef = useRef<Set<string>>(new Set());
+  const knownNotificationIdsRef = useRef<Set<string>>(new Set());
+  const notificationsPollingBootstrappedRef = useRef(false);
   
   // Merchant status is derived directly from the authoritative `user` object
   // so the UI updates immediately after login.
@@ -128,6 +130,75 @@ export default function MainApp() {
 
     return () => {
       supabase.removeChannel(channel);
+    };
+  }, [user?.id]);
+
+  // iOS/Safari can occasionally miss realtime events; poll notifications as fallback.
+  useEffect(() => {
+    if (!user?.id) {
+      knownNotificationIdsRef.current.clear();
+      notificationsPollingBootstrappedRef.current = false;
+      return;
+    }
+
+    let isActive = true;
+
+    const syncNotifications = async (allowToast: boolean) => {
+      try {
+        const rows = await notificationsAPI.getByUser(user.id, 20);
+        if (!isActive) return;
+
+        const latest = Array.isArray(rows) ? rows : [];
+        const latestIds = new Set<string>();
+        latest.forEach((item: any) => {
+          if (item?.id) latestIds.add(item.id);
+        });
+
+        if (!notificationsPollingBootstrappedRef.current) {
+          knownNotificationIdsRef.current = latestIds;
+          notificationsPollingBootstrappedRef.current = true;
+          return;
+        }
+
+        if (allowToast) {
+          latest.forEach((item: any) => {
+            if (!item?.id) return;
+            if (knownNotificationIdsRef.current.has(item.id)) return;
+            if (shownNotificationIdsRef.current.has(item.id)) return;
+
+            shownNotificationIdsRef.current.add(item.id);
+            toast.success(item.title || 'Yeni bildirim', {
+              description: item.message || 'Detaylari gormek icin bildirimler sayfasini ac.',
+              duration: 5000,
+            });
+          });
+        }
+
+        knownNotificationIdsRef.current = latestIds;
+      } catch (error) {
+        console.error('Notification polling fallback failed:', error);
+      }
+    };
+
+    // Prime without toasts so existing notifications do not spam.
+    syncNotifications(false);
+
+    const intervalId = setInterval(() => {
+      syncNotifications(true);
+    }, 10000);
+
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        syncNotifications(true);
+      }
+    };
+
+    document.addEventListener('visibilitychange', onVisibilityChange);
+
+    return () => {
+      isActive = false;
+      clearInterval(intervalId);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
     };
   }, [user?.id]);
 
