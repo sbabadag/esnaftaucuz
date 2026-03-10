@@ -60,6 +60,19 @@ workflows:
           if [ ! -d "ios" ]; then
             npx cap add ios
           fi
+      - name: Configure Firebase native files
+        script: |
+          if [ -n "$FIREBASE_ANDROID_GOOGLE_SERVICES_JSON_B64" ]; then
+            mkdir -p android/app
+            echo "$FIREBASE_ANDROID_GOOGLE_SERVICES_JSON_B64" | base64 --decode > android/app/google-services.json
+          fi
+
+          if [ -z "$FIREBASE_IOS_GOOGLESERVICE_INFO_PLIST_B64" ]; then
+            echo "Missing FIREBASE_IOS_GOOGLESERVICE_INFO_PLIST_B64"
+            exit 1
+          fi
+          mkdir -p ios/App/App
+          echo "$FIREBASE_IOS_GOOGLESERVICE_INFO_PLIST_B64" | base64 --decode > ios/App/App/GoogleService-Info.plist
       - name: Sync Capacitor iOS
         script: |
           if [ ! -f "dist/index.html" ]; then
