@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { BrowserRouter, Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom';
+import { MotionConfig } from 'motion/react';
 import { Toaster } from './components/ui/sonner';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { LanguageProvider } from './contexts/LanguageContext';
@@ -371,18 +372,20 @@ function App() {
     tryRedirectToDevServer();
 
   return (
-    <LanguageProvider>
-      <AuthProvider>
-        <ThemeProvider>
-          <BrowserRouter>
-            <div className="min-h-screen bg-background">
-              <AppRoutes />
-              <Toaster />
-            </div>
-          </BrowserRouter>
-        </ThemeProvider>
-      </AuthProvider>
-    </LanguageProvider>
+    <MotionConfig reducedMotion="never">
+      <LanguageProvider>
+        <AuthProvider>
+          <ThemeProvider>
+            <BrowserRouter>
+              <div className="min-h-screen bg-background">
+                <AppRoutes />
+                <Toaster />
+              </div>
+            </BrowserRouter>
+          </ThemeProvider>
+        </AuthProvider>
+      </LanguageProvider>
+    </MotionConfig>
   );
 }
 

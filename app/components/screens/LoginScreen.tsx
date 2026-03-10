@@ -26,16 +26,10 @@ export default function LoginScreen({ onLogin }: { onLogin?: () => void }) {
   const handleGoogleLogin = async () => {
     try {
       setIsLoading(true);
-      // For demo: Simulated Google OAuth
-      // In production, use Google OAuth library or backend OAuth flow
-      const mockEmail = `user_${Date.now()}@gmail.com`;
-      const mockName = 'Google Kullanıcı';
-      const mockGoogleId = `google_${Date.now()}`;
-      
       await googleLogin();
-      toast.success('Google ile giriş yapıldı');
-      onLogin?.();
-      navigate('/app/explore');
+      // OAuth flow continues in external browser/deep link callback.
+      // Final navigation is handled after session is created.
+      toast.info('Google giriş sayfası açılıyor...');
     } catch (error: any) {
       toast.error(error.message || 'Google ile giriş başarısız');
       console.error('Google login error:', error);
