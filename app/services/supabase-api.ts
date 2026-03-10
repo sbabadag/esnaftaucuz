@@ -305,23 +305,55 @@ export const authAPI = {
       };
       
       if (isMobile) {
-        // On mobile, explicitly use custom URL scheme for OAuth redirect
-        // This ensures the callback goes to the app, not to localhost
-        oauthOptions.redirectTo = 'com.esnaftaucuz.app://auth/callback';
         // Prevent Supabase from auto-redirecting current webview on native.
         oauthOptions.skipBrowserRedirect = true;
-        console.log('📱 Mobile detected, using custom URL scheme:', oauthOptions.redirectTo);
       } else {
         // On web, use the current origin
         oauthOptions.redirectTo = `${window.location.origin}/`;
         console.log('🌐 Web detected, using redirectTo:', oauthOptions.redirectTo);
       }
-      
-      // Supabase handles the redirect automatically
-      const { data, error } = await supabase.auth.signInWithOAuth({
-        provider: 'google',
-        options: oauthOptions,
-      });
+
+      // Supabase handles the redirect URL generation.
+      // On iOS, retry with a simpler scheme if callback path is rejected.
+      let data: any = null;
+      let error: any = null;
+
+      if (isMobile) {
+        const redirectCandidates = [
+          'com.esnaftaucuz.app://auth/callback',
+          'com.esnaftaucuz.app://',
+        ];
+
+        for (const redirectTo of redirectCandidates) {
+          const { data: candidateData, error: candidateError } = await supabase.auth.signInWithOAuth({
+            provider: 'google',
+            options: {
+              ...oauthOptions,
+              redirectTo,
+            },
+          });
+
+          if (!candidateError) {
+            data = candidateData;
+            error = null;
+            console.log('📱 Mobile detected, using custom URL scheme:', redirectTo);
+            break;
+          }
+
+          error = candidateError;
+          console.warn('⚠️ Google OAuth redirect candidate rejected:', {
+            redirectTo,
+            message: candidateError?.message,
+          });
+        }
+      } else {
+        const result = await supabase.auth.signInWithOAuth({
+          provider: 'google',
+          options: oauthOptions,
+        });
+        data = result.data;
+        error = result.error;
+      }
 
       if (error) {
         console.error('❌ Google OAuth error:', error);
