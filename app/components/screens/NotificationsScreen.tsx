@@ -5,6 +5,7 @@ import { Button } from '../ui/button';
 import { notificationsAPI } from '../../services/supabase-api';
 import { useAuth } from '../../contexts/AuthContext';
 import { toast } from 'sonner';
+import { supabase } from '../../lib/supabase';
 
 interface Notification {
   id: string;
@@ -77,6 +78,31 @@ export default function NotificationsScreen() {
       loadNotifications();
     }
   }, [user]);
+
+  useEffect(() => {
+    if (!user?.id) return;
+
+    const channel = supabase
+      .channel(`notifications-screen-${user.id}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'notifications',
+          filter: `user_id=eq.${user.id}`,
+        },
+        () => {
+          // Reload so joined product data is shown immediately.
+          loadNotifications();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [user?.id]);
 
   const loadNotifications = async () => {
     if (!user) {

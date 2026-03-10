@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import { createContext, useContext, useState, useEffect, useRef, ReactNode } from 'react';
 import { authAPI } from '../services/supabase-api';
 import { supabase } from '../lib/supabase';
 
@@ -53,6 +53,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [token, setToken] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isOAuthCallback, setIsOAuthCallback] = useState(false);
+  const userRef = useRef<User | null>(null);
+  const isOAuthCallbackRef = useRef(false);
+
+  useEffect(() => {
+    userRef.current = user;
+  }, [user]);
+
+  useEffect(() => {
+    isOAuthCallbackRef.current = isOAuthCallback;
+  }, [isOAuthCallback]);
 
   useEffect(() => {
     // Check for OAuth callback in URL (Supabase adds hash fragments)
@@ -67,12 +77,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       window.history.replaceState({}, document.title, window.location.pathname);
       setIsLoading(false);
       setIsOAuthCallback(false);
+      isOAuthCallbackRef.current = false;
       return;
     }
     
     // If OAuth callback detected, keep loading until session is processed
     const hasOAuthCallback = !!(accessToken || code);
     setIsOAuthCallback(hasOAuthCallback);
+    isOAuthCallbackRef.current = hasOAuthCallback;
     
     if (hasOAuthCallback) {
       console.log('🔐 OAuth callback detected in URL');
@@ -366,15 +378,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const initializeAuth = async () => {
       // If OAuth callback detected, skip initial auth check
       // onAuthStateChange will handle it
-      if (isOAuthCallback) {
+      if (hasOAuthCallback) {
         console.log('🔐 OAuth callback detected, skipping initial auth check - waiting for onAuthStateChange');
         // Don't set loading to false yet - wait for onAuthStateChange
         // Set a timeout for OAuth callback (reduced from 30s to 15s)
         setTimeout(() => {
-          if (isLoading && isOAuthCallback) {
+          if (isLoading && isOAuthCallbackRef.current) {
             console.warn('⚠️ OAuth callback timeout - forcing loading to false');
             setIsLoading(false);
             setIsOAuthCallback(false);
+            isOAuthCallbackRef.current = false;
           }
         }, 15000); // 15 second timeout for OAuth (reduced from 30)
         return;
@@ -436,13 +449,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // Supabase session listener with timeout protection
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
       console.log('🔄 Auth state changed:', event, session?.user?.email);
+      const currentUser = userRef.current;
+      const oauthInProgress = isOAuthCallbackRef.current;
       
       // Skip processing for routine events when user is already loaded
       // BUT: For merchant users, always reload to ensure is_merchant is correct
       // TOKEN_REFRESHED is normal and doesn't need profile reload if user already exists AND is not merchant
-      if (event === 'TOKEN_REFRESHED' && user && session) {
+      if (event === 'TOKEN_REFRESHED' && currentUser && session) {
         // For merchant users, always reload profile to ensure is_merchant is correct
-        const isCurrentUserMerchant = (user as any)?.is_merchant === true;
+        const isCurrentUserMerchant = (currentUser as any)?.is_merchant === true;
         if (!isCurrentUserMerchant) {
           console.log('✅ Token refreshed, user already loaded (non-merchant) - skipping profile reload');
           return; // Early return, no processing needed
@@ -455,8 +470,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // Skip timeout for certain events that don't require profile loading
       // Only set timeout for events that actually need processing
       const needsProcessing = event === 'SIGNED_IN' || event === 'SIGNED_OUT' || 
-                             (event === 'TOKEN_REFRESHED' && !user) ||
-                             (event === 'USER_UPDATED' && !user);
+                             (event === 'TOKEN_REFRESHED' && !currentUser) ||
+                             (event === 'USER_UPDATED' && !currentUser);
       
       let stateChangeTimeout: NodeJS.Timeout | null = null;
       
@@ -474,14 +489,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           // 1. User is not already set
           // 2. It's a SIGNED_IN event
           // 3. It's TOKEN_REFRESHED and user is a merchant (to ensure is_merchant is correct)
-          const isCurrentUserMerchant = user ? (user as any)?.is_merchant === true : false;
-          const shouldReload = !user || 
+          const userForReload = userRef.current;
+          const isCurrentUserMerchant = userForReload ? (userForReload as any)?.is_merchant === true : false;
+          const shouldReload = !userForReload || 
                               event === 'SIGNED_IN' || 
                               (event === 'TOKEN_REFRESHED' && isCurrentUserMerchant);
           
           if (shouldReload) {
             setIsLoading(true); // Set loading during profile load
-            const shouldCleanUrl = event === 'SIGNED_IN' || (event === 'TOKEN_REFRESHED' && isOAuthCallback);
+            const shouldCleanUrl = event === 'SIGNED_IN' || (event === 'TOKEN_REFRESHED' && oauthInProgress);
             await loadUserProfile(session, event, shouldCleanUrl);
             
             // Profile loaded successfully - ensure URL is clean and trigger navigation
@@ -489,6 +505,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               console.log('✅ OAuth login successful, profile loaded');
               // Clear OAuth callback flag
               setIsOAuthCallback(false);
+              isOAuthCallbackRef.current = false;
               // Clean up hash fragments first
               if (window.location.hash) {
                 window.history.replaceState({}, document.title, window.location.pathname + window.location.search);
@@ -524,11 +541,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             localStorage.removeItem('user');
             setIsLoading(false);
             setIsOAuthCallback(false);
+            isOAuthCallbackRef.current = false;
             return;
           }
           
           // If INITIAL_SESSION with null session but OAuth callback is in progress, wait
-          if (event === 'INITIAL_SESSION' && isOAuthCallback) {
+          if (event === 'INITIAL_SESSION' && oauthInProgress) {
             console.log('🔐 INITIAL_SESSION with null session but OAuth callback in progress - waiting...');
             // Don't clear auth state yet - wait for SIGNED_IN event
             if (stateChangeTimeout) {

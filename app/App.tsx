@@ -35,9 +35,23 @@ function AppRoutes() {
   const location = useLocation();
   const navigate = useNavigate();
   const [hasSeenOnboarding, setHasSeenOnboarding] = useState(false);
+  const [showLoggedInLaunchIntro, setShowLoggedInLaunchIntro] = useState(false);
+  const [loggedInIntroShown, setLoggedInIntroShown] = useState(false);
   const checkoutParams = new URLSearchParams(location.search);
   const checkoutStatus = checkoutParams.get('checkout');
   const hasCheckoutRedirect = checkoutStatus === 'success' || checkoutStatus === 'cancel';
+
+  useEffect(() => {
+    if (!user || isLoading || loggedInIntroShown) return;
+
+    setShowLoggedInLaunchIntro(true);
+    setLoggedInIntroShown(true);
+    const timer = setTimeout(() => {
+      setShowLoggedInLaunchIntro(false);
+    }, 5200);
+
+    return () => clearTimeout(timer);
+  }, [user, isLoading, loggedInIntroShown]);
 
   // Handle OAuth callback redirect - if user is logged in and on root, redirect to explore
   useEffect(() => {
@@ -117,6 +131,10 @@ function AppRoutes() {
     );
   }
 
+  if (showLoggedInLaunchIntro) {
+    return <SplashScreen autoNavigateToOnboarding={false} />;
+  }
+
   // If not authenticated, show auth flow
   return (
     <Routes>
@@ -169,6 +187,8 @@ function App() {
         // Session is now set, AuthContext will handle the rest via onAuthStateChange
         // Clean up URL
         window.history.replaceState({}, document.title, '/');
+        // Notify router listeners when callback URL is normalized.
+        window.dispatchEvent(new PopStateEvent('popstate'));
       } catch (err: any) {
         console.error('❌ Error exchanging code for session:', err);
         window.location.hash = `error=${encodeURIComponent(err.message || 'Unknown error')}`;

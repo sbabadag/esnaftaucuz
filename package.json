@@ -17,7 +17,7 @@
     "mobile:build": "npm run build && npx cap sync",
     "mobile:build-sync": "npm run build && npx cap sync",
     "watch:sync": "npm run build && npx cap sync && echo 'Watching for changes...' && npm run build -- --watch",
-    "dev:android": "concurrently -k \"vite --host --port 5173\" \"wait-on http://localhost:5173 && npx cap run android --livereload --external --target a7c846f9\"",
+    "dev:android": "node scripts/dev-android.js",
     "dev:ios": "concurrently -k \"vite\" \"wait-on http://localhost:5173 && npx cap run ios --livereload --external\"",
     "version:bump:patch": "npm version patch --no-git-tag-version",
     "version:bump:minor": "npm version minor --no-git-tag-version",

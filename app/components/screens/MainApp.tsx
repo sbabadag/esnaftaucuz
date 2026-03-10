@@ -16,9 +16,11 @@ import AboutScreen from './AboutScreen';
 import FavoritesScreen from './FavoritesScreen';
 import FeedbackScreen from './FeedbackScreen';
 import MerchantSubscriptionScreen from './MerchantSubscriptionScreen';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
 import { useLanguage } from '../../contexts/LanguageContext';
+import { supabase } from '../../lib/supabase';
+import { toast } from 'sonner';
 
 // Regular user tabs (labelKey will be translated via LanguageContext)
   const regularTabs = [
@@ -42,6 +44,7 @@ export default function MainApp() {
   const { user } = useAuth();
   const { isLoading } = useAuth();
   const [bannerVisible, setBannerVisible] = useState(true);
+  const shownNotificationIdsRef = useRef<Set<string>>(new Set());
   
   // Merchant status is derived directly from the authoritative `user` object
   // so the UI updates immediately after login.
@@ -89,6 +92,41 @@ export default function MainApp() {
       user_is_merchant: (user as any)?.is_merchant,
     });
   }, [isMerchant, tabs, user]);
+
+  // Realtime notifications: show instant toast when a new notification arrives.
+  useEffect(() => {
+    if (!user?.id) return;
+
+    const channel = supabase
+      .channel(`user-notifications-${user.id}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'notifications',
+          filter: `user_id=eq.${user.id}`,
+        },
+        (payload) => {
+          const inserted = payload.new as any;
+          if (!inserted?.id) return;
+
+          // Avoid duplicate toasts when channel reconnects.
+          if (shownNotificationIdsRef.current.has(inserted.id)) return;
+          shownNotificationIdsRef.current.add(inserted.id);
+
+          toast.success(inserted.title || 'Yeni bildirim', {
+            description: inserted.message || 'Detaylari gormek icin bildirimler sayfasini ac.',
+            duration: 5000,
+          });
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [user?.id]);
   
   // Hide tab bar on detail and modal-like screens.
   const hideTabBar = (
