@@ -36,13 +36,14 @@ workflows:
         script: npm ci
       - name: Build web assets
         script: |
-          if [ -z "$VITE_SUPABASE_URL" ] || [ -z "$VITE_SUPABASE_ANON_KEY" ]; then
-            echo "Missing VITE_SUPABASE_URL or VITE_SUPABASE_ANON_KEY"
+          if [ -z "$VITE_SUPABASE_URL" ] || [ -z "$VITE_SUPABASE_ANON_KEY" ] || [ -z "$VITE_GOOGLE_MAPS_API_KEY" ]; then
+            echo "Missing VITE_SUPABASE_URL, VITE_SUPABASE_ANON_KEY, or VITE_GOOGLE_MAPS_API_KEY"
             exit 1
           fi
           cat > .env <<EOF
           VITE_SUPABASE_URL=$VITE_SUPABASE_URL
           VITE_SUPABASE_ANON_KEY=$VITE_SUPABASE_ANON_KEY
+          VITE_GOOGLE_MAPS_API_KEY=$VITE_GOOGLE_MAPS_API_KEY
           EOF
           npm run build
           if [ ! -f "dist/index.html" ]; then
