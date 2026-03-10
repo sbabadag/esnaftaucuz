@@ -4,12 +4,14 @@ Functions added:
 
 - `merchant-subscription-checkout`
 - `merchant-subscription-webhook`
+- `dispatch-notification-push`
 
 ## Deploy
 
 ```bash
 supabase functions deploy merchant-subscription-checkout
 supabase functions deploy merchant-subscription-webhook
+supabase functions deploy dispatch-notification-push
 ```
 
 ## Required Secrets
@@ -25,6 +27,10 @@ supabase secrets set STRIPE_SECRET_KEY=sk_live_or_test_...
 supabase secrets set STRIPE_WEBHOOK_SECRET=whsec_...
 supabase secrets set IYZICO_CHECKOUT_BASE_URL=https://your-iyzico-checkout-host
 supabase secrets set IYZICO_WEBHOOK_SECRET=your_iyzico_webhook_secret
+supabase secrets set FCM_SERVER_KEY=AAAA...your-fcm-server-key...  # optional legacy
+supabase secrets set FCM_PROJECT_ID=your-firebase-project-id
+supabase secrets set FCM_CLIENT_EMAIL=firebase-adminsdk-xxx@your-project.iam.gserviceaccount.com
+supabase secrets set FCM_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n"
 ```
 
 ## Endpoints

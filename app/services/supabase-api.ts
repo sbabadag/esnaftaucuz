@@ -2045,6 +2045,46 @@ export const notificationsAPI = {
 };
 
 // ============================================================================
+// PUSH TOKENS API
+// ============================================================================
+
+export const pushTokensAPI = {
+  upsert: async (userId: string, token: string, platform: 'ios' | 'android' | 'web') => {
+    try {
+      if (!userId || !token) return null;
+
+      const { data, error } = await supabase
+        .from('user_push_tokens')
+        .upsert(
+          {
+            user_id: userId,
+            token,
+            platform,
+            is_active: true,
+            last_seen_at: new Date().toISOString(),
+          },
+          {
+            onConflict: 'token',
+            ignoreDuplicates: false,
+          }
+        )
+        .select()
+        .maybeSingle();
+
+      if (error) {
+        console.error('❌ Push token upsert error:', error);
+        throw error;
+      }
+
+      return data;
+    } catch (error: any) {
+      console.error('❌ Push token registration failed:', error);
+      return null;
+    }
+  },
+};
+
+// ============================================================================
 // MERCHANT PRODUCTS API
 // ============================================================================
 

@@ -20,7 +20,9 @@ import { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
 import { useLanguage } from '../../contexts/LanguageContext';
 import { supabase } from '../../lib/supabase';
-import { favoritesAPI, notificationsAPI } from '../../services/supabase-api';
+import { favoritesAPI, notificationsAPI, pushTokensAPI } from '../../services/supabase-api';
+import { FirebaseMessaging } from '@capacitor-firebase/messaging';
+import { Capacitor } from '@capacitor/core';
 import { toast } from 'sonner';
 
 // Regular user tabs (labelKey will be translated via LanguageContext)
@@ -130,6 +132,60 @@ export default function MainApp() {
 
     return () => {
       supabase.removeChannel(channel);
+    };
+  }, [user?.id]);
+
+  // Register native push token (required for remote notifications while app is closed).
+  useEffect(() => {
+    if (!user?.id) return;
+    if (!Capacitor.isNativePlatform()) return;
+
+    const platform = Capacitor.getPlatform() as 'ios' | 'android' | 'web';
+    if (platform !== 'ios' && platform !== 'android') return;
+
+    let isMounted = true;
+    let tokenReceivedHandle: any = null;
+    let notificationReceivedHandle: any = null;
+
+    const setupPush = async () => {
+      try {
+        const permission = await FirebaseMessaging.requestPermissions();
+        if (permission.receive !== 'granted') {
+          console.warn('⚠️ Push notification permission not granted');
+          return;
+        }
+
+        tokenReceivedHandle = await FirebaseMessaging.addListener('tokenReceived', async (event) => {
+          if (!isMounted) return;
+          if (!event?.token) return;
+          await pushTokensAPI.upsert(user.id, event.token, platform);
+          console.log('✅ Push token registered for remote notifications');
+        });
+
+        const tokenResult = await FirebaseMessaging.getToken();
+        if (tokenResult?.token) {
+          await pushTokensAPI.upsert(user.id, tokenResult.token, platform);
+          console.log('✅ Push token fetched and registered for remote notifications');
+        }
+
+        // Keep existing token fresh in case app resumes with refreshed credentials.
+        notificationReceivedHandle = await FirebaseMessaging.addListener('notificationReceived', async () => {
+          const refreshed = await FirebaseMessaging.getToken();
+          if (refreshed?.token) {
+            await pushTokensAPI.upsert(user.id, refreshed.token, platform);
+          }
+        });
+      } catch (error) {
+        console.error('❌ Push setup failed:', error);
+      }
+    };
+
+    setupPush();
+
+    return () => {
+      isMounted = false;
+      if (tokenReceivedHandle?.remove) tokenReceivedHandle.remove();
+      if (notificationReceivedHandle?.remove) notificationReceivedHandle.remove();
     };
   }, [user?.id]);
 
