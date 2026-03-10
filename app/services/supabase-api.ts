@@ -307,6 +307,8 @@ export const authAPI = {
         // On mobile, explicitly use custom URL scheme for OAuth redirect
         // This ensures the callback goes to the app, not to localhost
         oauthOptions.redirectTo = 'com.esnaftaucuz.app://';
+        // Prevent Supabase from auto-redirecting current webview on native.
+        oauthOptions.skipBrowserRedirect = true;
         console.log('📱 Mobile detected, using custom URL scheme:', oauthOptions.redirectTo);
       } else {
         // On web, use the current origin

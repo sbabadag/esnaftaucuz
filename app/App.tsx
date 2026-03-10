@@ -168,11 +168,6 @@ function App() {
         // Session is now set, AuthContext will handle the rest via onAuthStateChange
         // Clean up URL
         window.history.replaceState({}, document.title, '/');
-        
-        // Force a page reload to ensure AuthContext picks up the new session
-        setTimeout(() => {
-          window.location.reload();
-        }, 500);
       } catch (err: any) {
         console.error('❌ Error exchanging code for session:', err);
         window.location.hash = `error=${encodeURIComponent(err.message || 'Unknown error')}`;
