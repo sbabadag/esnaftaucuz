@@ -86,6 +86,63 @@ workflows:
             exit 1
           fi
           npx cap sync ios
+      - name: Patch iOS Firebase messaging bootstrap
+        script: |
+          if [ -z "$FIREBASE_IOS_GOOGLESERVICE_INFO_PLIST_B64" ]; then
+            echo "Missing FIREBASE_IOS_GOOGLESERVICE_INFO_PLIST_B64"
+            exit 1
+          fi
+
+          # Ensure plist exists after cap sync (sync can overwrite iOS folder state).
+          mkdir -p ios/App/App
+          echo "$FIREBASE_IOS_GOOGLESERVICE_INFO_PLIST_B64" | base64 --decode > ios/App/App/GoogleService-Info.plist
+          echo "$FIREBASE_IOS_GOOGLESERVICE_INFO_PLIST_B64" | base64 --decode > ios/App/GoogleService-Info.plist
+
+          APP_DELEGATE_PATH="ios/App/App/AppDelegate.swift"
+          if [ ! -f "$APP_DELEGATE_PATH" ]; then
+            echo "AppDelegate.swift not found at $APP_DELEGATE_PATH"
+            exit 1
+          fi
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          path = Path("ios/App/App/AppDelegate.swift")
+          text = path.read_text(encoding="utf-8")
+
+          if "import FirebaseCore" not in text:
+              text = text.replace("import Capacitor", "import Capacitor\nimport FirebaseCore")
+
+          if "FirebaseApp.configure()" not in text:
+              pattern = r"(func application\(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: \[UIApplication\.LaunchOptionsKey: Any\]\?\) -> Bool \{\n(?:\s*//.*\n)?)"
+              repl = r"\1        if FirebaseApp.app() == nil {\n            FirebaseApp.configure()\n        }\n"
+              text = re.sub(pattern, repl, text, count=1)
+
+          if "didRegisterForRemoteNotificationsWithDeviceToken" not in text:
+              insertion = """
+    func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
+        NotificationCenter.default.post(name: .capacitorDidRegisterForRemoteNotifications, object: deviceToken)
+    }
+
+    func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: Error) {
+        NotificationCenter.default.post(name: .capacitorDidFailToRegisterForRemoteNotifications, object: error)
+    }
+
+    func application(_ application: UIApplication,
+                     didReceiveRemoteNotification userInfo: [AnyHashable : Any],
+                     fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void) {
+        NotificationCenter.default.post(name: Notification.Name("didReceiveRemoteNotification"),
+                                        object: completionHandler,
+                                        userInfo: userInfo)
+    }
+"""
+              text = text.rstrip()
+              text = text[:-1] + insertion + "\n}\n"
+
+          path.write_text(text, encoding="utf-8")
+          print("✅ AppDelegate.swift patched for Firebase Messaging")
+          PY
       - name: Set iOS privacy usage descriptions
         script: |
           PLIST_PATH="ios/App/App/Info.plist"
