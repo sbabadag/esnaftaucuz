@@ -158,7 +158,27 @@ workflows:
           xcode-project build-ipa --workspace "$XCODE_WORKSPACE" --scheme "$XCODE_SCHEME" --archive-xcargs "CURRENT_PROJECT_VERSION=$IOS_BUILD_NUMBER"
       - name: Upload IPA to App Store Connect
         script: |
-          app-store-connect publish --path "build/ios/ipa/*.ipa" --apple-id 6760316835 --max-find-build-wait 1 --max-build-processing-wait 1
+          set +e
+          PUBLISH_OUTPUT=$(app-store-connect publish --path "build/ios/ipa/*.ipa" --apple-id 6760316835 --max-find-build-wait 1 --max-build-processing-wait 1 2>&1)
+          PUBLISH_STATUS=$?
+          set -e
+
+          echo "$PUBLISH_OUTPUT"
+
+          if [ "$PUBLISH_STATUS" -eq 0 ]; then
+            echo "App Store Connect upload succeeded."
+            exit 0
+          fi
+
+          case "$PUBLISH_OUTPUT" in
+            *"Upload limit reached"*)
+              echo "App Store Connect upload quota reached. Keeping build green for IPA-based device testing."
+              exit 0
+              ;;
+          esac
+
+          echo "App Store Connect upload failed for a non-quota reason."
+          exit "$PUBLISH_STATUS"
     artifacts:
       - build/ios/ipa/*.ipa
       - /tmp/xcodebuild_logs/*.log
