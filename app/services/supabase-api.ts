@@ -7,7 +7,6 @@
 
 import { supabase } from '../lib/supabase';
 import { v4 as uuidv4 } from 'uuid';
-import { Browser } from '@capacitor/browser';
 
 // ============================================================================
 // AUTH API - Using Supabase Auth
@@ -331,7 +330,13 @@ export const authAPI = {
       // On native mobile, open OAuth in system browser.
       // The callback deep link is handled by App.tsx via appUrlOpen listener.
       if (isMobile && data.url) {
-        await Browser.open({ url: data.url });
+        const nativeBrowser = (window as any)?.Capacitor?.Plugins?.Browser;
+        if (nativeBrowser?.open) {
+          await nativeBrowser.open({ url: data.url });
+        } else {
+          // Fallback if Browser plugin is unavailable at runtime
+          window.location.href = data.url;
+        }
         return { redirectUrl: data.url, openedInBrowser: true };
       }
 

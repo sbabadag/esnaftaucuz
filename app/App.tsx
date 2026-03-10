@@ -9,7 +9,6 @@ import OnboardingScreen from './components/screens/OnboardingScreen';
 import LoginScreen from './components/screens/LoginScreen';
 import MainApp from './components/screens/MainApp';
 import { App as CapacitorApp } from '@capacitor/app';
-import { Browser } from '@capacitor/browser';
 import { supabase } from './lib/supabase';
 
 // Protected route wrapper - redirects to login if not authenticated
@@ -239,7 +238,10 @@ function App() {
       const listener = CapacitorApp.addListener('appUrlOpen', (event) => {
         console.log('🔗 App opened with URL:', event.url);
         // Close OAuth browser if it is still open
-        Browser.close().catch(() => {});
+        const nativeBrowser = (window as any)?.Capacitor?.Plugins?.Browser;
+        if (nativeBrowser?.close) {
+          nativeBrowser.close().catch(() => {});
+        }
         
         // Parse the URL to extract OAuth callback parameters
         try {
