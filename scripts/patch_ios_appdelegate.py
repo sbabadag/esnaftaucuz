@@ -16,15 +16,15 @@ def main() -> None:
     if "FirebaseApp.configure(" not in text:
         pattern = r"(func application\(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: \[UIApplication\.LaunchOptionsKey: Any\]\?\) -> Bool \{\n(?:\s*//.*\n)?)"
         repl = (
-            r"\1"
-            r"        if FirebaseApp.app() == nil {\n"
-            r"            if let plistPath = Bundle.main.path(forResource: \"GoogleService-Info\", ofType: \"plist\"),\n"
-            r"               let options = FirebaseOptions(contentsOfFile: plistPath) {\n"
-            r"                FirebaseApp.configure(options: options)\n"
-            r"            } else {\n"
-            r"                print(\"GoogleService-Info.plist not found in bundle; skipping Firebase configure\")\n"
-            r"            }\n"
-            r"        }\n"
+            "\\1"
+            "        if FirebaseApp.app() == nil {\n"
+            "            if let plistPath = Bundle.main.path(forResource: \"GoogleService-Info\", ofType: \"plist\"),\n"
+            "               let options = FirebaseOptions(contentsOfFile: plistPath) {\n"
+            "                FirebaseApp.configure(options: options)\n"
+            "            } else {\n"
+            "                print(\"GoogleService-Info.plist not found in bundle; skipping Firebase configure\")\n"
+            "            }\n"
+            "        }\n"
         )
         text = re.sub(pattern, repl, text, count=1)
 
