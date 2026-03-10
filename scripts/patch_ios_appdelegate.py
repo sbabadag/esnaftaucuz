@@ -12,9 +12,20 @@ def main() -> None:
     if "import FirebaseCore" not in text:
         text = text.replace("import Capacitor", "import Capacitor\nimport FirebaseCore")
 
-    if "FirebaseApp.configure()" not in text:
+    # Treat any FirebaseApp.configure(...) invocation as already configured.
+    if "FirebaseApp.configure(" not in text:
         pattern = r"(func application\(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: \[UIApplication\.LaunchOptionsKey: Any\]\?\) -> Bool \{\n(?:\s*//.*\n)?)"
-        repl = r"\1        if FirebaseApp.app() == nil {\n            FirebaseApp.configure()\n        }\n"
+        repl = (
+            r"\1"
+            r"        if FirebaseApp.app() == nil {\n"
+            r"            if let plistPath = Bundle.main.path(forResource: \"GoogleService-Info\", ofType: \"plist\"),\n"
+            r"               let options = FirebaseOptions(contentsOfFile: plistPath) {\n"
+            r"                FirebaseApp.configure(options: options)\n"
+            r"            } else {\n"
+            r"                print(\"GoogleService-Info.plist not found in bundle; skipping Firebase configure\")\n"
+            r"            }\n"
+            r"        }\n"
+        )
         text = re.sub(pattern, repl, text, count=1)
 
     if "didRegisterForRemoteNotificationsWithDeviceToken" not in text:
