@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "721771191684",
+    "project_id": "esnaftaucuz-push",
+    "storage_bucket": "esnaftaucuz-push.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:721771191684:android:1c8a6f8bdbc38ad04c51d1",
+        "android_client_info": {
+          "package_name": "com.esnaftaucuz.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBJDgLAf2EtKstCh9bqv1ineDg7HEdqVYs"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
