@@ -1086,6 +1086,8 @@ export const pricesAPI = {
     price: number;
     unit: string;
     location: string;
+    userId?: string;
+    accessToken?: string;
     lat?: number;
     lng?: number;
     photo?: File;
@@ -1098,6 +1100,159 @@ export const pricesAPI = {
     const createOperation = async () => {
       try {
         console.log('🚀 Starting price creation...');
+        const isUUIDValue = (value: string) =>
+          /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value || '');
+
+        // Fast path: selected product+location IDs, no photo upload.
+        if (isUUIDValue(data.product) && isUUIDValue(data.location) && !data.photo) {
+          const extractAccessTokenFromUnknownShape = (value: any): string | null => {
+            try {
+              if (!value) return null;
+              if (typeof value === 'string') {
+                try {
+                  const parsed = JSON.parse(value);
+                  return extractAccessTokenFromUnknownShape(parsed);
+                } catch {
+                  return null;
+                }
+              }
+              if (Array.isArray(value)) {
+                for (const item of value) {
+                  const token = extractAccessTokenFromUnknownShape(item);
+                  if (token) return token;
+                }
+                return null;
+              }
+              if (typeof value === 'object') {
+                if (typeof (value as any).access_token === 'string') {
+                  return (value as any).access_token;
+                }
+                if (typeof (value as any).currentSession?.access_token === 'string') {
+                  return (value as any).currentSession.access_token;
+                }
+                for (const v of Object.values(value)) {
+                  const token = extractAccessTokenFromUnknownShape(v);
+                  if (token) return token;
+                }
+              }
+              return null;
+            } catch {
+              return null;
+            }
+          };
+
+          const fastUserId =
+            data.userId ||
+            (() => {
+              try {
+                return JSON.parse(localStorage.getItem('user') || '{}')?.id;
+              } catch {
+                return undefined;
+              }
+            })();
+
+          if (!fastUserId) {
+            throw new Error('Giris yapmaniz gerekiyor');
+          }
+
+          const resolveAccessTokenQuick = async (): Promise<string | null> => {
+            const direct = data.accessToken || localStorage.getItem('authToken');
+            if (direct) return direct;
+
+            // Supabase JS stores session under sb-...-auth-token; scan quickly.
+            try {
+              for (let i = 0; i < localStorage.length; i++) {
+                const key = localStorage.key(i) || '';
+                if (!key.includes('auth-token') && !key.startsWith('sb-')) continue;
+                const raw = localStorage.getItem(key);
+                const token = extractAccessTokenFromUnknownShape(raw);
+                if (token) return token;
+              }
+            } catch {
+              // ignore
+            }
+
+            // Last quick fallback: ask supabase session with strict timeout.
+            try {
+              const sessionResult = await Promise.race([
+                supabase.auth.getSession(),
+                new Promise<any>((resolve) => setTimeout(() => resolve(null), 1500)),
+              ]);
+              const token = (sessionResult as any)?.data?.session?.access_token;
+              return token || null;
+            } catch {
+              return null;
+            }
+          };
+
+          const fastPriceData: any = {
+            product_id: data.product,
+            location_id: data.location,
+            user_id: fastUserId,
+            price: data.price,
+            unit: data.unit,
+            is_active: true,
+          };
+          if (data.lat && data.lng) {
+            fastPriceData.coordinates = `(${data.lng},${data.lat})`;
+          }
+
+          let fastRecord: any = null;
+          const sbUrl = import.meta.env.VITE_SUPABASE_URL as string;
+          const sbKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
+          const authToken = await resolveAccessTokenQuick();
+
+          // Try direct REST insert first to bypass supabase-js auth/session delays.
+          if (sbUrl && sbKey && authToken) {
+            try {
+              const controller = new AbortController();
+              const timer = setTimeout(() => controller.abort(), 8000);
+              const response = await fetch(`${sbUrl}/rest/v1/prices`, {
+                method: 'POST',
+                headers: {
+                  apikey: sbKey,
+                  Authorization: `Bearer ${authToken}`,
+                  'Content-Type': 'application/json',
+                  Prefer: 'return=representation',
+                },
+                body: JSON.stringify(fastPriceData),
+                signal: controller.signal,
+              });
+              clearTimeout(timer);
+              if (response.ok) {
+                const rows = await response.json().catch(() => []);
+                fastRecord = Array.isArray(rows) ? rows[0] : null;
+              }
+            } catch (restError) {
+              console.warn('Fast path REST insert failed, falling back:', restError);
+            }
+          }
+
+          // Fallback: supabase-js insert
+          if (!fastRecord) {
+            const { data: fallbackRecord, error: fallbackError } = await supabase
+              .from('prices')
+              .insert(fastPriceData)
+              .select(`
+                *,
+                product:products(id, name, category, default_unit, image),
+                location:locations(id, name, type, address, coordinates, city, district),
+                user:users(id, name, avatar, level)
+              `)
+              .single();
+            if (fallbackError) throw fallbackError;
+            fastRecord = fallbackRecord;
+          }
+
+          if (!fastRecord) throw new Error('Fiyat kaydi olusturulamadi');
+
+          // Non-blocking post-actions; do not delay submit UX.
+          supabase.functions.invoke('notify-price-drop', {
+            body: { price_id: fastRecord.id },
+          }).catch(() => {});
+
+          return fastRecord;
+        }
 
         const resolveAuthenticatedUser = async () => {
           // Primary path: validate token with server.
@@ -1791,6 +1946,35 @@ export const usersAPI = {
 export const searchAPI = {
   search: async (query: string, type: 'all' | 'products' | 'prices' | 'locations' = 'all') => {
     try {
+      const normalizedQuery = String(query || '').trim();
+      if (!normalizedQuery) {
+        return { products: [], prices: [], locations: [] };
+      }
+      const normalizeTR = (value: string) =>
+        String(value || '')
+          .toLowerCase()
+          .replace(/ı/g, 'i')
+          .replace(/İ/g, 'i')
+          .replace(/ş/g, 's')
+          .replace(/ğ/g, 'g')
+          .replace(/ü/g, 'u')
+          .replace(/ö/g, 'o')
+          .replace(/ç/g, 'c')
+          .trim();
+      const queryVariants = Array.from(
+        new Set([normalizedQuery, normalizeTR(normalizedQuery)].filter(Boolean))
+      );
+      const withTimeout = async <T,>(promise: Promise<T>, ms: number, fallback: T): Promise<T> => {
+        try {
+          return await Promise.race([
+            promise,
+            new Promise<T>((resolve) => setTimeout(() => resolve(fallback), ms)),
+          ]);
+        } catch {
+          return fallback;
+        }
+      };
+
       const results: {
         products: any[];
         prices: any[];
@@ -1802,41 +1986,109 @@ export const searchAPI = {
       };
 
       if (type === 'all' || type === 'products') {
-        const { data: products } = await supabase
-          .from('products')
-          .select('*')
-          .ilike('name', `%${query}%`)
-          .eq('is_active', true)
-          .limit(10);
-        results.products = products || [];
+        const productMap = new Map<string, any>();
+        const sbUrl = import.meta.env.VITE_SUPABASE_URL as string;
+        const sbKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
+        if (sbUrl && sbKey) {
+          for (const qv of queryVariants) {
+            const encoded = encodeURIComponent(`*${qv}*`);
+            const url = `${sbUrl}/rest/v1/products?select=*&or=(name.ilike.${encoded},category.ilike.${encoded})&order=search_count.desc.nullslast&limit=250`;
+            const response = await withTimeout(
+              fetch(url, {
+                headers: {
+                  apikey: sbKey,
+                  Authorization: `Bearer ${sbKey}`,
+                },
+              }),
+              10000,
+              null as any
+            );
+            if (response && response.ok) {
+              const products = await response.json().catch(() => []);
+              (products || []).forEach((p: any) => {
+                if (p?.id) productMap.set(p.id, p);
+              });
+            }
+          }
+        } else {
+          for (const qv of queryVariants) {
+            const { data: products } = await withTimeout(
+              supabase
+                .from('products')
+                .select('*')
+                .or(`name.ilike.%${qv}%,category.ilike.%${qv}%`)
+                .limit(250),
+              10000,
+              { data: [], error: null } as any
+            );
+            (products || []).forEach((p: any) => {
+              if (p?.id) productMap.set(p.id, p);
+            });
+          }
+        }
+        results.products = Array.from(productMap.values());
       }
 
       if (type === 'all' || type === 'prices') {
-        const { data: prices } = await supabase
-          .from('prices')
-          .select(`
-            *,
-            product:products(id, name, category, default_unit, image),
-            location:locations(id, name, type, address, coordinates, city, district),
-            user:users(id, name, avatar, level)
-          `)
-          .eq('is_active', true)
-          .limit(20);
-        
-        // Filter by product name match
-        if (prices) {
-          results.prices = prices.filter((p: any) => 
-            p.product?.name?.toLowerCase().includes(query.toLowerCase())
+        const productIds = (results.products || [])
+          .map((p: any) => p?.id)
+          .filter((id: any) => typeof id === 'string' && id.length > 0);
+
+        if (productIds.length > 0) {
+          const { data: pricesByProduct } = await withTimeout(
+            supabase
+              .from('prices')
+              .select(`
+                *,
+                product:products(id, name, category, default_unit, image),
+                location:locations(id, name, type, address, coordinates, city, district),
+                user:users(id, name, avatar, level)
+              `)
+              .eq('is_active', true)
+              .in('product_id', productIds)
+              .order('created_at', { ascending: false })
+              .limit(20),
+            7000,
+            { data: [], error: null } as any
           );
+          results.prices = pricesByProduct || [];
+        } else {
+          // Fallback when no direct product hit: lightweight recent scan with client-side match.
+          const { data: prices } = await withTimeout(
+            supabase
+              .from('prices')
+              .select(`
+                *,
+                product:products(id, name, category, default_unit, image),
+                location:locations(id, name, type, address, coordinates, city, district),
+                user:users(id, name, avatar, level)
+              `)
+              .eq('is_active', true)
+              .order('created_at', { ascending: false })
+              .limit(40),
+            7000,
+            { data: [], error: null } as any
+          );
+
+          if (prices) {
+            const lowerVariants = queryVariants.map((q) => q.toLowerCase());
+            results.prices = prices.filter((p: any) =>
+              lowerVariants.some((q) => p.product?.name?.toLowerCase().includes(q))
+            );
+          }
         }
       }
 
       if (type === 'all' || type === 'locations') {
-        const { data: locations } = await supabase
-          .from('locations')
-          .select('*')
-          .or(`name.ilike.%${query}%,address.ilike.%${query}%,city.ilike.%${query}%,district.ilike.%${query}%`)
-          .limit(10);
+        const { data: locations } = await withTimeout(
+          supabase
+            .from('locations')
+            .select('*')
+            .or(`name.ilike.%${normalizedQuery}%,address.ilike.%${normalizedQuery}%,city.ilike.%${normalizedQuery}%,district.ilike.%${normalizedQuery}%`)
+            .limit(10),
+          6000,
+          { data: [], error: null } as any
+        );
         results.locations = locations || [];
       }
 
@@ -2029,28 +2281,128 @@ export const searchAPI = {
 // ============================================================================
 
 export const favoritesAPI = {
-  _getAuthHeaders: async () => {
-    const sbUrl = import.meta.env.VITE_SUPABASE_URL as string;
-    const sbKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
-    const { data: { session } } = await supabase.auth.getSession();
-    const token = session?.access_token || sbKey;
-    return { url: sbUrl, headers: { apikey: sbKey, Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' } };
+  _cacheKey: (userId: string) => `favorites_cache_${userId}`,
+
+  _readCache: (userId: string) => {
+    try {
+      const raw = localStorage.getItem(favoritesAPI._cacheKey(userId));
+      if (!raw) return [];
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
   },
 
-  add: async (productId: string, userId: string) => {
+  _writeCache: (userId: string, rows: any[]) => {
     try {
-      const { url, headers } = await favoritesAPI._getAuthHeaders();
-      const controller = new AbortController();
-      const tid = setTimeout(() => controller.abort(), 8000);
-      const resp = await fetch(`${url}/rest/v1/user_favorites`, {
-        method: 'POST',
-        headers: { ...headers, Prefer: 'return=representation' },
-        body: JSON.stringify({ user_id: userId, product_id: productId }),
-        signal: controller.signal,
-      });
-      clearTimeout(tid);
-      if (!resp.ok) throw new Error(`Add favorite failed: ${resp.status}`);
-      return resp.json();
+      localStorage.setItem(favoritesAPI._cacheKey(userId), JSON.stringify(rows || []));
+    } catch {
+      // ignore cache write errors
+    }
+  },
+
+  _upsertCacheFavorite: (
+    userId: string,
+    productId: string,
+    product?: { id?: string; name?: string; image?: string; category?: string }
+  ) => {
+    const rows = favoritesAPI._readCache(userId);
+    const existingIndex = rows.findIndex((r: any) => r?.product_id === productId);
+    const productSnapshot = product
+      ? {
+          id: product.id || productId,
+          name: product.name || 'Urun',
+          image: product.image,
+          category: product.category,
+        }
+      : null;
+
+    if (existingIndex >= 0) {
+      // Upgrade existing cached row if we now have product details.
+      if (productSnapshot && !rows[existingIndex]?.product) {
+        const next = [...rows];
+        next[existingIndex] = {
+          ...next[existingIndex],
+          product: productSnapshot,
+        };
+        favoritesAPI._writeCache(userId, next);
+      }
+      return;
+    }
+    const next = [
+      {
+        id: `local-${productId}`,
+        product_id: productId,
+        created_at: new Date().toISOString(),
+        product: productSnapshot,
+      },
+      ...rows,
+    ];
+    favoritesAPI._writeCache(userId, next);
+  },
+
+  _removeCacheFavorite: (userId: string, productId: string) => {
+    const rows = favoritesAPI._readCache(userId);
+    const next = rows.filter((r: any) => r?.product_id !== productId);
+    favoritesAPI._writeCache(userId, next);
+  },
+
+  _withTimeout: async <T>(promise: Promise<T>, timeoutMs: number, timeoutMessage: string): Promise<T> => {
+    return Promise.race([
+      promise,
+      new Promise<T>((_, reject) => {
+        setTimeout(() => reject(new Error(timeoutMessage)), timeoutMs);
+      }),
+    ]);
+  },
+
+  _getSessionForUser: async (userId: string) => {
+    const { data, error } = await favoritesAPI._withTimeout(
+      supabase.auth.getSession(),
+      20000,
+      'Session timeout'
+    );
+    if (error) throw error;
+    const session = data?.session;
+    if (!session?.access_token || !session?.user?.id) {
+      throw new Error('Auth session bulunamadi, lutfen yeniden giris yapin');
+    }
+    if (session.user.id !== userId) {
+      throw new Error('Kullanici oturumu eslesmiyor, lutfen yeniden giris yapin');
+    }
+    return session;
+  },
+
+  _getRestBase: () => {
+    const sbUrl = import.meta.env.VITE_SUPABASE_URL as string;
+    const sbKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
+    if (!sbUrl || !sbKey) {
+      throw new Error('Supabase env ayarlari eksik');
+    }
+    return { sbUrl, sbKey };
+  },
+
+  add: async (
+    productId: string,
+    userId: string,
+    product?: { id?: string; name?: string; image?: string; category?: string }
+  ) => {
+    try {
+      // Keep UI/favorites screen responsive on mobile even if auth session calls stall.
+      favoritesAPI._upsertCacheFavorite(userId, productId, product);
+      // Idempotent insert: repeated taps should not fail with duplicate key errors.
+      const { data, error } = await supabase
+        .from('user_favorites')
+        .upsert(
+          { user_id: userId, product_id: productId },
+          { onConflict: 'user_id,product_id', ignoreDuplicates: true }
+        )
+        .select()
+        .maybeSingle();
+
+      if (error) throw error;
+      return data;
     } catch (error: any) {
       console.error('Add favorite error:', error);
       throw error;
@@ -2059,15 +2411,15 @@ export const favoritesAPI = {
 
   remove: async (productId: string, userId: string) => {
     try {
-      const { url, headers } = await favoritesAPI._getAuthHeaders();
-      const controller = new AbortController();
-      const tid = setTimeout(() => controller.abort(), 8000);
-      const resp = await fetch(
-        `${url}/rest/v1/user_favorites?user_id=eq.${userId}&product_id=eq.${productId}`,
-        { method: 'DELETE', headers, signal: controller.signal }
-      );
-      clearTimeout(tid);
-      if (!resp.ok) throw new Error(`Remove favorite failed: ${resp.status}`);
+      // Update cache first so favorites screen reflects intent immediately.
+      favoritesAPI._removeCacheFavorite(userId, productId);
+      const { error } = await supabase
+        .from('user_favorites')
+        .delete()
+        .eq('user_id', userId)
+        .eq('product_id', productId);
+
+      if (error) throw error;
       return true;
     } catch (error: any) {
       console.error('Remove favorite error:', error);
@@ -2077,53 +2429,109 @@ export const favoritesAPI = {
 
   isFavorited: async (productId: string, userId: string) => {
     try {
-      const { url, headers } = await favoritesAPI._getAuthHeaders();
-      const controller = new AbortController();
-      const tid = setTimeout(() => controller.abort(), 8000);
-      const resp = await fetch(
-        `${url}/rest/v1/user_favorites?select=id&user_id=eq.${userId}&product_id=eq.${productId}&limit=1`,
-        { headers, signal: controller.signal }
-      );
-      clearTimeout(tid);
-      if (!resp.ok) return false;
-      const rows = await resp.json().catch(() => []);
-      return Array.isArray(rows) && rows.length > 0;
+      const { data, error } = await supabase
+        .from('user_favorites')
+        .select('id')
+        .eq('user_id', userId)
+        .eq('product_id', productId)
+        .limit(1)
+        .maybeSingle();
+
+      if (error) return false;
+      return !!data?.id;
     } catch {
       return false;
     }
   },
 
+  isFavoritedStrict: async (productId: string, userId: string) => {
+    const { data, error } = await supabase
+      .from('user_favorites')
+      .select('id')
+      .eq('user_id', userId)
+      .eq('product_id', productId)
+      .limit(1)
+      .maybeSingle();
+
+    if (error) throw error;
+    return !!data?.id;
+  },
+
   getByUser: async (userId: string) => {
     try {
-      const { url, headers } = await favoritesAPI._getAuthHeaders();
-      const controller = new AbortController();
-      const tid = setTimeout(() => controller.abort(), 10000);
-      const resp = await fetch(
-        `${url}/rest/v1/user_favorites?select=*,product:products(*)&user_id=eq.${userId}&order=created_at.desc`,
-        { headers, signal: controller.signal }
-      );
-      clearTimeout(tid);
-      if (!resp.ok) return [];
-      return await resp.json().catch(() => []);
-    } catch {
-      return [];
+      const { data: favoriteRows, error: favoritesError } = await supabase
+        .from('user_favorites')
+        .select('id,product_id,created_at')
+        .eq('user_id', userId)
+        .order('created_at', { ascending: false });
+      if (favoritesError) throw favoritesError;
+
+      const rows = favoriteRows || [];
+      if (rows.length === 0) return [];
+
+      const productIds = [...new Set(rows.map((r: any) => r.product_id).filter(Boolean))];
+      if (productIds.length === 0) return rows;
+
+      const { data: products, error: productsError } = await supabase
+        .from('products')
+        .select('id,name,image,category')
+        .in('id', productIds);
+      if (productsError) {
+        console.error('Get favorites products lookup error:', productsError);
+        // Degrade gracefully: keep favorites visible even if product join fetch fails.
+        const fallbackRows = rows.map((row: any) => ({
+          ...row,
+          product: null,
+        }));
+        favoritesAPI._writeCache(userId, fallbackRows);
+        return fallbackRows;
+      }
+
+      const productMap = new Map((products || []).map((p: any) => [p.id, p]));
+      const mergedRows = rows.map((row: any) => ({
+        ...row,
+        product: productMap.get(row.product_id) || null,
+      }));
+      favoritesAPI._writeCache(userId, mergedRows);
+      return mergedRows;
+    } catch (error) {
+      console.error('Get favorites error:', error);
+      return favoritesAPI._readCache(userId);
     }
   },
 
-  toggle: async (productId: string, userId: string) => {
+  toggle: async (
+    productId: string,
+    userId: string,
+    product?: { id?: string; name?: string; image?: string; category?: string }
+  ) => {
     try {
-      const isFav = await favoritesAPI.isFavorited(productId, userId);
+      const isFav = await favoritesAPI.isFavoritedStrict(productId, userId);
       if (isFav) {
         await favoritesAPI.remove(productId, userId);
         return false;
       } else {
-        await favoritesAPI.add(productId, userId);
+        await favoritesAPI.add(productId, userId, product);
         return true;
       }
     } catch (error: any) {
       console.error('Toggle favorite error:', error);
       throw error;
     }
+  },
+
+  setFavoriteState: async (
+    productId: string,
+    userId: string,
+    shouldFavorite: boolean,
+    product?: { id?: string; name?: string; image?: string; category?: string }
+  ) => {
+    if (shouldFavorite) {
+      await favoritesAPI.add(productId, userId, product);
+      return true;
+    }
+    await favoritesAPI.remove(productId, userId);
+    return false;
   },
 };
 
@@ -2252,28 +2660,106 @@ export const pushTokensAPI = {
   upsert: async (userId: string, token: string, platform: 'ios' | 'android' | 'web') => {
     try {
       if (!userId || !token) return null;
-
-      const { data, error } = await supabase
-        .from('user_push_tokens')
-        .upsert(
-          {
-            user_id: userId,
-            token,
-            platform,
-            is_active: true,
-            last_seen_at: new Date().toISOString(),
-          },
-          {
-            onConflict: 'token',
-            ignoreDuplicates: false,
+      const extractAccessTokenFromUnknownShape = (value: any): string | null => {
+        try {
+          if (!value) return null;
+          if (typeof value === 'string') {
+            try {
+              const parsed = JSON.parse(value);
+              return extractAccessTokenFromUnknownShape(parsed);
+            } catch {
+              return null;
+            }
           }
-        )
+          if (Array.isArray(value)) {
+            for (const item of value) {
+              const tokenValue = extractAccessTokenFromUnknownShape(item);
+              if (tokenValue) return tokenValue;
+            }
+            return null;
+          }
+          if (typeof value === 'object') {
+            if (typeof (value as any).access_token === 'string') return (value as any).access_token;
+            if (typeof (value as any).currentSession?.access_token === 'string') return (value as any).currentSession.access_token;
+            for (const v of Object.values(value)) {
+              const tokenValue = extractAccessTokenFromUnknownShape(v);
+              if (tokenValue) return tokenValue;
+            }
+          }
+          return null;
+        } catch {
+          return null;
+        }
+      };
+
+      const resolveAccessTokenQuick = async (): Promise<string | null> => {
+        const direct = localStorage.getItem('authToken');
+        if (direct) return direct;
+        try {
+          for (let i = 0; i < localStorage.length; i++) {
+            const key = localStorage.key(i) || '';
+            if (!key.includes('auth-token') && !key.startsWith('sb-')) continue;
+            const raw = localStorage.getItem(key);
+            const parsedToken = extractAccessTokenFromUnknownShape(raw);
+            if (parsedToken) return parsedToken;
+          }
+        } catch {}
+        try {
+          const sessionResult = await Promise.race([
+            supabase.auth.getSession(),
+            new Promise<any>((resolve) => setTimeout(() => resolve(null), 1500)),
+          ]);
+          return (sessionResult as any)?.data?.session?.access_token || null;
+        } catch {
+          return null;
+        }
+      };
+
+      const payload = {
+        user_id: userId,
+        token,
+        platform,
+        is_active: true,
+        last_seen_at: new Date().toISOString(),
+      };
+
+      const upsertPromise = supabase
+        .from('user_push_tokens')
+        .upsert(payload, {
+          onConflict: 'token',
+          ignoreDuplicates: false,
+        })
         .select()
         .maybeSingle();
 
+      const { data, error } = await Promise.race([
+        upsertPromise,
+        new Promise<any>((resolve) => setTimeout(() => resolve({ data: null, error: new Error('push-token-upsert-timeout') }), 6000)),
+      ]);
+
       if (error) {
         console.error('❌ Push token upsert error:', error);
-        throw error;
+        // REST fallback for native session edge-cases.
+        const sbUrl = import.meta.env.VITE_SUPABASE_URL as string;
+        const sbKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
+        const authToken = await resolveAccessTokenQuick();
+        if (!sbUrl || !sbKey || !authToken) throw error;
+
+        const response = await fetch(`${sbUrl}/rest/v1/user_push_tokens`, {
+          method: 'POST',
+          headers: {
+            apikey: sbKey,
+            Authorization: `Bearer ${authToken}`,
+            'Content-Type': 'application/json',
+            Prefer: 'resolution=merge-duplicates,return=representation',
+          },
+          body: JSON.stringify(payload),
+        });
+        if (!response.ok) {
+          throw new Error(`Push token REST upsert failed: ${response.status}`);
+        }
+        const rows = await response.json().catch(() => []);
+        return Array.isArray(rows) ? rows[0] : null;
       }
 
       return data;

@@ -10,6 +10,7 @@ import { productsAPI, locationsAPI, pricesAPI } from '../../../services/supabase
 import { useAuth } from '../../../contexts/AuthContext';
 import { useGeolocation } from '../../../../src/hooks/useGeolocation';
 import { forwardGeocode } from '../../../utils/geocoding';
+import { supabase } from '../../../lib/supabase';
 
 const steps = ['product', 'price', 'location', 'photo', 'confirm'];
 
@@ -41,6 +42,7 @@ export default function AddPriceScreen() {
   }, [isMerchant, navigate]);
   const [currentStep, setCurrentStep] = useState(0);
   const [products, setProducts] = useState<Product[]>([]);
+  const [allProductsIndex, setAllProductsIndex] = useState<Product[]>([]);
   const [locations, setLocations] = useState<Location[]>([]);
   const [searchProductQuery, setSearchProductQuery] = useState('');
   const [searchLocationQuery, setSearchLocationQuery] = useState('');
@@ -58,6 +60,14 @@ export default function AddPriceScreen() {
     lng: null as number | null,
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const productsIndexCacheKey = `add-price-products-index:${user?.id || 'anon'}`;
+  const locationsCacheKey = `add-price-locations-index:${user?.id || 'anon'}`;
+  const withTimeout = async <T,>(promise: Promise<T>, ms: number, timeoutMessage: string): Promise<T> => {
+    return Promise.race([
+      promise,
+      new Promise<T>((_, reject) => setTimeout(() => reject(new Error(timeoutMessage)), ms)),
+    ]);
+  };
 
   const stepName = steps[currentStep];
 
@@ -80,17 +90,109 @@ export default function AddPriceScreen() {
 
   const loadProducts = async () => {
     try {
+      const sbUrl = import.meta.env.VITE_SUPABASE_URL as string;
+      const sbKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
+      if (sbUrl && sbKey) {
+        const controller = new AbortController();
+        const tid = setTimeout(() => controller.abort(), 15000);
+        const response = await fetch(
+          `${sbUrl}/rest/v1/products?select=id,name,category,image,is_active&order=name.asc&limit=2000`,
+          {
+            headers: {
+              apikey: sbKey,
+              Authorization: `Bearer ${sbKey}`,
+            },
+            signal: controller.signal,
+          }
+        );
+        clearTimeout(tid);
+        if (response.ok) {
+          const rows = await response.json().catch(() => []);
+          if (Array.isArray(rows) && rows.length > 0) {
+            setAllProductsIndex(rows);
+            setProducts(rows);
+            try {
+              localStorage.setItem(productsIndexCacheKey, JSON.stringify(rows));
+            } catch {}
+            return;
+          }
+        }
+      }
+
+      // Fallback to existing API path.
       const data = await productsAPI.getAll();
+      setAllProductsIndex(data);
       setProducts(data);
     } catch (error) {
       console.error('Failed to load products:', error);
     }
   };
 
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(productsIndexCacheKey);
+      if (!raw) return;
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        setAllProductsIndex(parsed);
+        setProducts(parsed);
+      }
+    } catch {}
+  }, [productsIndexCacheKey]);
+
   const loadLocations = async () => {
     try {
-      const data = await locationsAPI.getAll();
-      setLocations(data);
+      // 1) Restore cached locations immediately.
+      try {
+        const raw = localStorage.getItem(locationsCacheKey);
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            setLocations(parsed);
+          }
+        }
+      } catch {}
+
+      // 2) Primary: direct REST fetch (less likely to stall on auth/session edge cases).
+      const sbUrl = import.meta.env.VITE_SUPABASE_URL as string;
+      const sbKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
+      if (sbUrl && sbKey) {
+        const response = await withTimeout(
+          fetch(
+            `${sbUrl}/rest/v1/locations?select=id,name,type,coordinates&order=name.asc&limit=500`,
+            {
+              headers: {
+                apikey: sbKey,
+                Authorization: `Bearer ${sbKey}`,
+              },
+            }
+          ),
+          8000,
+          'locations-rest-timeout'
+        );
+        if (response && response.ok) {
+          const rows = await response.json().catch(() => []);
+          if (Array.isArray(rows) && rows.length > 0) {
+            setLocations(rows);
+            try {
+              localStorage.setItem(locationsCacheKey, JSON.stringify(rows));
+            } catch {}
+            return;
+          }
+        }
+      }
+
+      // 3) Secondary fallback: existing API method.
+      const data = await Promise.race([
+        locationsAPI.getAll(),
+        new Promise<Location[]>((resolve) => setTimeout(() => resolve([]), 8000)),
+      ]);
+      if (Array.isArray(data) && data.length > 0) {
+        setLocations(data);
+        try {
+          localStorage.setItem(locationsCacheKey, JSON.stringify(data));
+        } catch {}
+      }
     } catch (error) {
       console.error('Failed to load locations:', error);
     }
@@ -98,15 +200,39 @@ export default function AddPriceScreen() {
 
   const handleProductSearch = async (query: string) => {
     setSearchProductQuery(query);
-    if (query.trim()) {
-      try {
-        const results = await productsAPI.getAll(query);
-        setProducts(results);
-      } catch (error) {
-        console.error('Product search error:', error);
-      }
+    const q = query.trim();
+    if (q) {
+      const normalizeTR = (value: string) =>
+        String(value || '')
+          .toLowerCase()
+          .replace(/ı/g, 'i')
+          .replace(/İ/g, 'i')
+          .replace(/ş/g, 's')
+          .replace(/ğ/g, 'g')
+          .replace(/ü/g, 'u')
+          .replace(/ö/g, 'o')
+          .replace(/ç/g, 'c')
+          .trim();
+      const qn = normalizeTR(q);
+      const score = (p: any) => {
+        const n = normalizeTR(p?.name || '');
+        const c = normalizeTR(p?.category || '');
+        if (n === qn) return 100;
+        if (n.startsWith(qn)) return 80;
+        if (n.split(/\s+/).some((w) => w.startsWith(qn))) return 60;
+        if (n.includes(qn)) return 40;
+        if (c.includes(qn)) return 20;
+        return -1;
+      };
+
+      const source = allProductsIndex.length > 0 ? allProductsIndex : products;
+      const filtered = source
+        .filter((p: any) => score(p) >= 0)
+        .sort((a: any, b: any) => score(b) - score(a))
+        .slice(0, 200);
+      setProducts(filtered);
     } else {
-      loadProducts();
+      setProducts(allProductsIndex.length > 0 ? allProductsIndex : products);
     }
   };
 
@@ -174,25 +300,11 @@ export default function AddPriceScreen() {
     try {
       setIsSubmitting(true);
 
-      // Get coordinates - prefer formData, fallback to geolocation
-      let lat = formData.lat;
-      let lng = formData.lng;
-      
-      // If coordinates not available from selected location, try to get from browser geolocation
-      if (!lat || !lng) {
-        try {
-          const position = await getCurrentPosition();
-          if (position) {
-            lat = position.latitude;
-            lng = position.longitude;
-            console.log('📍 Got coordinates from geolocation:', { lat, lng });
-          }
-        } catch (error) {
-          console.log('⚠️ Geolocation not available, continuing without coordinates');
-        }
-      } else {
-        console.log('📍 Using coordinates from selected location:', { lat, lng });
-      }
+      // Never block submit on geolocation here.
+      // Prefer selected-location coordinates; otherwise use safe default.
+      const lat = formData.lat || 37.8667;
+      const lng = formData.lng || 32.4833;
+      console.log('📍 Submit coordinates:', { lat, lng, source: formData.lat && formData.lng ? 'selected-location' : 'default' });
 
       console.log('📤 Submitting price:', {
         product: formData.productId,
@@ -209,15 +321,29 @@ export default function AddPriceScreen() {
         user: user?.id,
       });
 
-      const result = await pricesAPI.create({
-        product: formData.productId,
-        price: parseFloat(formData.price),
-        unit: formData.unit,
-        location: formData.locationId,
-        photo: formData.photo || undefined,
-        lat: lat || undefined,
-        lng: lng || undefined,
-      });
+      const result = await Promise.race([
+        (async () => {
+          const sessionRes = await Promise.race([
+            supabase.auth.getSession(),
+            new Promise<any>((resolve) => setTimeout(() => resolve(null), 1500)),
+          ]);
+          const accessToken = (sessionRes as any)?.data?.session?.access_token;
+          return pricesAPI.create({
+          product: formData.productId,
+          price: parseFloat(formData.price),
+          unit: formData.unit,
+          location: formData.locationId,
+          userId: user.id,
+          accessToken,
+          photo: formData.photo || undefined,
+          lat,
+          lng,
+        });
+        })(),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('price-submit-timeout')), 15000)
+        ),
+      ]) as any;
 
       console.log('✅ Price created successfully:', result.id || result._id);
 
@@ -236,7 +362,7 @@ export default function AddPriceScreen() {
       
       // Small delay before navigation to ensure toast is visible
       setTimeout(() => {
-        navigate('/app/explore');
+        navigate('/app/explore?refresh=1');
       }, 500);
     } catch (error: any) {
       console.error('❌ Submit error:', error);
@@ -250,6 +376,9 @@ export default function AddPriceScreen() {
       let errorMessage = 'Fiyat paylaşılırken bir hata oluştu';
       
       if (error.message) {
+        if (error.message.includes('price-submit-timeout')) {
+          errorMessage = 'Sunucu gecikiyor. Islem zaman asimina ugradi, lutfen tekrar deneyin.';
+        } else
         // Supabase specific errors
         if (error.message.includes('row-level security') || error.message.includes('RLS')) {
           errorMessage = 'Yetki hatası. Lütfen tekrar giriş yapın.';
@@ -277,6 +406,17 @@ export default function AddPriceScreen() {
       setIsSubmitting(false);
     }
   };
+
+  // Safety valve: if submit pipeline hangs unexpectedly, release button state.
+  useEffect(() => {
+    if (!isSubmitting) return;
+    const timer = setTimeout(() => {
+      console.warn('AddPrice submit exceeded safety threshold, resetting submit state.');
+      setIsSubmitting(false);
+      toast.warning('Islem beklenenden uzun surdu. Lutfen tekrar deneyin.');
+    }, 20000);
+    return () => clearTimeout(timer);
+  }, [isSubmitting]);
 
   const handleBack = () => {
     if (currentStep > 0) {
@@ -315,7 +455,11 @@ export default function AddPriceScreen() {
         toast.info('Konum tespit ediliyor...', { duration: 2000 });
         
         try {
-          const geocodeResult = await forwardGeocode(name);
+          const geocodeResult = await withTimeout(
+            forwardGeocode(name),
+            8000,
+            'Konum tespiti zaman asimina ugradi'
+          );
           
           if (geocodeResult.success && geocodeResult.lat && geocodeResult.lng) {
             finalLat = geocodeResult.lat;
@@ -352,12 +496,16 @@ export default function AddPriceScreen() {
       
       console.log('📍 Creating location with coordinates:', { name, lat: finalLat, lng: finalLng });
       
-      const location = await locationsAPI.create({
-        name,
-        type: 'diğer',
-        lat: finalLat!,
-        lng: finalLng!,
-      });
+      const location = await withTimeout(
+        locationsAPI.create({
+          name,
+          type: 'diğer',
+          lat: finalLat!,
+          lng: finalLng!,
+        }),
+        10000,
+        'Konum olusturma zaman asimina ugradi'
+      );
       
       setFormData({
         ...formData,
@@ -369,36 +517,94 @@ export default function AddPriceScreen() {
       
       toast.success('Konum oluşturuldu');
       setCurrentStep(currentStep + 1);
+      return true;
     } catch (error: any) {
       console.error('❌ Create location error:', error);
+
+      // Fallback: use an existing location so flow never gets stuck.
+      try {
+        const fallbackLocations = await Promise.race([
+          locationsAPI.getAll(),
+          new Promise<Location[]>((resolve) => setTimeout(() => resolve([]), 6000)),
+        ]);
+        const bestFallback =
+          (fallbackLocations || []).find((loc: any) =>
+            String(loc?.name || '').toLowerCase().includes('konum')
+          ) || (fallbackLocations || [])[0];
+
+        if (bestFallback?.id) {
+          setFormData({
+            ...formData,
+            locationId: bestFallback.id,
+            locationName: bestFallback.name,
+            lat: finalLat || null,
+            lng: finalLng || null,
+          });
+          toast.warning('Konum servisi yavas. Mevcut bir konum secildi.');
+          setCurrentStep(currentStep + 1);
+          return true;
+        }
+      } catch (fallbackError) {
+        console.warn('Location fallback failed:', fallbackError);
+      }
+
       toast.error(error.message || 'Konum oluşturulamadı');
+      return false;
     }
   };
 
   const handleUseCurrentLocation = async () => {
     try {
       setIsGettingLocation(true);
-      const position = await getCurrentPosition();
-      
+      const position = await Promise.race([
+        getCurrentPosition(),
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), 5000)),
+      ]);
+
+      // Never block on location-create network calls here.
+      // Pick an existing location immediately and continue flow.
+      let sourceLocations = locations;
+      if (!sourceLocations || sourceLocations.length === 0) {
+        try {
+          // Retry loader once when current list is empty.
+          await loadLocations();
+          sourceLocations = locations;
+          if (!sourceLocations || sourceLocations.length === 0) {
+            const raw = localStorage.getItem(locationsCacheKey);
+            if (raw) {
+              const parsed = JSON.parse(raw);
+              if (Array.isArray(parsed)) sourceLocations = parsed;
+            }
+          }
+        } catch {
+          sourceLocations = [];
+        }
+      }
+
+      const picked = (sourceLocations || [])[0];
+      if (!picked?.id) {
+        toast.error('Konum listesi yuklenemedi, lutfen tekrar deneyin.');
+        return;
+      }
+
+      const lat = position?.latitude || 37.8667;
+      const lng = position?.longitude || 32.4833;
+      setFormData({
+        ...formData,
+        locationId: picked.id,
+        locationName: picked.name,
+        lat,
+        lng,
+      });
+      setCurrentStep(currentStep + 1);
       if (position) {
-        const { latitude, longitude } = position;
-        
-        // Create location name from coordinates or use a default name
-        const locationName = `Mevcut Konum (${latitude.toFixed(4)}, ${longitude.toFixed(4)})`;
-        
-        // Try to find existing location nearby (within 100m)
-        // For now, create a new location
-        await createLocation('Mevcut Konum', latitude, longitude);
-        
-        toast.success('Mevcut konum alındı');
+        toast.success('Mevcut konum alindi');
       } else {
-        await createLocation('Mevcut Konum', 37.8667, 32.4833);
-        toast.warning('Konum servisi yanit vermedi, Konya merkezi kullanildi.');
+        toast.warning('Konum servisi yavas, kayitli konum ile devam edildi');
       }
     } catch (error: any) {
       console.error('Location error:', error);
-      await createLocation('Mevcut Konum', 37.8667, 32.4833);
-      toast.warning('Konum hatasi nedeniyle varsayilan konum kullanildi.');
+      toast.warning('Konum hatasi, kayitli konum ile devam edin.');
     } finally {
       setIsGettingLocation(false);
     }

@@ -73,6 +73,7 @@ export default function ExploreScreen() {
     prices: Price[];
     locations: any[];
   } | null>(null);
+  const [allProductsIndex, setAllProductsIndex] = useState<Product[]>([]);
   const [isSearching, setIsSearching] = useState(false);
   const [trendProducts, setTrendProducts] = useState<Product[]>([]);
   const [nearbyCheapest, setNearbyCheapest] = useState<Price[]>([]);
@@ -84,6 +85,8 @@ export default function ExploreScreen() {
   const [pullDistance, setPullDistance] = useState(0);
   const touchStartY = useRef<number | null>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const searchReqSeqRef = useRef(0);
+  const forceDirectRef = useRef(false);
   const headerRef = useRef<HTMLDivElement | null>(null);
   const heroRef = useRef<HTMLDivElement | null>(null);
   const channelRef = useRef<any>(null);
@@ -98,6 +101,7 @@ export default function ExploreScreen() {
   const [isGettingLocation, setIsGettingLocation] = useState(false);
   const [userLocation, setUserLocation] = useState<{ lat: number; lng: number } | null>(null);
   const exploreCacheKey = `explore-cache:${user?.id || 'anon'}`;
+  const productsIndexCacheKey = `products-search-index:${user?.id || 'anon'}`;
   const [filters, setFilters] = useState({
     pazar: false,
     manav: false,
@@ -213,10 +217,66 @@ export default function ExploreScreen() {
     }
   }, [exploreCacheKey]);
 
+  useEffect(() => {
+    let mounted = true;
+    try {
+      const raw = localStorage.getItem(productsIndexCacheKey);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          setAllProductsIndex(parsed);
+        }
+      }
+    } catch (e) {
+      console.warn('Failed to restore products search index cache:', e);
+    }
+
+    const loadProductsIndex = async () => {
+      try {
+        const sbUrl = import.meta.env.VITE_SUPABASE_URL as string;
+        const sbKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
+        if (!sbUrl || !sbKey) return;
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 20000);
+        const response = await fetch(
+          `${sbUrl}/rest/v1/products?select=id,name,category,image,is_active&order=name.asc&limit=2000`,
+          {
+            headers: {
+              apikey: sbKey,
+              Authorization: `Bearer ${sbKey}`,
+            },
+            signal: controller.signal,
+          }
+        );
+        clearTimeout(timer);
+        if (!response.ok) return;
+        const rows = await response.json().catch(() => []);
+        if (!mounted || !Array.isArray(rows)) return;
+        if (rows.length > 0) {
+          setAllProductsIndex(rows as Product[]);
+          try {
+            localStorage.setItem(productsIndexCacheKey, JSON.stringify(rows));
+          } catch {}
+        }
+      } catch (e) {
+        console.warn('Failed to load products search index:', e);
+      }
+    };
+
+    loadProductsIndex();
+    return () => {
+      mounted = false;
+    };
+  }, [productsIndexCacheKey]);
+
 
   // Check for search query in URL on mount
   useEffect(() => {
     const urlQuery = searchParams.get('search');
+    const refreshFlag = searchParams.get('refresh');
+    if (refreshFlag === '1') {
+      forceDirectRef.current = true;
+    }
     if (urlQuery) {
       setSearchQuery(urlQuery);
       performSearch(urlQuery);
@@ -321,7 +381,7 @@ export default function ExploreScreen() {
 
   // Define loadData function before using it in useEffect
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  const loadData = useCallback(async (isRefresh = false) => {
+  const loadData = useCallback(async (isRefresh = false, forceDirect = false) => {
     // Set loading state immediately
     if (isRefresh) {
       setIsRefreshing(true);
@@ -330,6 +390,10 @@ export default function ExploreScreen() {
     }
     
     console.log('🔄 Loading data...');
+    const shouldForceDirect = forceDirect || forceDirectRef.current;
+    if (shouldForceDirect) {
+      forceDirectRef.current = false; // one-shot bypass after add-price redirect
+    }
     
     const hasRenderableData = () =>
       trendProducts.length > 0 ||
@@ -348,7 +412,7 @@ export default function ExploreScreen() {
 
     try {
       // Primary source: server-side feed (service-role) to avoid client-side RLS/join issues.
-      try {
+      if (!shouldForceDirect) try {
         const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string;
         const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
         let feedData: any = null;
@@ -365,7 +429,7 @@ export default function ExploreScreen() {
                 apikey: supabaseAnonKey,
                 Authorization: `Bearer ${supabaseAnonKey}`,
               },
-              body: JSON.stringify({ limitRecent: 20, limitTrending: 12, limitShops: 20 }),
+              body: JSON.stringify({ limitRecent: 6, limitTrending: 6, limitShops: 20 }),
               signal: controller.signal,
             });
             clearTimeout(timer);
@@ -384,7 +448,7 @@ export default function ExploreScreen() {
         if (!feedData?.ok) {
           const invokeRes = await Promise.race([
             supabase.functions.invoke('explore-feed', {
-              body: { limitRecent: 20, limitTrending: 12, limitShops: 20 },
+              body: { limitRecent: 6, limitTrending: 6, limitShops: 20 },
             }),
             new Promise<any>((_, reject) => setTimeout(() => reject(new Error('explore-feed invoke timeout')), 10000)),
           ]) as any;
@@ -1166,32 +1230,97 @@ export default function ExploreScreen() {
   };
 
   const performSearch = async (query: string) => {
-    if (!query.trim()) {
+    const normalized = query.trim().toLowerCase();
+    if (!normalized) {
+      searchReqSeqRef.current += 1;
       setSearchResults(null);
       setSearchParams({});
       return;
     }
-    
+
+    const trNormalize = (value: string) =>
+      (value || '')
+        .toLowerCase()
+        .replace(/ı/g, 'i')
+        .replace(/İ/g, 'i')
+        .replace(/ş/g, 's')
+        .replace(/ğ/g, 'g')
+        .replace(/ü/g, 'u')
+        .replace(/ö/g, 'o')
+        .replace(/ç/g, 'c');
+    const qn = trNormalize(normalized);
+    const getNameScore = (name: string, category?: string) => {
+      const n = trNormalize(name || '');
+      const c = trNormalize(category || '');
+      if (n && n === qn) return 100;
+      if (n && n.startsWith(qn)) return 80;
+      if (n && n.split(/\s+/).some((w) => w.startsWith(qn))) return 60;
+      if (n && n.includes(qn)) return 40;
+      if (c && c.includes(qn)) return 20;
+      return -1;
+    };
+
+    // Instant local fallback so "character-by-character" search always renders quickly.
+    const localProductsMap = new Map<string, Product>();
+    [...allProductsIndex, ...trendProducts, ...recentPrices.map((p: any) => p?.product).filter(Boolean)].forEach((p: any) => {
+      const pid = p?.id || p?._id;
+      if (!pid) return;
+      const score = getNameScore(p?.name || '', p?.category || '');
+      if (score >= 0) {
+        localProductsMap.set(pid, p);
+      }
+    });
+    const localProducts = Array.from(localProductsMap.values())
+      .sort((a: any, b: any) => getNameScore(b?.name || '', b?.category || '') - getNameScore(a?.name || '', a?.category || ''))
+      .slice(0, 10);
+    const localPrices = (recentPrices || [])
+      .filter((p: any) => {
+        const score = getNameScore(p?.product?.name || '', p?.product?.category || '');
+        return score >= 0;
+      })
+      .sort((a: any, b: any) => getNameScore(b?.product?.name || '', b?.product?.category || '') - getNameScore(a?.product?.name || '', a?.product?.category || ''))
+      .slice(0, 20);
+    const localLocations = localPrices
+      .map((p: any) => p?.location)
+      .filter((l: any) => !!l?.id)
+      .filter((l: any, idx: number, arr: any[]) => arr.findIndex((x) => x.id === l.id) === idx)
+      .slice(0, 10);
+
+    setSearchResults({
+      products: localProducts,
+      prices: localPrices as any,
+      locations: localLocations,
+    });
+    setSearchParams({ search: query });
+
+    const reqSeq = ++searchReqSeqRef.current;
     try {
       setIsSearching(true);
       const results = await searchAPI.search(query, 'all');
-      const hasMatches =
-        (results?.products?.length || 0) > 0 ||
-        (results?.prices?.length || 0) > 0 ||
-        (results?.locations?.length || 0) > 0;
-      if (hasMatches) {
-        setSearchResults(results);
-        setSearchParams({ search: query });
-      } else {
-        // Do not trap the screen in an empty-search state; keep showing normal feed.
-        setSearchResults(null);
-        setSearchParams({});
-      }
+      if (reqSeq !== searchReqSeqRef.current) return;
+      // DB results are the source of truth (search across full product database).
+      const rankedProducts = Array.from(results?.products || [])
+        .filter((p: any) => getNameScore(p?.name || '', p?.category || '') >= 0)
+        .sort((a: any, b: any) => getNameScore(b?.name || '', b?.category || '') - getNameScore(a?.name || '', a?.category || ''))
+        .slice(0, 120);
+      const rankedPrices = Array.from(results?.prices || [])
+        .filter((p: any) => getNameScore(p?.product?.name || '', p?.product?.category || '') >= 0)
+        .sort((a: any, b: any) => getNameScore(b?.product?.name || '', b?.product?.category || '') - getNameScore(a?.product?.name || '', a?.product?.category || ''))
+        .slice(0, 20);
+      const remoteLocations = Array.from(results?.locations || []).slice(0, 10);
+
+      setSearchResults({
+        products: rankedProducts,
+        prices: rankedPrices,
+        locations: remoteLocations,
+      });
+      setSearchParams({ search: query });
     } catch (error: any) {
+      if (reqSeq !== searchReqSeqRef.current) return;
       console.error('Search error:', error);
-      toast.error(error.message || 'Arama yapılırken bir hata oluştu');
-      setSearchResults(null);
+      // Keep local results instead of collapsing the UI on transient API failures.
     } finally {
+      if (reqSeq !== searchReqSeqRef.current) return;
       setIsSearching(false);
     }
   };
@@ -1208,6 +1337,7 @@ export default function ExploreScreen() {
         });
       } else {
         // Clear results immediately when query is empty
+        searchReqSeqRef.current += 1;
         setSearchResults(null);
         setSearchParams({});
       }
@@ -1228,6 +1358,7 @@ export default function ExploreScreen() {
   };
 
   const clearSearch = () => {
+    searchReqSeqRef.current += 1;
     setSearchQuery('');
     setSearchResults(null);
     setSearchParams({});
@@ -1456,10 +1587,10 @@ export default function ExploreScreen() {
         {/* Trend Products - En üste taşındı */}
         {!searchResults && (
           <section>
-            <h2 className="text-base sm:text-lg mb-0 sm:mb-0 text-gray-900 font-semibold">{t('TREND_TITLE')}</h2>
+            <h2 className="text-base sm:text-lg mb-0 sm:mb-0 text-gray-900 font-semibold">Bugun En Cok Bakilanlar</h2>
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-2 sm:gap-3">
               {trendProducts.length > 0 ? (
-                trendProducts.slice(0, 12).map((product) => (
+                trendProducts.slice(0, 6).map((product) => (
                   <div
                     key={product.id || product._id}
                     onClick={() => navigate(`/app/product/${product.id || product._id}`)}
@@ -1511,10 +1642,10 @@ export default function ExploreScreen() {
                 Temizle
               </Button>
             </div>
+            {isSearching && (
+              <div className="text-sm text-gray-500">Araniyor...</div>
+            )}
 
-            {isSearching ? (
-                <div className="text-center py-8 text-gray-500">{t('SEARCHING')}</div>
-            ) : (
               <>
                 {/* Products Results */}
                 {searchResults.products.length > 0 && (
@@ -1761,12 +1892,11 @@ export default function ExploreScreen() {
                   </div>
                 )}
               </>
-            )}
           </div>
         )}
 
         {/* Normal Content (when not searching) */}
-        {(!searchResults || (!isSearching && !hasSearchMatches)) && (
+        {!searchQuery.trim() && (
           <>
             {isLoading && !hasAnyData ? (
               <div className="text-center py-8 text-gray-500">{t('LOADING')}</div>
@@ -1814,7 +1944,7 @@ export default function ExploreScreen() {
               <h2 className="text-base sm:text-lg mb-2 sm:mb-3 text-gray-900 font-semibold">Son Eklenen Fiyatlar</h2>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 {recentPrices.length > 0 ? (
-                  recentPrices.slice(0, 8).map((item) => {
+                  recentPrices.slice(0, 6).map((item) => {
                     if (!item) return null;
                     const productName =
                       item.product?.name ||

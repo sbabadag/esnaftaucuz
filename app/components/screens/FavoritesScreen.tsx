@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ArrowLeft, Heart, Package, Trash2 } from 'lucide-react';
 import { Button } from '../ui/button';
@@ -16,7 +16,7 @@ interface Favorite {
     name: string;
     image?: string;
     category?: string;
-  };
+  } | null;
 }
 
 export default function FavoritesScreen() {
@@ -26,39 +26,92 @@ export default function FavoritesScreen() {
   const [favorites, setFavorites] = useState<Favorite[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [removingIds, setRemovingIds] = useState<Set<string>>(new Set());
+  const loadSeqRef = useRef(0);
 
   useEffect(() => {
-    if (user) {
-      loadFavorites();
+    if (user?.id) {
+      loadFavorites(user.id);
     }
-  }, [user]);
+  }, [user?.id]);
 
-  const loadFavorites = async () => {
-    if (!user) return;
+  const loadFavorites = async (userId: string) => {
+    if (!userId) return;
+    const seq = ++loadSeqRef.current;
 
     try {
       setIsLoading(true);
-      const data = await favoritesAPI.getByUser(user.id);
-      setFavorites(data as Favorite[]);
+      const cachedRows: Favorite[] = (favoritesAPI as any)._readCache
+        ? (favoritesAPI as any)._readCache(userId)
+        : [];
+
+      // Render cache immediately to avoid long blank/loading states.
+      if (seq !== loadSeqRef.current) return;
+      setFavorites(cachedRows);
+      setIsLoading(false);
+
+      // Refresh from remote in background; never block UI.
+      Promise.race([
+        favoritesAPI.getByUser(userId),
+        new Promise<Favorite[]>((_, reject) =>
+          setTimeout(() => reject(new Error('favorites remote-timeout')), 8000)
+        ),
+      ])
+        .then((data) => {
+          if (seq !== loadSeqRef.current) return;
+          const rows = (data || []) as Favorite[];
+          setFavorites(rows);
+        })
+        .catch((error: any) => {
+          if (seq !== loadSeqRef.current) return;
+          console.warn('Favorites remote refresh warning:', error?.message || 'remote-fail');
+        });
+      return;
     } catch (error: any) {
+      if (seq !== loadSeqRef.current) return;
       console.error('Failed to load favorites:', error);
       toast.error(t('FAVORITES_LOAD_ERROR'));
     } finally {
+      if (seq !== loadSeqRef.current) return;
       setIsLoading(false);
     }
   };
 
+  // Safety valve: if loading somehow gets stuck, release spinner quietly.
+  useEffect(() => {
+    if (!isLoading) return;
+    const timer = setTimeout(() => {
+      console.warn('Favorites load exceeded safety threshold, ending loading state.');
+      setIsLoading(false);
+    }, 25000);
+    return () => clearTimeout(timer);
+  }, [isLoading]);
+
   const handleRemoveFavorite = async (productId: string) => {
     if (!user) return;
 
-      try {
+    const previousFavorites = favorites;
+    try {
       setRemovingIds(prev => new Set(prev).add(productId));
-      await favoritesAPI.remove(productId, user.id);
+      // Optimistic remove: keep UI responsive even if remote delete is slow.
       setFavorites(prev => prev.filter(fav => fav.product_id !== productId));
-        toast.success(t('FAVORITE_REMOVED'));
+      await Promise.race([
+        favoritesAPI.remove(productId, user.id),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('favorite remove timeout')), 8000)
+        ),
+      ]);
+      setFavorites(prev => prev.filter(fav => fav.product_id !== productId));
+      toast.success(t('FAVORITE_REMOVED'));
     } catch (error: any) {
       console.error('Failed to remove favorite:', error);
+      if (String(error?.message || '').includes('timeout')) {
+        // Keep optimistic state when timeout occurs; cache has already been updated.
+        toast.warning('Silme islemi gonderildi, dogrulama gecikiyor');
+      } else {
+        // Non-timeout failure: rollback optimistic UI.
+        setFavorites(previousFavorites);
         toast.error(t('FAVORITE_REMOVE_ERROR'));
+      }
     } finally {
       setRemovingIds(prev => {
         const newSet = new Set(prev);
@@ -133,10 +186,10 @@ export default function FavoritesScreen() {
                     className="w-16 h-16 rounded-lg bg-gray-100 flex items-center justify-center flex-shrink-0 overflow-hidden cursor-pointer"
                     onClick={() => navigate(`/app/product/${favorite.product_id}`)}
                   >
-                    {favorite.product.image ? (
+                    {favorite.product?.image ? (
                       <img
                         src={favorite.product.image}
-                        alt={favorite.product.name}
+                        alt={favorite.product?.name || 'Product'}
                         className="w-full h-full object-cover"
                         onError={(e) => {
                           (e.target as HTMLImageElement).style.display = 'none';
@@ -144,7 +197,7 @@ export default function FavoritesScreen() {
                         }}
                       />
                     ) : null}
-                    <Package className={`w-8 h-8 text-gray-400 ${favorite.product.image ? 'hidden' : ''}`} />
+                    <Package className={`w-8 h-8 text-gray-400 ${favorite.product?.image ? 'hidden' : ''}`} />
                   </div>
 
                   {/* Product Info */}
@@ -153,9 +206,9 @@ export default function FavoritesScreen() {
                     onClick={() => navigate(`/app/product/${favorite.product_id}`)}
                   >
                     <h3 className="font-semibold text-gray-900 mb-1">
-                      {favorite.product.name}
+                      {favorite.product?.name || (String(favorite.id || '').startsWith('local-') ? 'Urun bilgisi yukleniyor...' : 'Silinmis urun')}
                     </h3>
-                    {favorite.product.category && (
+                    {favorite.product?.category && (
                       <p className="text-sm text-gray-500">{favorite.product.category}</p>
                     )}
                     <p className="text-xs text-gray-400 mt-1">

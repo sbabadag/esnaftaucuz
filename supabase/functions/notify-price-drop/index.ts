@@ -75,9 +75,14 @@ Deno.serve(async (req) => {
 
     const candidateUserIds = Array.from(
       new Set(
-        (favoritesRows || [])
-          .map((row: any) => row?.user_id)
-          .filter((id: any) => typeof id === 'string' && id.length > 0),
+        [
+          ...(favoritesRows || [])
+            .map((row: any) => row?.user_id)
+            .filter((id: any) => typeof id === 'string' && id.length > 0),
+          // Ensure the reporting user can also receive the drop notification
+          // (useful when web and mobile are the same account).
+          String(priceRow.user_id || ''),
+        ].filter((id) => typeof id === 'string' && id.length > 0),
       ),
     );
 

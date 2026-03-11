@@ -2,6 +2,10 @@
 
 A community-driven price sharing application where users can share and discover product prices from local markets and stores.
 
+## Quick Links
+
+- Mobile OAuth checklist: `MOBILE_OAUTH_CHECKLIST.md`
+
 ## Features
 
 - 🔍 Search and browse product prices
@@ -79,6 +83,9 @@ npm run mobile:build
 npm run mobile:ios      # Opens Xcode (Mac only)
 npm run mobile:android # Opens Android Studio
 ```
+
+3. **Google OAuth troubleshooting checklist:**
+   - See `MOBILE_OAUTH_CHECKLIST.md`
 
 ## Project Structure
 

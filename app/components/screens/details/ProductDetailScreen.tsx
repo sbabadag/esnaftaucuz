@@ -94,10 +94,11 @@ export default function ProductDetailScreen() {
     }
 
     try {
-      const favorited = await favoritesAPI.isFavorited(id, user.id);
+      const favorited = await favoritesAPI.isFavoritedStrict(id, user.id);
       setIsFavorited(favorited);
     } catch (error) {
       console.error('Failed to check favorite status:', error);
+      // Keep current UI state when read fails (do not force gray).
     }
   };
 
@@ -115,7 +116,7 @@ export default function ProductDetailScreen() {
           event: '*', // INSERT, UPDATE, DELETE
           schema: 'public',
           table: 'prices',
-          filter: `product=eq.${id}`, // Only listen to prices for this product
+          filter: `product_id=eq.${id}`, // Only listen to prices for this product
         },
         (payload) => {
           console.log('🔴 Realtime event for product:', payload.eventType, payload);
@@ -296,14 +297,24 @@ export default function ProductDetailScreen() {
 
     if (!id) return;
 
+    const previousStatus = isFavorited;
     try {
       setIsTogglingFavorite(true);
-      const newStatus = await favoritesAPI.toggle(id, user.id);
+      // Optimistic UI feedback so the tap is immediately visible.
+      const desiredStatus = !previousStatus;
+      setIsFavorited(desiredStatus);
+      const newStatus = await favoritesAPI.setFavoriteState(id, user.id, desiredStatus, {
+        id,
+        name: product?.name,
+        image: product?.image,
+        category: product?.category,
+      });
       setIsFavorited(newStatus);
-      toast.success(newStatus ? 'Favorilere eklendi' : 'Favorilerden kaldırıldı');
+      toast.success(newStatus ? 'Favorilere eklendi' : 'Favorilerden kaldirildi');
     } catch (error: any) {
       console.error('Failed to toggle favorite:', error);
-      toast.error('İşlem başarısız oldu');
+      setIsFavorited(previousStatus);
+      toast.error(String(error?.message || 'Islem basarisiz oldu'));
     } finally {
       setIsTogglingFavorite(false);
     }
@@ -505,12 +516,12 @@ export default function ProductDetailScreen() {
               disabled={isTogglingFavorite}
               className={`p-2 rounded-full transition-colors flex-shrink-0 ${
                 isFavorited
-                  ? 'text-red-600 bg-red-50 hover:bg-red-100'
+                  ? 'text-white bg-red-500 hover:bg-red-600'
                   : 'text-gray-400 hover:bg-gray-100'
               }`}
               aria-label={isFavorited ? 'Favorilerden kaldır' : 'Favorilere ekle'}
             >
-              <Heart className={`w-5 h-5 ${isFavorited ? 'fill-current' : ''}`} />
+              <Heart className={`w-5 h-5 transition-all ${isFavorited ? 'fill-current scale-110' : ''}`} />
             </button>
           )}
         </div>

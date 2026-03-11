@@ -6,6 +6,7 @@ import AddPriceScreen from './tabs/AddPriceScreen';
 import ProfileScreen from './tabs/ProfileScreen';
 import ProductDetailScreen from './details/ProductDetailScreen';
 import LocationDetailScreen from './details/LocationDetailScreen';
+import FavoritesScreen from './FavoritesScreen';
 import NotificationsScreen from './NotificationsScreen';
 import SettingsScreen from './SettingsScreen';
 import ContributionsScreen from './ContributionsScreen';
@@ -13,6 +14,10 @@ import MerchantShopScreen from './MerchantShopScreen';
 import { useState, useEffect } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
 import { supabase } from '../../lib/supabase';
+import { Capacitor } from '@capacitor/core';
+import { FirebaseMessaging, Importance } from '@capacitor-firebase/messaging';
+import { registerWebPushAndGetToken } from '../../lib/web-push';
+import { pushTokensAPI } from '../../services/supabase-api';
 
 // Regular user tabs
 const regularTabs = [
@@ -104,6 +109,59 @@ export default function MainApp() {
       navigate('/app/explore', { replace: true });
     }
   }, [isMerchant, location.pathname, navigate]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const registerPush = async () => {
+      if (!user?.id) return;
+      const platform = Capacitor.getPlatform();
+      const isNative = Capacitor.isNativePlatform();
+      const markerKey = `push_registered:${platform}:${user.id}`;
+      if (!isNative && localStorage.getItem(markerKey) === 'true') return;
+      try {
+        if (isNative) {
+          await FirebaseMessaging.createChannel({
+            id: 'price_alerts',
+            name: 'Fiyat Bildirimleri',
+            description: 'Fiyat dususleri ve onemli bildirimler',
+            importance: Importance.High,
+            vibration: true,
+          });
+
+          const permissions = await Promise.race([
+            FirebaseMessaging.requestPermissions(),
+            new Promise<any>((resolve) => setTimeout(() => resolve(null), 5000)),
+          ]);
+          const receive = String(permissions?.receive || '').toLowerCase();
+          if (receive === 'denied' || cancelled) return;
+
+          const tokenResult = await Promise.race([
+            FirebaseMessaging.getToken(),
+            new Promise<any>((resolve) => setTimeout(() => resolve(null), 6000)),
+          ]);
+          const token = tokenResult?.token;
+          if (!token || cancelled) return;
+
+          await pushTokensAPI.upsert(user.id, token, platform === 'ios' ? 'ios' : 'android');
+        } else {
+          const token = await registerWebPushAndGetToken();
+          if (!token || cancelled) return;
+          await pushTokensAPI.upsert(user.id, token, 'web');
+        }
+
+        if (cancelled) return;
+        if (!isNative) {
+          localStorage.setItem(markerKey, 'true');
+        }
+      } catch (error) {
+        console.warn('Push token registration skipped:', error);
+      }
+    };
+    registerPush();
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.id]);
   
   // Debug: Log tabs
   useEffect(() => {
@@ -175,6 +233,7 @@ export default function MainApp() {
           <Route path="profile" element={<ProfileScreen />} />
           <Route path="product/:id" element={<ProductDetailScreen />} />
           <Route path="location/:id" element={<LocationDetailScreen />} />
+          <Route path="favorites" element={<FavoritesScreen />} />
           <Route path="notifications" element={<NotificationsScreen />} />
           <Route path="settings" element={<SettingsScreen />} />
           <Route path="contributions" element={<ContributionsScreen />} />
