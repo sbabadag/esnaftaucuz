@@ -81,7 +81,14 @@ function main() {
     });
 
     capRunProcess.on('exit', (capCode) => {
-      shutdown(capCode ?? 1);
+      if (capCode !== 0) {
+        shutdown(capCode ?? 1);
+        return;
+      }
+
+      capRunProcess = null;
+      console.log('Android app deployed. Live reload is active while this process runs.');
+      console.log('Leave this terminal open. Press Ctrl+C to stop hot reload.');
     });
   });
 

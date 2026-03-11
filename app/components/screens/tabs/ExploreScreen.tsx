@@ -418,7 +418,7 @@ export default function ExploreScreen() {
 
           if (trendFromFn.length > 0) setTrendProducts(trendFromFn);
           if (recentFromFn.length > 0) setRecentPrices(recentFromFn);
-          if (shopsToUse.length > 0) setMerchantShops(shopsToUse);
+          setMerchantShops(shopsToUse);
           if (recentFromFn.length > 0) setNearbyCheapest(recentFromFn.slice(0, 8));
 
           if (trendFromFn.length > 0 || recentFromFn.length > 0 || shopsToUse.length > 0) {
@@ -1781,7 +1781,8 @@ export default function ExploreScreen() {
                     const merchantId = shop?.id || shop?.merchant_id || shop?.merchant?.id;
                     if (!merchantId) return null;
                     return (
-                    <div
+                    <button
+                      type="button"
                       key={merchantId}
                       onClick={() => navigate(`/app/merchant-shop/${merchantId}`)}
                       className="bg-white rounded-lg p-4 border border-gray-200 hover:border-green-600 hover:shadow-md cursor-pointer transition-all"
@@ -1801,7 +1802,7 @@ export default function ExploreScreen() {
                           <p className="text-sm text-gray-500">Esnaf ürünlerini görüntüle</p>
                         </div>
                       </div>
-                    </div>
+                    </button>
                     );
                   })}
                 </div>

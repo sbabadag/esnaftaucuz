@@ -172,21 +172,64 @@ export default function ProductDetailScreen() {
   }, [id]);
 
   const loadProductData = async () => {
-    const withTimeout = <T,>(promise: Promise<T>, ms: number, label: string): Promise<T> =>
-      Promise.race([
-        promise,
-        new Promise<T>((_, reject) => setTimeout(() => reject(new Error(`${label} timeout`)), ms)),
-      ]);
-
     try {
       setIsLoading(true);
-      
-      // Load product
-      const productData = await withTimeout(productsAPI.getById(id!), 10000, 'product detail');
-      setProduct(productData);
 
-      // Load prices
-      const priceData = await withTimeout(pricesAPI.getByProduct(id!, sortBy), 12000, 'product prices');
+      const sbUrl = import.meta.env.VITE_SUPABASE_URL as string;
+      const sbKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
+      const headers = { apikey: sbKey, Authorization: `Bearer ${sbKey}`, Accept: 'application/json' };
+
+      const controller = new AbortController();
+      const tid = setTimeout(() => controller.abort(), 12000);
+
+      const [productResp, pricesResp] = await Promise.all([
+        fetch(
+          `${sbUrl}/rest/v1/products?select=id,name,category,image,default_unit&id=eq.${id}&limit=1`,
+          { headers: { ...headers, Accept: 'application/vnd.pgrst.object+json' }, signal: controller.signal }
+        ),
+        fetch(
+          `${sbUrl}/rest/v1/prices?select=id,price,unit,created_at,is_verified,photo,coordinates,product_id,location_id,user_id&product_id=eq.${id}&order=created_at.desc&limit=50`,
+          { headers, signal: controller.signal }
+        ),
+      ]);
+      clearTimeout(tid);
+
+      const productData = productResp.ok ? await productResp.json().catch(() => null) : null;
+      if (productData) setProduct(productData);
+
+      let priceData: any[] = [];
+      if (pricesResp.ok) {
+        priceData = await pricesResp.json().catch(() => []);
+        if (!Array.isArray(priceData)) priceData = [];
+
+        if (priceData.length > 0) {
+          const locationIds = [...new Set(priceData.map((p: any) => p.location_id).filter(Boolean))];
+          const userIds = [...new Set(priceData.map((p: any) => p.user_id).filter(Boolean))];
+
+          const ctrl2 = new AbortController();
+          const tid2 = setTimeout(() => ctrl2.abort(), 8000);
+          const [locResp, userResp] = await Promise.all([
+            locationIds.length
+              ? fetch(`${sbUrl}/rest/v1/locations?select=id,name,type,city,district,coordinates&id=in.(${locationIds.join(',')})`, { headers, signal: ctrl2.signal })
+              : Promise.resolve(null),
+            userIds.length
+              ? fetch(`${sbUrl}/rest/v1/users?select=id,name,avatar&id=in.(${userIds.join(',')})`, { headers, signal: ctrl2.signal })
+              : Promise.resolve(null),
+          ]);
+          clearTimeout(tid2);
+
+          const locations = locResp?.ok ? await locResp.json().catch(() => []) : [];
+          const users = userResp?.ok ? await userResp.json().catch(() => []) : [];
+          const locMap = new Map((locations || []).map((l: any) => [l.id, l]));
+          const userMap = new Map((users || []).map((u: any) => [u.id, u]));
+
+          priceData = priceData.map((p: any) => ({
+            ...p,
+            location: locMap.get(p.location_id) || null,
+            user: userMap.get(p.user_id) || null,
+          }));
+        }
+      }
       setPrices(priceData);
 
       // Calculate average price

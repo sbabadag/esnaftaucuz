@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate, useParams, useLocation } from 'react-router-dom';
 import { ArrowLeft, Plus, Edit, Trash2, Camera, Image as ImageIcon, X, MapPin, Navigation, CheckCircle2, XCircle } from 'lucide-react';
 import { Button } from '../ui/button';
@@ -66,7 +66,6 @@ export default function MerchantShopScreen() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isGettingLocation, setIsGettingLocation] = useState(false);
   const [userVerifications, setUserVerifications] = useState<Record<string, { is_verified: boolean }>>({});
-  const loadWatchdogRef = useRef<number | null>(null);
 
   const isOwnShop = merchantId === user?.id;
   const withTimeout = <T,>(promise: Promise<T>, ms: number, label: string): Promise<T> =>
@@ -78,6 +77,8 @@ export default function MerchantShopScreen() {
   useEffect(() => {
     if (merchantId) {
       loadMerchantProducts();
+    } else {
+      setIsLoading(false);
     }
   }, [merchantId]);
 
@@ -93,82 +94,130 @@ export default function MerchantShopScreen() {
     }
   }, [isDialogOpen, isOwnShop]);
 
-  useEffect(() => {
-    if (!isLoading) {
-      if (loadWatchdogRef.current) {
-        window.clearTimeout(loadWatchdogRef.current);
-        loadWatchdogRef.current = null;
-      }
-      return;
-    }
-
-    loadWatchdogRef.current = window.setTimeout(() => {
-      setIsLoading(false);
-      toast.error('Dükkan verileri geç yükleniyor. Lütfen tekrar deneyin.');
-    }, 15000);
-
-    return () => {
-      if (loadWatchdogRef.current) {
-        window.clearTimeout(loadWatchdogRef.current);
-        loadWatchdogRef.current = null;
-      }
-    };
-  }, [isLoading]);
-
   const loadMerchantProducts = async () => {
     const hydrateRelations = async (rows: any[]): Promise<MerchantProduct[]> => {
-      const productIds = Array.from(new Set((rows || []).map((r: any) => r.product_id).filter(Boolean)));
-      const locationIds = Array.from(new Set((rows || []).map((r: any) => r.location_id).filter(Boolean)));
+      const list = Array.isArray(rows) ? rows : [];
+      if (list.length === 0) return [];
 
-      const [{ data: productRows }, { data: locationRows }] = await withTimeout(
-        Promise.all([
-          productIds.length
-            ? supabase.from('products').select('id, name, category, image').in('id', productIds)
-            : Promise.resolve({ data: [] as any[] }),
-          locationIds.length
-            ? supabase.from('locations').select('id, name, coordinates').in('id', locationIds)
-            : Promise.resolve({ data: [] as any[] }),
-        ]),
-        9000,
-        'merchant relations'
-      );
+      const productIds = Array.from(new Set(list.map((r: any) => r.product_id).filter(Boolean)));
+      const locationIds = Array.from(new Set(list.map((r: any) => r.location_id).filter(Boolean)));
+
+      const sbUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined;
+      const sbKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
+
+      let productRows: any[] = [];
+      let locationRows: any[] = [];
+
+      if (sbUrl && sbKey) {
+        const controller = new AbortController();
+        const tid = setTimeout(() => controller.abort(), 8000);
+        const headers = { apikey: sbKey, Authorization: `Bearer ${sbKey}` };
+        try {
+          const [pRes, lRes] = await Promise.all([
+            productIds.length
+              ? fetch(`${sbUrl}/rest/v1/products?select=id,name,category,image&id=in.(${productIds.join(',')})`, { headers, signal: controller.signal })
+              : Promise.resolve(null),
+            locationIds.length
+              ? fetch(`${sbUrl}/rest/v1/locations?select=id,name,coordinates&id=in.(${locationIds.join(',')})`, { headers, signal: controller.signal })
+              : Promise.resolve(null),
+          ]);
+          clearTimeout(tid);
+          if (pRes?.ok) productRows = await pRes.json().catch(() => []);
+          if (lRes?.ok) locationRows = await lRes.json().catch(() => []);
+        } catch {
+          clearTimeout(tid);
+        }
+      }
 
       const productMap = new Map((productRows || []).map((p: any) => [p.id, p]));
       const locationMap = new Map((locationRows || []).map((l: any) => [l.id, l]));
 
-      return (rows || []).map((row: any) => ({
+      return list.map((row: any) => ({
         ...row,
         product: row.product || productMap.get(row.product_id) || { id: row.product_id, name: 'Ürün', category: 'Diğer' },
-        location: row.location || (row.location_id ? locationMap.get(row.location_id) || null : null),
+        location: row.location || (row.location_id ? (locationMap.get(row.location_id) || null) : null),
       })) as MerchantProduct[];
     };
 
+    let isCompleted = false;
+    const hardTimeout = window.setTimeout(() => {
+      if (isCompleted) return;
+      setProducts([]);
+      setIsLoading(false);
+      toast.error('Dükkan verileri alınamadı (zaman aşımı).');
+    }, 12000);
+
     try {
       setIsLoading(true);
-      const data = await withTimeout(merchantProductsAPI.getByMerchant(merchantId!), 10000, 'merchant products');
-      setProducts(data || []);
-    } catch (error: any) {
-      console.error('Failed to load merchant products (primary):', error);
+      const sbUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined;
+      const sbKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
+
+      // Step 1 (fastest): Raw REST fetch - bypasses Supabase client wrapper entirely
+      if (sbUrl && sbKey) {
+        try {
+          const controller = new AbortController();
+          const tid = setTimeout(() => controller.abort(), 10000);
+          const fields = 'id,merchant_id,product_id,price,unit,images,location_id,coordinates,verification_count,unverification_count,created_at,is_active';
+          const restUrl = `${sbUrl}/rest/v1/merchant_products?select=${fields}&merchant_id=eq.${merchantId}&or=(is_active.eq.true,is_active.is.null)&order=created_at.desc`;
+          const resp = await fetch(restUrl, {
+            headers: { apikey: sbKey, Authorization: `Bearer ${sbKey}` },
+            signal: controller.signal,
+          });
+          clearTimeout(tid);
+          if (resp.ok) {
+            const rows = await resp.json().catch(() => []);
+            
+            if (isCompleted) return;
+            if (Array.isArray(rows) && rows.length > 0) {
+              const hydrated = await hydrateRelations(rows);
+              setProducts(hydrated);
+              return;
+            }
+          }
+        } catch (restErr: any) {
+          
+        }
+      } else {
+        
+      }
+
+      if (isCompleted) return;
+
+      // Step 2: Supabase JS client (may be slow due to global fetch wrapper)
       try {
-        const { data: basicRows, error: basicError } = await withTimeout(
+        const res = await withTimeout(
           supabase
             .from('merchant_products')
-            .select('id, product_id, price, unit, images, location_id, coordinates, verification_count, unverification_count, created_at, is_active')
+            .select('id, merchant_id, product_id, price, unit, images, location_id, coordinates, verification_count, unverification_count, created_at, is_active')
             .eq('merchant_id', merchantId!)
             .or('is_active.eq.true,is_active.is.null')
             .order('created_at', { ascending: false }),
           10000,
-          'merchant products fallback'
+          'merchant products client'
         );
-        if (basicError) throw basicError;
-        const hydrated = await hydrateRelations(basicRows || []);
-        setProducts(hydrated);
-      } catch (fallbackError) {
-        console.error('Failed to load merchant products (fallback):', fallbackError);
-        setProducts([]);
-        toast.error('Ürünler yüklenirken bir hata oluştu');
+        if (res.error) throw res.error;
+        const clientRows = res.data || [];
+        
+        if (isCompleted) return;
+        if (clientRows.length > 0) {
+          const hydrated = await hydrateRelations(clientRows);
+          setProducts(hydrated);
+          return;
+        }
+      } catch (clientErr: any) {
+        
       }
+
+      setProducts([]);
+    } catch (error: any) {
+      if (isCompleted) return;
+      console.error('Failed to load merchant products:', error);
+      
+      setProducts([]);
+      toast.error('Ürünler yüklenirken bir hata oluştu');
     } finally {
+      isCompleted = true;
+      window.clearTimeout(hardTimeout);
       setIsLoading(false);
     }
   };
@@ -739,7 +788,14 @@ export default function MerchantShopScreen() {
             {isOwnShop ? 'Henüz ürün eklenmemiş' : 'Bu dükkanda henüz ürün yok'}
           </div>
         ) : (
-          products.map((product) => (
+          products.map((product) => {
+            const productName = product.product?.name || 'Ürün';
+            const productCategory = product.product?.category || 'Diğer';
+            const productPrice = typeof product.price === 'number'
+              ? product.price
+              : Number(product.price) || 0;
+            const productImages = Array.isArray(product.images) ? product.images : [];
+            return (
             <div
               key={product.id}
               className="bg-white rounded-lg p-3 sm:p-4 border border-gray-200 overflow-hidden"
@@ -747,20 +803,20 @@ export default function MerchantShopScreen() {
               <div className="flex gap-2 sm:gap-3">
                 {/* Images - Fixed width container */}
                 <div className="flex-shrink-0 w-20 sm:w-24">
-                  {product.images && product.images.length > 0 ? (
+                  {productImages.length > 0 ? (
                     <div className="flex flex-col gap-1.5 sm:gap-2">
-                      {product.images.slice(0, 2).map((img, idx) => (
+                      {productImages.slice(0, 2).map((img, idx) => (
                         <div key={idx} className="relative w-full aspect-square overflow-hidden rounded border">
                           <img
                             src={img}
-                            alt={`${product.product.name} ${idx + 1}`}
+                            alt={`${productName} ${idx + 1}`}
                             className="w-full h-full object-cover"
                           />
                         </div>
                       ))}
-                      {product.images.length > 2 && (
+                      {productImages.length > 2 && (
                         <div className="w-full aspect-square bg-gray-100 rounded border flex items-center justify-center text-xs text-gray-500">
-                          +{product.images.length - 2}
+                          +{productImages.length - 2}
                         </div>
                       )}
                     </div>
@@ -773,11 +829,11 @@ export default function MerchantShopScreen() {
 
                 {/* Product Info */}
                 <div className="flex-1 min-w-0 overflow-hidden">
-                  <h3 className="font-semibold text-sm sm:text-base truncate">{product.product.name}</h3>
-                  <p className="text-xs text-gray-500 mb-1.5 truncate">{product.product.category}</p>
+                  <h3 className="font-semibold text-sm sm:text-base truncate">{productName}</h3>
+                  <p className="text-xs text-gray-500 mb-1.5 truncate">{productCategory}</p>
                   <div className="flex items-baseline gap-1.5 mb-1.5">
                     <span className="text-lg sm:text-xl font-bold text-green-600">
-                      {product.price.toFixed(2)} ₺
+                      {productPrice.toFixed(2)} ₺
                     </span>
                     <span className="text-xs text-gray-500">/ {product.unit}</span>
                   </div>
@@ -847,7 +903,8 @@ export default function MerchantShopScreen() {
                 </div>
               </div>
             </div>
-          ))
+            );
+          })
         )}
       </div>
     </div>

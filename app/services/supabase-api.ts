@@ -538,71 +538,58 @@ export const productsAPI = {
 
   getTrending: async () => {
     try {
-      console.log('🔍 Fetching trending products...');
-      console.log('🌐 Supabase URL:', import.meta.env.VITE_SUPABASE_URL?.substring(0, 30) + '...');
-      console.log('🔑 Supabase Key:', import.meta.env.VITE_SUPABASE_ANON_KEY ? 'Set' : 'MISSING');
-      
-      // Check if Supabase is configured
-      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-      if (!supabaseUrl) {
-        console.warn('⚠️ Supabase not configured, returning empty array');
-        return [];
-      }
-      
-      // Test connection first with a simple query
-      console.log('🧪 Testing Supabase connection...');
-      const startTime = Date.now();
-      
-      // Direct query without Promise.race (timeout handled by Supabase client's custom fetch)
-      const { data, error } = await supabase
-        .from('products')
-        .select('id, name, category, image')
-        .eq('is_active', true)
-        .order('search_count', { ascending: false })
-        .limit(6);
-      
-      const endTime = Date.now();
-      console.log(`⏱️ Query completed in ${endTime - startTime}ms`);
+      const sbUrl = import.meta.env.VITE_SUPABASE_URL as string;
+      const sbKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
+      if (!sbUrl || !sbKey) return [];
 
-      if (error) {
-        console.error('❌ Supabase error:', error);
-        console.error('Error code:', error.code);
-        console.error('Error message:', error.message);
-        console.error('Error details:', error.details);
-        console.error('Error hint:', error.hint);
-        // Return empty array instead of throwing
-        return [];
-      }
-      
-      console.log('✅ Trending products fetched:', data?.length || 0);
-      return data || [];
-    } catch (error: any) {
-      console.error('❌ Get trending products exception:', error);
-      console.error('Error name:', error.name);
-      console.error('Error message:', error.message);
-      // Return empty array instead of throwing to prevent app from hanging
+      const controller = new AbortController();
+      const tid = setTimeout(() => controller.abort(), 10000);
+      const resp = await fetch(
+        `${sbUrl}/rest/v1/products?select=id,name,category,image&is_active=eq.true&order=search_count.desc&limit=6`,
+        { headers: { apikey: sbKey, Authorization: `Bearer ${sbKey}` }, signal: controller.signal }
+      );
+      clearTimeout(tid);
+      if (!resp.ok) return [];
+      return await resp.json().catch(() => []);
+    } catch {
       return [];
     }
   },
 
   getById: async (id: string) => {
     try {
-      // Get product
+      const sbUrl = import.meta.env.VITE_SUPABASE_URL as string;
+      const sbKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
+      if (sbUrl && sbKey) {
+        const controller = new AbortController();
+        const tid = setTimeout(() => controller.abort(), 10000);
+        const resp = await fetch(
+          `${sbUrl}/rest/v1/products?select=*&id=eq.${id}&limit=1`,
+          {
+            headers: { apikey: sbKey, Authorization: `Bearer ${sbKey}`, Accept: 'application/vnd.pgrst.object+json' },
+            signal: controller.signal,
+          }
+        );
+        clearTimeout(tid);
+        if (resp.ok) {
+          const product = await resp.json();
+          if (product?.id) {
+            fetch(`${sbUrl}/rest/v1/products?id=eq.${id}`, {
+              method: 'PATCH',
+              headers: { apikey: sbKey, Authorization: `Bearer ${sbKey}`, 'Content-Type': 'application/json', Prefer: 'return=minimal' },
+              body: JSON.stringify({ search_count: (product.search_count || 0) + 1 }),
+            }).catch(() => {});
+            return product;
+          }
+        }
+      }
       const { data: product, error: productError } = await supabase
         .from('products')
         .select('*')
         .eq('id', id)
         .single();
-
       if (productError) throw productError;
       if (!product) throw new Error('Product not found');
-
-      // Increment search count
-      await supabase
-        .from('products')
-        .update({ search_count: (product.search_count || 0) + 1 })
-        .eq('id', id);
-
       return product;
     } catch (error: any) {
       console.error('Get product error:', error);
@@ -761,7 +748,71 @@ export const pricesAPI = {
     radius?: number;
   }) => {
     try {
-      console.log('🔍 Fetching prices with filters:', filters);
+      // REST-first path: bypasses Supabase JS client entirely
+      const sbUrl = import.meta.env.VITE_SUPABASE_URL as string;
+      const sbKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
+      if (sbUrl && sbKey) {
+        try {
+          const controller = new AbortController();
+          const tid = setTimeout(() => controller.abort(), 10000);
+          const headers = { apikey: sbKey, Authorization: `Bearer ${sbKey}` };
+
+          const params: string[] = [
+            'select=id,product_id,location_id,user_id,price,unit,created_at,is_verified,photo,coordinates,is_active',
+            'is_active=eq.true',
+          ];
+          if (filters?.product) params.push(`product_id=eq.${filters.product}`);
+          if (filters?.location) params.push(`location_id=eq.${filters.location}`);
+          if (filters?.verified) params.push('is_verified=eq.true');
+          if (filters?.withPhoto) params.push('photo=not.is.null');
+          if (filters?.todayOnly) {
+            const today = new Date(); today.setHours(0, 0, 0, 0);
+            params.push(`created_at=gte.${today.toISOString()}`);
+          }
+          const sortCol = filters?.sort === 'cheapest' ? 'price.asc' : filters?.sort === 'expensive' ? 'price.desc' : 'created_at.desc';
+          params.push(`order=${sortCol}`);
+          params.push(`limit=${filters?.limit || 50}`);
+
+          const resp = await fetch(`${sbUrl}/rest/v1/prices?${params.join('&')}`, { headers, signal: controller.signal });
+          clearTimeout(tid);
+          if (resp.ok) {
+            let rows: any[] = await resp.json().catch(() => []);
+            if (Array.isArray(rows) && rows.length > 0) {
+              const productIds = [...new Set(rows.map((r: any) => r.product_id).filter(Boolean))];
+              const locationIds = [...new Set(rows.map((r: any) => r.location_id).filter(Boolean))];
+              const userIds = [...new Set(rows.map((r: any) => r.user_id).filter(Boolean))];
+
+              const ctrl2 = new AbortController();
+              const tid2 = setTimeout(() => ctrl2.abort(), 8000);
+              const [pResp, lResp, uResp] = await Promise.all([
+                productIds.length ? fetch(`${sbUrl}/rest/v1/products?select=id,name,category,default_unit,image&id=in.(${productIds.join(',')})`, { headers, signal: ctrl2.signal }) : null,
+                locationIds.length ? fetch(`${sbUrl}/rest/v1/locations?select=id,name,type,address,coordinates,city,district&id=in.(${locationIds.join(',')})`, { headers, signal: ctrl2.signal }) : null,
+                userIds.length ? fetch(`${sbUrl}/rest/v1/users?select=id,name,avatar,level&id=in.(${userIds.join(',')})`, { headers, signal: ctrl2.signal }) : null,
+              ]);
+              clearTimeout(tid2);
+
+              const products: any[] = pResp?.ok ? await pResp.json().catch(() => []) : [];
+              const locations: any[] = lResp?.ok ? await lResp.json().catch(() => []) : [];
+              const users: any[] = uResp?.ok ? await uResp.json().catch(() => []) : [];
+
+              const pMap = new Map(products.map((p: any) => [p.id, p]));
+              const lMap = new Map(locations.map((l: any) => [l.id, l]));
+              const uMap = new Map(users.map((u: any) => [u.id, u]));
+
+              rows = rows.map((r: any) => ({
+                ...r,
+                product: pMap.get(r.product_id) || null,
+                location: lMap.get(r.location_id) || null,
+                user: uMap.get(r.user_id) || null,
+              }));
+            }
+            return rows;
+          }
+        } catch {
+          // Fall through to Supabase client path
+        }
+      }
+
       let query = supabase
         .from('prices')
         .select(`
@@ -1978,86 +2029,91 @@ export const searchAPI = {
 // ============================================================================
 
 export const favoritesAPI = {
-  // Add product to favorites
+  _getAuthHeaders: async () => {
+    const sbUrl = import.meta.env.VITE_SUPABASE_URL as string;
+    const sbKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
+    const { data: { session } } = await supabase.auth.getSession();
+    const token = session?.access_token || sbKey;
+    return { url: sbUrl, headers: { apikey: sbKey, Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' } };
+  },
+
   add: async (productId: string, userId: string) => {
     try {
-      const { data, error } = await supabase
-        .from('user_favorites')
-        .insert({
-          user_id: userId,
-          product_id: productId,
-        })
-        .select()
-        .single();
-
-      if (error) throw error;
-      return data;
+      const { url, headers } = await favoritesAPI._getAuthHeaders();
+      const controller = new AbortController();
+      const tid = setTimeout(() => controller.abort(), 8000);
+      const resp = await fetch(`${url}/rest/v1/user_favorites`, {
+        method: 'POST',
+        headers: { ...headers, Prefer: 'return=representation' },
+        body: JSON.stringify({ user_id: userId, product_id: productId }),
+        signal: controller.signal,
+      });
+      clearTimeout(tid);
+      if (!resp.ok) throw new Error(`Add favorite failed: ${resp.status}`);
+      return resp.json();
     } catch (error: any) {
-      console.error('❌ Add favorite error:', error);
+      console.error('Add favorite error:', error);
       throw error;
     }
   },
 
-  // Remove product from favorites
   remove: async (productId: string, userId: string) => {
     try {
-      const { error } = await supabase
-        .from('user_favorites')
-        .delete()
-        .eq('user_id', userId)
-        .eq('product_id', productId);
-
-      if (error) throw error;
+      const { url, headers } = await favoritesAPI._getAuthHeaders();
+      const controller = new AbortController();
+      const tid = setTimeout(() => controller.abort(), 8000);
+      const resp = await fetch(
+        `${url}/rest/v1/user_favorites?user_id=eq.${userId}&product_id=eq.${productId}`,
+        { method: 'DELETE', headers, signal: controller.signal }
+      );
+      clearTimeout(tid);
+      if (!resp.ok) throw new Error(`Remove favorite failed: ${resp.status}`);
       return true;
     } catch (error: any) {
-      console.error('❌ Remove favorite error:', error);
+      console.error('Remove favorite error:', error);
       throw error;
     }
   },
 
-  // Check if product is favorited by user
   isFavorited: async (productId: string, userId: string) => {
     try {
-      const { data, error } = await supabase
-        .from('user_favorites')
-        .select('id')
-        .eq('user_id', userId)
-        .eq('product_id', productId)
-        .maybeSingle();
-
-      if (error) throw error;
-      return !!data;
-    } catch (error: any) {
-      console.error('❌ Check favorite error:', error);
-      throw error;
+      const { url, headers } = await favoritesAPI._getAuthHeaders();
+      const controller = new AbortController();
+      const tid = setTimeout(() => controller.abort(), 8000);
+      const resp = await fetch(
+        `${url}/rest/v1/user_favorites?select=id&user_id=eq.${userId}&product_id=eq.${productId}&limit=1`,
+        { headers, signal: controller.signal }
+      );
+      clearTimeout(tid);
+      if (!resp.ok) return false;
+      const rows = await resp.json().catch(() => []);
+      return Array.isArray(rows) && rows.length > 0;
+    } catch {
+      return false;
     }
   },
 
-  // Get all favorites for a user
   getByUser: async (userId: string) => {
     try {
-      const { data, error } = await supabase
-        .from('user_favorites')
-        .select(`
-          *,
-          product:products(*)
-        `)
-        .eq('user_id', userId)
-        .order('created_at', { ascending: false });
-
-      if (error) throw error;
-      return data || [];
-    } catch (error: any) {
-      console.error('❌ Get favorites error:', error);
-      throw error;
+      const { url, headers } = await favoritesAPI._getAuthHeaders();
+      const controller = new AbortController();
+      const tid = setTimeout(() => controller.abort(), 10000);
+      const resp = await fetch(
+        `${url}/rest/v1/user_favorites?select=*,product:products(*)&user_id=eq.${userId}&order=created_at.desc`,
+        { headers, signal: controller.signal }
+      );
+      clearTimeout(tid);
+      if (!resp.ok) return [];
+      return await resp.json().catch(() => []);
+    } catch {
+      return [];
     }
   },
 
-  // Toggle favorite (add if not exists, remove if exists)
   toggle: async (productId: string, userId: string) => {
     try {
-      const isFavorited = await favoritesAPI.isFavorited(productId, userId);
-      if (isFavorited) {
+      const isFav = await favoritesAPI.isFavorited(productId, userId);
+      if (isFav) {
         await favoritesAPI.remove(productId, userId);
         return false;
       } else {
@@ -2065,7 +2121,7 @@ export const favoritesAPI = {
         return true;
       }
     } catch (error: any) {
-      console.error('❌ Toggle favorite error:', error);
+      console.error('Toggle favorite error:', error);
       throw error;
     }
   },
@@ -2256,55 +2312,125 @@ export const merchantProductsAPI = {
   // Get all merchant products for a specific merchant
   getByMerchant: async (merchantId: string) => {
     try {
+      const hydrateMerchantRows = async (rows: any[]) => {
+        const list = Array.isArray(rows) ? rows : [];
+        if (list.length === 0) return [];
+
+        const needsProductHydration = list.some((row: any) => !row?.product && row?.product_id);
+        const needsLocationHydration = list.some((row: any) => !row?.location && row?.location_id);
+
+        if (!needsProductHydration && !needsLocationHydration) return list;
+
+        const productIds = needsProductHydration
+          ? Array.from(new Set(list.map((r: any) => r?.product_id).filter(Boolean)))
+          : [];
+        const locationIds = needsLocationHydration
+          ? Array.from(new Set(list.map((r: any) => r?.location_id).filter(Boolean)))
+          : [];
+
+        let productRows: any[] = [];
+        let locationRows: any[] = [];
+
+        const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined;
+        const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
+
+        if (supabaseUrl && supabaseAnonKey) {
+          try {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 6000);
+            const [productsRes, locationsRes] = await Promise.all([
+              productIds.length
+                ? fetch(
+                    `${supabaseUrl}/rest/v1/products?select=id,name,category,image&id=in.(${productIds.join(',')})`,
+                    {
+                      headers: {
+                        apikey: supabaseAnonKey,
+                        Authorization: `Bearer ${supabaseAnonKey}`,
+                      },
+                      signal: controller.signal,
+                    }
+                  )
+                : Promise.resolve(null),
+              locationIds.length
+                ? fetch(
+                    `${supabaseUrl}/rest/v1/locations?select=id,name,coordinates&id=in.(${locationIds.join(',')})`,
+                    {
+                      headers: {
+                        apikey: supabaseAnonKey,
+                        Authorization: `Bearer ${supabaseAnonKey}`,
+                      },
+                      signal: controller.signal,
+                    }
+                  )
+                : Promise.resolve(null),
+            ]);
+            clearTimeout(timeoutId);
+
+            if (productsRes?.ok) {
+              productRows = await productsRes.json().catch(() => []);
+            }
+            if (locationsRes?.ok) {
+              locationRows = await locationsRes.json().catch(() => []);
+            }
+          } catch {
+            // Fallback to supabase client queries below.
+          }
+        }
+
+        // No Supabase client fallback - it uses the global fetch wrapper which can hang on Android
+
+        const productMap = new Map((productRows || []).map((p: any) => [p.id, p]));
+        const locationMap = new Map((locationRows || []).map((l: any) => [l.id, l]));
+
+        return list.map((row: any) => ({
+          ...row,
+          product: row.product || productMap.get(row.product_id) || { id: row.product_id, name: 'Ürün', category: 'Diğer' },
+          location: row.location || (row.location_id ? (locationMap.get(row.location_id) || null) : null),
+        }));
+      };
+
+      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined;
+      const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
+      if (supabaseUrl && supabaseAnonKey) {
+        try {
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 8000);
+          const params = new URLSearchParams({
+            select: 'id,merchant_id,product_id,price,unit,images,location_id,coordinates,verification_count,unverification_count,created_at,is_active',
+            merchant_id: `eq.${merchantId}`,
+            or: '(is_active.eq.true,is_active.is.null)',
+            order: 'created_at.desc',
+          });
+
+          const restResponse = await fetch(`${supabaseUrl}/rest/v1/merchant_products?${params.toString()}`, {
+            method: 'GET',
+            headers: {
+              apikey: supabaseAnonKey,
+              Authorization: `Bearer ${supabaseAnonKey}`,
+            },
+            signal: controller.signal,
+          });
+          clearTimeout(timeoutId);
+
+          if (restResponse.ok) {
+            const restRows = await restResponse.json().catch(() => []);
+            return await hydrateMerchantRows(Array.isArray(restRows) ? restRows : []);
+          }
+        } catch {
+          // Continue to Supabase client query fallback.
+        }
+      }
+
       const { data, error } = await supabase
         .from('merchant_products')
-        .select(`
-          *,
-          product:products(*),
-          location:locations(*),
-          merchant:users!merchant_products_merchant_id_fkey(id, name, avatar)
-        `)
+        .select('id, merchant_id, product_id, price, unit, images, location_id, coordinates, verification_count, unverification_count, created_at, is_active')
         .eq('merchant_id', merchantId)
         // Include legacy rows where is_active is null.
         .or('is_active.eq.true,is_active.is.null')
         .order('created_at', { ascending: false });
 
       if (error) throw error;
-      if (data && data.length > 0) return data;
-
-      // Fallback for cases where relation joins are blocked by policy
-      // and the primary query returns an empty list without an explicit error.
-      const { data: basicRows, error: basicError } = await supabase
-        .from('merchant_products')
-        .select('id, merchant_id, product_id, price, unit, images, location_id, coordinates, verification_count, unverification_count, created_at, is_active')
-        .eq('merchant_id', merchantId)
-        .or('is_active.eq.true,is_active.is.null')
-        .order('created_at', { ascending: false });
-
-      if (basicError) throw basicError;
-      const rows = basicRows || [];
-      if (rows.length === 0) return [];
-
-      const productIds = Array.from(new Set(rows.map((r: any) => r.product_id).filter(Boolean)));
-      const locationIds = Array.from(new Set(rows.map((r: any) => r.location_id).filter(Boolean)));
-
-      const [{ data: productRows }, { data: locationRows }] = await Promise.all([
-        productIds.length
-          ? supabase.from('products').select('id, name, category, image').in('id', productIds)
-          : Promise.resolve({ data: [] as any[] }),
-        locationIds.length
-          ? supabase.from('locations').select('id, name, coordinates').in('id', locationIds)
-          : Promise.resolve({ data: [] as any[] }),
-      ]);
-
-      const productMap = new Map((productRows || []).map((p: any) => [p.id, p]));
-      const locationMap = new Map((locationRows || []).map((l: any) => [l.id, l]));
-
-      return rows.map((row: any) => ({
-        ...row,
-        product: productMap.get(row.product_id) || { id: row.product_id, name: 'Ürün', category: 'Diğer' },
-        location: row.location_id ? (locationMap.get(row.location_id) || null) : null,
-      }));
+      return await hydrateMerchantRows(data || []);
     } catch (error: any) {
       console.error('❌ Get merchant products error:', error);
       throw error;
@@ -2509,40 +2635,52 @@ export const merchantProductsAPI = {
     }
   },
 
-  // Get all merchant shops (merchants with products)
   getAllMerchantShops: async (limit: number = 50) => {
     try {
-      // Get distinct merchants who have active products
-      const { data, error } = await supabase
-        .from('merchant_products')
-        .select(`
-          merchant_id,
-          merchant:users!merchant_products_merchant_id_fkey(id, name, avatar, email, is_merchant),
-          coordinates
-        `)
-        .or('is_active.eq.true,is_active.is.null')
-        .limit(limit);
+      const sbUrl = import.meta.env.VITE_SUPABASE_URL as string;
+      const sbKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
+      const headers = { apikey: sbKey, Authorization: `Bearer ${sbKey}` };
+      const controller = new AbortController();
+      const tid = setTimeout(() => controller.abort(), 10000);
 
-      if (error) throw error;
+      const mpResp = await fetch(
+        `${sbUrl}/rest/v1/merchant_products?select=merchant_id,coordinates&or=(is_active.eq.true,is_active.is.null)&limit=${limit}`,
+        { headers, signal: controller.signal }
+      );
+      if (!mpResp.ok) { clearTimeout(tid); throw new Error(`merchant_products ${mpResp.status}`); }
+      const mpRows: any[] = await mpResp.json().catch(() => []);
 
-      // Group by merchant_id and get unique merchants
-      const merchantMap = new Map();
-      (data || []).forEach((item: any) => {
-        const merchantId = item?.merchant?.id || item?.merchant_id;
-        if (!merchantId || merchantMap.has(merchantId)) return;
-        merchantMap.set(merchantId, {
-          id: merchantId,
-          name: item?.merchant?.name || 'Esnaf',
-          avatar: item?.merchant?.avatar || null,
-          email: item?.merchant?.email || null,
-          is_merchant: item?.merchant?.is_merchant === true,
-          coordinates: item.coordinates,
-        });
+      const merchantIds = [...new Set((mpRows || []).map((r: any) => r.merchant_id).filter(Boolean))];
+      if (merchantIds.length === 0) { clearTimeout(tid); return []; }
+
+      const usersResp = await fetch(
+        `${sbUrl}/rest/v1/users?select=id,name,avatar,email,is_merchant&id=in.(${merchantIds.join(',')})`,
+        { headers, signal: controller.signal }
+      );
+      clearTimeout(tid);
+      const users: any[] = usersResp.ok ? await usersResp.json().catch(() => []) : [];
+      const userMap = new Map(users.map((u: any) => [u.id, u]));
+
+      const coordMap = new Map<string, any>();
+      for (const r of mpRows) {
+        if (r.merchant_id && !coordMap.has(r.merchant_id)) {
+          coordMap.set(r.merchant_id, r.coordinates);
+        }
+      }
+
+      return merchantIds.map((mid) => {
+        const u = userMap.get(mid);
+        return {
+          id: mid,
+          name: u?.name || 'Esnaf',
+          avatar: u?.avatar || null,
+          email: u?.email || null,
+          is_merchant: u?.is_merchant === true,
+          coordinates: coordMap.get(mid) || null,
+        };
       });
-
-      return Array.from(merchantMap.values());
     } catch (error: any) {
-      console.error('❌ Get all merchant shops error:', error);
+      console.error('Get all merchant shops error:', error);
       throw error;
     }
   },
