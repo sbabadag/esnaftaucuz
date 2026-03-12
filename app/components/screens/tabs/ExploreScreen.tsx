@@ -15,6 +15,7 @@ import { useLanguage } from '../../../contexts/LanguageContext';
 import { reverseGeocode } from '../../../utils/geocoding';
 import { supabase } from '../../../lib/supabase';
 import { toast } from 'sonner';
+import { getImmediateUnreadCount, LOCAL_NOTIFICATIONS_UPDATED_EVENT } from '../../../lib/notification-store';
 
 interface Price {
   id: string;
@@ -148,10 +149,17 @@ export default function ExploreScreen() {
 
     const refreshUnreadCount = async () => {
       try {
+        // Immediate optimistic source so bell badge appears without waiting network.
+        const immediateCount = getImmediateUnreadCount(user.id);
+        if (mounted) setUnreadNotificationCount(immediateCount || 0);
+
         const count = await notificationsAPI.getUnreadCount(user.id);
-        if (mounted) setUnreadNotificationCount(count || 0);
+        if (mounted) {
+          setUnreadNotificationCount(Math.max(count || 0, immediateCount || 0));
+        }
       } catch (error) {
         console.error('Failed to refresh unread notification count:', error);
+        if (mounted) setUnreadNotificationCount(getImmediateUnreadCount(user.id));
       }
     };
 
@@ -177,10 +185,17 @@ export default function ExploreScreen() {
       if (document.visibilityState === 'visible') refreshUnreadCount();
     };
     document.addEventListener('visibilitychange', onVisibilityChange);
+    const onLocalNotificationsUpdated = (event: Event) => {
+      const custom = event as CustomEvent<{ userId?: string }>;
+      if (custom?.detail?.userId && custom.detail.userId !== user.id) return;
+      refreshUnreadCount();
+    };
+    window.addEventListener(LOCAL_NOTIFICATIONS_UPDATED_EVENT, onLocalNotificationsUpdated as EventListener);
 
     return () => {
       mounted = false;
       document.removeEventListener('visibilitychange', onVisibilityChange);
+      window.removeEventListener(LOCAL_NOTIFICATIONS_UPDATED_EVENT, onLocalNotificationsUpdated as EventListener);
       supabase.removeChannel(channel);
     };
   }, [user?.id]);

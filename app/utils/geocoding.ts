@@ -17,6 +17,9 @@ interface ForwardGeocodingResult {
   error?: string;
 }
 
+const USER_FRIENDLY_GEOCODE_UNAVAILABLE =
+  'Adres bilgisi şu an alınamıyor. Konumunuz yine de kullanılacak.';
+
 /**
  * Reverse geocoding using Google Maps API ONLY
  * OpenStreetMap fallback removed - Google Maps API key is required
@@ -63,7 +66,7 @@ export async function reverseGeocode(
     }
     return {
       success: false,
-      error: 'Google Maps API key bulunamadı. Lütfen .env dosyasına VITE_GOOGLE_MAPS_API_KEY ekleyin.',
+      error: USER_FRIENDLY_GEOCODE_UNAVAILABLE,
     };
   }
   
@@ -280,7 +283,7 @@ export async function forwardGeocode(
     }
     return {
       success: false,
-      error: 'Google Maps API key bulunamadı. Lütfen .env dosyasına VITE_GOOGLE_MAPS_API_KEY ekleyin.',
+      error: USER_FRIENDLY_GEOCODE_UNAVAILABLE,
     };
   }
 

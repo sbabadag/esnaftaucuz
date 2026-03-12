@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ArrowLeft, MapPin, Bell, Lock, Globe, Info, ChevronRight, Search, Trash2 } from 'lucide-react';
+import { ArrowLeft, MapPin, Bell, Lock, Globe, Info, ChevronRight, Search, Trash2, Settings } from 'lucide-react';
 import { Button } from '../ui/button';
 import { Label } from '../ui/label';
 import { Slider } from '../ui/slider';
@@ -39,12 +39,58 @@ export default function SettingsScreen() {
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   const [deleteConfirmText, setDeleteConfirmText] = useState('');
   const [isDeleting, setIsDeleting] = useState(false);
-  const [locationPermissionStatus, setLocationPermissionStatus] = useState<'granted' | 'denied' | 'prompt' | 'checking'>('checking');
+  const [locationPermissionStatus, setLocationPermissionStatus] = useState<'granted' | 'denied' | 'prompt' | 'prompt-with-rationale' | 'checking'>('checking');
   const [isRequestingLocation, setIsRequestingLocation] = useState(false);
   const [currentAddress, setCurrentAddress] = useState<string>('');
   const [isLoadingAddress, setIsLoadingAddress] = useState(false);
   // Detect at runtime if the WebView is loading from an HTTP origin (dev server)
   const isDevWebview = typeof window !== 'undefined' && typeof window.location !== 'undefined' && window.location.protocol.startsWith('http');
+
+  const normalizePermissionStatus = (permissions: any): 'granted' | 'denied' | 'prompt' | 'prompt-with-rationale' => {
+    const locationStatus = String(permissions?.location || '').toLowerCase();
+    const coarseStatus = String(permissions?.coarseLocation || '').toLowerCase();
+    if (locationStatus === 'granted' || coarseStatus === 'granted') return 'granted';
+    if (locationStatus === 'prompt-with-rationale' || coarseStatus === 'prompt-with-rationale') return 'prompt-with-rationale';
+    if (locationStatus === 'denied' && (coarseStatus === 'denied' || !coarseStatus)) return 'denied';
+    return 'prompt';
+  };
+
+  const getPositionWithFallback = async () => {
+    if (isNative()) {
+      try {
+        const high = await Geolocation.getCurrentPosition({
+          enableHighAccuracy: true,
+          timeout: 20000,
+          maximumAge: 10000,
+        });
+        return { latitude: high.coords.latitude, longitude: high.coords.longitude };
+      } catch {
+        const low = await Geolocation.getCurrentPosition({
+          enableHighAccuracy: false,
+          timeout: 20000,
+          maximumAge: 60000,
+        });
+        return { latitude: low.coords.latitude, longitude: low.coords.longitude };
+      }
+    }
+    const webPos = await getCurrentPosition();
+    if (!webPos) throw new Error('Konum bulunamadi');
+    return webPos;
+  };
+
+  const getLocationFriendlyError = (error: any) => {
+    const raw = String(error?.message || error || '').toLowerCase();
+    if (raw.includes('denied') || raw.includes('permission')) {
+      return 'Konum izni reddedildi. Ayarlardan izin verebilirsiniz.';
+    }
+    if (raw.includes('timeout')) {
+      return 'Konum servisi zaman aşımına uğradı. Açık alanda tekrar deneyin.';
+    }
+    if (raw.includes('disabled') || raw.includes('services') || raw.includes('provider')) {
+      return 'Konum servisleri kullanılamıyor. GPS ve cihaz konum servisinin açık olduğundan emin olun.';
+    }
+    return 'Konum alınamadı. GPS açık olduğundan emin olun ve tekrar deneyin.';
+  };
 
   useEffect(() => {
     // Load user's search radius preference
@@ -66,7 +112,7 @@ export default function SettingsScreen() {
       if (isNative()) {
         try {
           const permissions = await Geolocation.checkPermissions();
-          const status = permissions.location as 'granted' | 'denied' | 'prompt';
+          const status = normalizePermissionStatus(permissions);
           setLocationPermissionStatus(status);
           
           // If permission is granted, try to get current address
@@ -75,7 +121,7 @@ export default function SettingsScreen() {
           }
         } catch (error) {
           console.error('Error checking location permission:', error);
-          setLocationPermissionStatus('denied');
+          setLocationPermissionStatus('prompt');
         }
       } else {
         // Web - check if geolocation is available
@@ -93,7 +139,7 @@ export default function SettingsScreen() {
   const loadCurrentAddress = async () => {
     try {
       setIsLoadingAddress(true);
-      const position = await getCurrentPosition();
+      const position = await getPositionWithFallback();
       if (position) {
         const { latitude, longitude } = position;
         const result = await reverseGeocode(latitude, longitude);
@@ -105,7 +151,7 @@ export default function SettingsScreen() {
       }
     } catch (error) {
       console.error('Error loading address:', error);
-      setCurrentAddress('Adres alınamadı');
+      setCurrentAddress('Konum alınamadı');
     } finally {
       setIsLoadingAddress(false);
     }
@@ -293,42 +339,45 @@ export default function SettingsScreen() {
                 try {
                   if (isNative()) {
                     const permissions = await Geolocation.checkPermissions();
-                      if (permissions.location === 'granted') {
+                    const currentStatus = normalizePermissionStatus(permissions);
+                    if (currentStatus === 'granted') {
                       // Already granted, try to get position
                       try {
-                        await getCurrentPosition();
+                        await getPositionWithFallback();
                         toast.success('Konum izni zaten verilmiş');
                         setLocationPermissionStatus('granted');
                         await loadCurrentAddress();
                       } catch (error) {
-                        toast.warning('Konum izni verilmiş ancak konum alınamadı. GPS\'i açık olduğundan emin olun.');
+                        toast.warning(getLocationFriendlyError(error));
+                        setLocationPermissionStatus('granted');
                       }
-                    } else if (permissions.location === 'prompt' || permissions.location === 'prompt-with-rationale') {
+                    } else {
                       // Request permission
                       const requestResult = await Geolocation.requestPermissions();
-                      if (requestResult.location === 'granted') {
+                      const requestedStatus = normalizePermissionStatus(requestResult);
+                      if (requestedStatus === 'granted') {
                         await new Promise(resolve => setTimeout(resolve, 1000));
                         try {
-                          await getCurrentPosition();
+                          await getPositionWithFallback();
                           toast.success('Konum izni verildi');
                           setLocationPermissionStatus('granted');
                           await loadCurrentAddress();
                         } catch (error) {
-                          toast.warning('Konum izni verildi ancak konum alınamadı. GPS\'i açık olduğundan emin olun.');
+                          toast.warning(getLocationFriendlyError(error));
                           setLocationPermissionStatus('granted');
                         }
-                      } else {
+                      } else if (requestedStatus === 'denied') {
                         toast.error('Konum izni reddedildi. Ayarlardan izin verebilirsiniz.');
                         setLocationPermissionStatus('denied');
+                      } else {
+                        toast.info('Konum izni bekleniyor. Lütfen izin penceresinden onaylayın.');
+                        setLocationPermissionStatus(requestedStatus);
                       }
-                    } else {
-                      toast.error('Konum izni reddedildi. Ayarlardan izin verebilirsiniz.');
-                      setLocationPermissionStatus('denied');
                     }
                   } else {
                     // Web
                     try {
-                      const position = await getCurrentPosition();
+                      const position = await getPositionWithFallback();
                       if (position) {
                         toast.success('Konum izni verildi');
                         setLocationPermissionStatus('granted');
@@ -341,8 +390,14 @@ export default function SettingsScreen() {
                   }
                 } catch (error: any) {
                   console.error('Location permission error:', error);
-                  toast.error('Konum izni alınamadı: ' + (error.message || 'Bilinmeyen hata'));
-                  setLocationPermissionStatus('denied');
+                  const message = String(error?.message || '').toLowerCase();
+                  if (message.includes('denied') || message.includes('permission')) {
+                    toast.error('Konum izni reddedildi. Ayarlardan izin verebilirsiniz.');
+                    setLocationPermissionStatus('denied');
+                  } else {
+                    toast.warning(getLocationFriendlyError(error));
+                    setLocationPermissionStatus('prompt');
+                  }
                 } finally {
                   setIsRequestingLocation(false);
                 }

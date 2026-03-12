@@ -12,6 +12,8 @@ import MainApp from './components/screens/MainApp';
 import { App as CapacitorApp } from '@capacitor/app';
 import { Browser } from '@capacitor/browser';
 import { supabase } from './lib/supabase';
+import { FirebaseMessaging } from '@capacitor-firebase/messaging';
+import { asUuidOrNull, isLikelyJwt, normalizePushEvent } from './lib/push-notification-utils';
 
 // Protected route wrapper - redirects to login if not authenticated
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -177,6 +179,85 @@ function AppRoutes() {
 
 function App() {
   useEffect(() => {
+    let pushActionListener: any = null;
+    const pendingQueueKey = 'pending_push_events_v1';
+    const trySyncPushImmediately = async (normalized: any) => {
+      try {
+        const sbUrl = import.meta.env.VITE_SUPABASE_URL as string;
+        const sbKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
+        const token = localStorage.getItem('authToken') || '';
+        if (!sbUrl || !sbKey || !isLikelyJwt(token)) return;
+        const pd = normalized?.data || {};
+        const productId = asUuidOrNull(pd?.product_id || pd?.productId);
+        const priceId = asUuidOrNull(pd?.price_id || pd?.priceId);
+        await fetch(`${sbUrl}/functions/v1/sync-notification-from-push`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            apikey: sbKey,
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({
+            notification_id: normalized?.id,
+            type: pd?.type || 'other',
+            title: normalized?.title || 'Bildirim',
+            message: normalized?.body || 'Yeni bildirim var.',
+            product_id: productId,
+            price_id: priceId,
+          }),
+        }).catch(() => null);
+      } catch {
+        // ignore best-effort sync errors here
+      }
+    };
+    const enqueuePendingPushEvent = (normalized: any) => {
+      try {
+        const raw = localStorage.getItem(pendingQueueKey);
+        const parsed = raw ? JSON.parse(raw) : [];
+        const list = Array.isArray(parsed) ? parsed : [];
+        const exists = list.some((item: any) =>
+          (normalized?.id && item?.id === normalized.id) ||
+          (
+            String(item?.title || '') === String(normalized?.title || '') &&
+            String(item?.body || '') === String(normalized?.body || '')
+          )
+        );
+        if (exists) return;
+        localStorage.setItem(
+          pendingQueueKey,
+          JSON.stringify([normalized, ...list].slice(0, 100))
+        );
+      } catch {
+        // ignore queue storage errors
+      }
+    };
+    const registerGlobalPushActionListener = async () => {
+      const isNative = typeof window !== 'undefined' &&
+        (window as any).Capacitor?.isNativePlatform &&
+        (window as any).Capacitor.isNativePlatform();
+      if (!isNative) return;
+      try {
+        pushActionListener = await FirebaseMessaging.addListener('notificationActionPerformed', async (event: any) => {
+          const normalized = normalizePushEvent(event);
+          try {
+            localStorage.setItem('pending_push_route', 'notifications');
+          } catch {
+            // ignore storage errors
+          }
+          enqueuePendingPushEvent(normalized);
+          try {
+            localStorage.setItem('pending_push_payload', JSON.stringify(normalized));
+          } catch {
+            // ignore payload serialization errors
+          }
+          await trySyncPushImmediately(normalized);
+        });
+      } catch (e) {
+        console.warn('Global push action listener registration failed:', e);
+      }
+    };
+    registerGlobalPushActionListener();
+
     // Handle deep links and OAuth callbacks on mobile
     const isMobile = typeof window !== 'undefined' && 
       (window as any).Capacitor?.isNativePlatform();
@@ -384,11 +465,24 @@ function App() {
       }, 5000);
       
       return () => {
+        try {
+          pushActionListener?.remove?.();
+        } catch {
+          // ignore
+        }
         listener.remove();
         appStateListener.remove();
         clearInterval(intervalId);
       };
     }
+
+    return () => {
+      try {
+        pushActionListener?.remove?.();
+      } catch {
+        // ignore
+      }
+    };
   }, []);
     
     // If running inside Capacitor webview and currently loading from file://,

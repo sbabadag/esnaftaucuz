@@ -8,6 +8,7 @@
 import { supabase } from '../lib/supabase';
 import { v4 as uuidv4 } from 'uuid';
 import { Browser } from '@capacitor/browser';
+import { getImmediateUnreadCount } from '../lib/notification-store';
 
 const normalizeMerchantFlag = (value: any): boolean => {
   if (value === true) return true;
@@ -883,7 +884,7 @@ export const pricesAPI = {
         // Fallback: avoid relation joins (users/products/locations) in case one policy breaks the full select.
         let basicQuery = supabase
           .from('prices')
-          .select('id, product_id, location_id, price, unit, created_at, is_verified, photo, coordinates, is_active')
+          .select('id, user_id, product_id, location_id, price, unit, created_at, is_verified, photo, coordinates, is_active')
           .order(filters?.sort === 'cheapest' ? 'price' : 'created_at', { ascending: filters?.sort === 'cheapest' })
           .limit(filters?.limit || 500);
 
@@ -1083,9 +1084,11 @@ export const pricesAPI = {
 
   create: async (data: {
     product: string;
+    productName?: string;
     price: number;
     unit: string;
     location: string;
+    locationName?: string;
     userId?: string;
     accessToken?: string;
     lat?: number;
@@ -1141,20 +1144,6 @@ export const pricesAPI = {
             }
           };
 
-          const fastUserId =
-            data.userId ||
-            (() => {
-              try {
-                return JSON.parse(localStorage.getItem('user') || '{}')?.id;
-              } catch {
-                return undefined;
-              }
-            })();
-
-          if (!fastUserId) {
-            throw new Error('Giris yapmaniz gerekiyor');
-          }
-
           const resolveAccessTokenQuick = async (): Promise<string | null> => {
             const direct = data.accessToken || localStorage.getItem('authToken');
             if (direct) return direct;
@@ -1185,10 +1174,22 @@ export const pricesAPI = {
             }
           };
 
+          const extractUserIdFromJwt = (token: string | null): string | null => {
+            if (!token || !token.includes('.')) return null;
+            try {
+              const payload = token.split('.')[1];
+              const normalized = payload.replace(/-/g, '+').replace(/_/g, '/');
+              const decoded = atob(normalized.padEnd(Math.ceil(normalized.length / 4) * 4, '='));
+              const parsed = JSON.parse(decoded);
+              return typeof parsed?.sub === 'string' ? parsed.sub : null;
+            } catch {
+              return null;
+            }
+          };
+
           const fastPriceData: any = {
             product_id: data.product,
             location_id: data.location,
-            user_id: fastUserId,
             price: data.price,
             unit: data.unit,
             is_active: true,
@@ -1201,6 +1202,22 @@ export const pricesAPI = {
           const sbUrl = import.meta.env.VITE_SUPABASE_URL as string;
           const sbKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
           const authToken = await resolveAccessTokenQuick();
+          const jwtUserId = extractUserIdFromJwt(authToken);
+          const fastUserId =
+            jwtUserId ||
+            data.userId ||
+            (() => {
+              try {
+                return JSON.parse(localStorage.getItem('user') || '{}')?.id;
+              } catch {
+                return undefined;
+              }
+            })();
+
+          if (!fastUserId) {
+            throw new Error('Giris yapmaniz gerekiyor');
+          }
+          fastPriceData.user_id = fastUserId;
 
           // Try direct REST insert first to bypass supabase-js auth/session delays.
           if (sbUrl && sbKey && authToken) {
@@ -1246,10 +1263,72 @@ export const pricesAPI = {
 
           if (!fastRecord) throw new Error('Fiyat kaydi olusturulamadi');
 
+          // REST fast-path can return row without nested relations.
+          // Hydrate once so Contributions/other UI can render product/location names.
+          try {
+            const hydratePromise = supabase
+              .from('prices')
+              .select(`
+                *,
+                product:products(id, name, category, default_unit, image),
+                location:locations(id, name, type, address, coordinates, city, district),
+                user:users(id, name, avatar, level)
+              `)
+              .eq('id', fastRecord.id)
+              .maybeSingle();
+
+            const hydrateResult = await Promise.race([
+              hydratePromise,
+              new Promise<any>((resolve) => setTimeout(() => resolve(null), 2500)),
+            ]);
+
+            const hydrated = hydrateResult?.data;
+            if (hydrated) {
+              fastRecord = hydrated;
+            }
+          } catch (hydrateError) {
+            console.warn('⚠️ Fast-path hydrate skipped:', hydrateError);
+          }
+
+          // Final safety: preserve selected labels when relations are missing.
+          if ((!fastRecord?.product || !fastRecord?.product?.name) && data.productName) {
+            fastRecord.product = {
+              id: fastRecord?.product_id || data.product,
+              name: data.productName,
+            };
+          }
+          if ((!fastRecord?.location || !fastRecord?.location?.name) && data.locationName) {
+            fastRecord.location = {
+              id: fastRecord?.location_id || data.location,
+              name: data.locationName,
+            };
+          }
+
           // Non-blocking post-actions; do not delay submit UX.
           supabase.functions.invoke('notify-price-drop', {
             body: { price_id: fastRecord.id },
           }).catch(() => {});
+
+          // Keep "Katkılarım" reliable for the fast-path as well.
+          try {
+            const cacheKey = `contributions-cache:${fastUserId}`;
+            const globalCacheKey = 'contributions-cache:last';
+            const cachedRaw = localStorage.getItem(cacheKey);
+            const cachedList = (() => {
+              if (!cachedRaw) return [];
+              try {
+                const parsed = JSON.parse(cachedRaw);
+                return Array.isArray(parsed) ? parsed : [];
+              } catch {
+                return [];
+              }
+            })();
+            const nextList = [fastRecord, ...cachedList.filter((item: any) => item?.id !== fastRecord.id)].slice(0, 50);
+            localStorage.setItem(cacheKey, JSON.stringify(nextList));
+            localStorage.setItem(globalCacheKey, JSON.stringify(nextList));
+          } catch (cacheError) {
+            console.warn('⚠️ Could not update contributions cache in fast-path:', cacheError);
+          }
 
           return fastRecord;
         }
@@ -1574,6 +1653,20 @@ export const pricesAPI = {
       if (!priceRecord) {
         throw new Error('Fiyat oluşturulamadı: Yeni fiyat döndürülmedi');
       }
+
+      // Final safety for non-fast path as well.
+      if ((!priceRecord?.product || !priceRecord?.product?.name) && data.productName) {
+        (priceRecord as any).product = {
+          id: (priceRecord as any)?.product_id || data.product,
+          name: data.productName,
+        };
+      }
+      if ((!priceRecord?.location || !priceRecord?.location?.name) && data.locationName) {
+        (priceRecord as any).location = {
+          id: (priceRecord as any)?.location_id || data.location,
+          name: data.locationName,
+        };
+      }
       
       console.log('Price created successfully:', priceRecord.id);
 
@@ -1609,6 +1702,27 @@ export const pricesAPI = {
           })
           .eq('id', userId);
       }
+
+        // Keep "Katkılarım" usable even when network/profile queries are flaky.
+        try {
+          const cacheKey = `contributions-cache:${userId}`;
+          const globalCacheKey = 'contributions-cache:last';
+          const cachedRaw = localStorage.getItem(cacheKey);
+          const cachedList = (() => {
+            if (!cachedRaw) return [];
+            try {
+              const parsed = JSON.parse(cachedRaw);
+              return Array.isArray(parsed) ? parsed : [];
+            } catch {
+              return [];
+            }
+          })();
+          const nextList = [priceRecord, ...cachedList.filter((item: any) => item?.id !== priceRecord.id)].slice(0, 50);
+          localStorage.setItem(cacheKey, JSON.stringify(nextList));
+          localStorage.setItem(globalCacheKey, JSON.stringify(nextList));
+        } catch (cacheError) {
+          console.warn('⚠️ Could not update contributions cache after create:', cacheError);
+        }
 
         console.log('✅ Price creation completed successfully');
         
@@ -1748,23 +1862,124 @@ export const usersAPI = {
 
   getContributions: async (id: string) => {
     try {
-      const { data, error } = await supabase
-        .from('prices')
-        .select(`
-          *,
-          product:products(id, name, category, default_unit, image),
-          location:locations(id, name, type, address, coordinates, city, district)
-        `)
-        .eq('user_id', id)
-        .eq('is_active', true)
-        .order('created_at', { ascending: false })
-        .limit(50);
+      const { data: authData } = await supabase.auth.getUser();
+      const authUserId = authData?.user?.id;
+      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      const authToken = localStorage.getItem('authToken');
+      const tokenUserId = authToken;
+      const sbUrl = import.meta.env.VITE_SUPABASE_URL as string;
+      const sbKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
 
-      if (error) throw error;
-      return data || [];
+      const candidateUserIds = Array.from(
+        new Set(
+          [authUserId, id, tokenUserId]
+            .filter((v): v is string => typeof v === 'string' && v.length > 0 && uuidRegex.test(v))
+        )
+      );
+
+      const fetchForUserId = async (userId: string) => {
+        const { data, error } = await supabase
+          .from('prices')
+          .select(`
+            *,
+            product:products(id, name, category, default_unit, image),
+            location:locations(id, name, type, address, coordinates, city, district)
+          `)
+          .eq('user_id', userId)
+          .or('is_active.eq.true,is_active.is.null')
+          .order('created_at', { ascending: false })
+          .limit(50);
+
+        if (!error) return data || [];
+
+        // Fallback: if relational select fails, fetch lightweight rows first
+        // and enrich with batched product/location queries.
+        console.warn('Primary contributions query failed, trying fallback:', { userId, error });
+
+        const { data: rawPrices, error: rawError } = await supabase
+          .from('prices')
+          .select('id, price, unit, photo, created_at, is_verified, product_id, location_id')
+          .eq('user_id', userId)
+          .or('is_active.eq.true,is_active.is.null')
+          .order('created_at', { ascending: false })
+          .limit(50);
+
+        if (rawError) {
+          console.error('Fallback contributions query failed:', { userId, rawError });
+          return [];
+        }
+
+        const prices = rawPrices || [];
+        const productIds = Array.from(new Set(prices.map((p: any) => p.product_id).filter(Boolean)));
+        const locationIds = Array.from(new Set(prices.map((p: any) => p.location_id).filter(Boolean)));
+
+        const [productsRes, locationsRes] = await Promise.all([
+          productIds.length
+            ? supabase
+                .from('products')
+                .select('id, name, category, image, default_unit')
+                .in('id', productIds)
+            : Promise.resolve({ data: [], error: null } as any),
+          locationIds.length
+            ? supabase
+                .from('locations')
+                .select('id, name, type, city, district')
+                .in('id', locationIds)
+            : Promise.resolve({ data: [], error: null } as any),
+        ]);
+
+        const productsMap = new Map((productsRes.data || []).map((p: any) => [p.id, p]));
+        const locationsMap = new Map((locationsRes.data || []).map((l: any) => [l.id, l]));
+
+        return prices.map((p: any) => ({
+          ...p,
+          product: p.product_id ? productsMap.get(p.product_id) || undefined : undefined,
+          location: p.location_id ? locationsMap.get(p.location_id) || undefined : undefined,
+        }));
+      };
+
+      const fetchViaRest = async (userId: string) => {
+        if (!authToken || !authToken.includes('.') || !sbUrl || !sbKey) return [];
+        try {
+          const params = new URLSearchParams({
+            select: 'id,price,unit,photo,created_at,is_verified,product:products(id,name,category,default_unit,image),location:locations(id,name,type,address,coordinates,city,district)',
+            user_id: `eq.${userId}`,
+            or: '(is_active.eq.true,is_active.is.null)',
+            order: 'created_at.desc',
+            limit: '50',
+          });
+
+          const response = await fetch(`${sbUrl}/rest/v1/prices?${params.toString()}`, {
+            headers: {
+              apikey: sbKey,
+              Authorization: `Bearer ${authToken}`,
+            },
+          });
+          if (!response.ok) return [];
+
+          const rows = await response.json().catch(() => []);
+          return Array.isArray(rows) ? rows : [];
+        } catch {
+          return [];
+        }
+      };
+
+      for (const userId of candidateUserIds) {
+        const rows = await fetchForUserId(userId);
+        if (rows.length > 0) return rows;
+      }
+
+      // Final fallback: direct REST query with current auth token.
+      for (const userId of candidateUserIds) {
+        const rows = await fetchViaRest(userId);
+        if (rows.length > 0) return rows;
+      }
+
+      return [];
     } catch (error: any) {
       console.error('Get contributions error:', error);
-      throw new Error(error.message || 'Katkılar yüklenemedi');
+      // Do not block screen on transient network errors.
+      return [];
     }
   },
 
@@ -2560,7 +2775,32 @@ export const notificationsAPI = {
         }
         throw error;
       }
-      return data || [];
+      if (Array.isArray(data) && data.length > 0) {
+        return data;
+      }
+
+      // Fallback: direct REST read for cases where supabase-js session
+      // is stale on mobile but auth token exists in localStorage.
+      const sbUrl = import.meta.env.VITE_SUPABASE_URL as string;
+      const sbKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
+      const authToken = localStorage.getItem('authToken');
+      if (sbUrl && sbKey && authToken) {
+        const response = await fetch(
+          `${sbUrl}/rest/v1/notifications?select=*,product:products(id,name,image,category)&user_id=eq.${userId}&order=created_at.desc&limit=${limit}`,
+          {
+            headers: {
+              apikey: sbKey,
+              Authorization: `Bearer ${authToken}`,
+            },
+          }
+        );
+        if (response.ok) {
+          const rows = await response.json().catch(() => []);
+          if (Array.isArray(rows)) return rows;
+        }
+      }
+
+      return [];
     } catch (error: any) {
       // If table doesn't exist, return empty array instead of throwing
       if (error?.code === '42P01' || error?.message?.includes('does not exist')) {
@@ -2574,6 +2814,7 @@ export const notificationsAPI = {
   // Get unread notifications count
   getUnreadCount: async (userId: string) => {
     try {
+      const immediateUnread = getImmediateUnreadCount(userId);
       const { count, error } = await supabase
         .from('notifications')
         .select('*', { count: 'exact', head: true })
@@ -2583,18 +2824,18 @@ export const notificationsAPI = {
       if (error) {
         // If table doesn't exist, return 0 instead of throwing
         if (error.code === '42P01' || error.message?.includes('does not exist')) {
-          return 0;
+          return immediateUnread;
         }
         throw error;
       }
-      return count || 0;
+      return Math.max(count || 0, immediateUnread);
     } catch (error: any) {
-      // If table doesn't exist, return 0
+      // Never fail badge count; always fall back to local/cache sources.
       if (error?.code === '42P01' || error?.message?.includes('does not exist')) {
-        return 0;
+        return getImmediateUnreadCount(userId);
       }
       console.error('❌ Get unread count error:', error);
-      throw error;
+      return getImmediateUnreadCount(userId);
     }
   },
 

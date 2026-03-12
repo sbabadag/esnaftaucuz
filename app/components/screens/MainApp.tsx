@@ -11,13 +11,18 @@ import NotificationsScreen from './NotificationsScreen';
 import SettingsScreen from './SettingsScreen';
 import ContributionsScreen from './ContributionsScreen';
 import MerchantShopScreen from './MerchantShopScreen';
-import { useState, useEffect } from 'react';
+import BadgesScreen from './BadgesScreen';
+import { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
 import { supabase } from '../../lib/supabase';
-import { Capacitor } from '@capacitor/core';
-import { FirebaseMessaging, Importance } from '@capacitor-firebase/messaging';
-import { registerWebPushAndGetToken } from '../../lib/web-push';
-import { pushTokensAPI } from '../../services/supabase-api';
+import { addLocalNotification } from '../../lib/notification-store';
+import { asUuidOrNull, isLikelyJwt, isUuid, normalizePushEvent } from '../../lib/push-notification-utils';
+import {
+  usePendingPushDrain,
+  usePendingPushRetry,
+  usePendingPushRoute,
+  usePushRegistration,
+} from '../../hooks/usePushNotificationPipeline';
 
 // Regular user tabs
 const regularTabs = [
@@ -103,6 +108,144 @@ export default function MainApp() {
 
   // Get tabs based on user type
   const tabs = isMerchant ? merchantTabs : regularTabs;
+  const pendingQueueKey = 'pending_push_events_v1';
+
+  const extractPushPayload = useCallback((raw: any) => normalizePushEvent(raw), []);
+
+  const persistLocalNotification = useCallback((payload: any) => {
+    if (!user?.id) return;
+    try {
+      const normalized = extractPushPayload(payload);
+      const data = normalized.data || {};
+      const type = String(data.type || 'other');
+      const title = String(data.title || normalized.title || 'Bildirim');
+      const message = String(data.message || normalized.body || 'Yeni bildirim var.');
+      const productId = asUuidOrNull(data.product_id || data.productId);
+      const priceId = asUuidOrNull(data.price_id || data.priceId);
+      const row = {
+        id: normalized.id || `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        type,
+        title,
+        message,
+        product_id: productId || undefined,
+        price_id: priceId || undefined,
+        is_read: false,
+        created_at: new Date().toISOString(),
+      };
+
+      addLocalNotification(user.id, row);
+    } catch {
+      // ignore local cache write errors
+    }
+  }, [user?.id, extractPushPayload]);
+
+  const syncNotificationFromPush = useCallback(async (payload: any): Promise<boolean> => {
+    if (!user?.id) return false;
+    try {
+      const normalized = extractPushPayload(payload);
+      const data = normalized.data || {};
+      const type = data.type || 'other';
+      const title = data.title || normalized.title || 'Bildirim';
+      const message = data.message || normalized.body || 'Yeni bildirim var.';
+      const productId = asUuidOrNull(data.product_id || data.productId);
+      const priceId = asUuidOrNull(data.price_id || data.priceId);
+      const notificationIdRaw = data.notification_id || data.notificationId || normalized.id;
+      const notificationId = isUuid(notificationIdRaw) ? String(notificationIdRaw) : undefined;
+
+      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string;
+      const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
+      let accessToken: string | null = null;
+      for (let i = 0; i < 5 && !accessToken; i++) {
+        try {
+          const sessionRes = await supabase.auth.getSession();
+          accessToken = sessionRes?.data?.session?.access_token || null;
+          if (!accessToken) {
+            await new Promise((resolve) => setTimeout(resolve, 1200 * (i + 1)));
+          }
+        } catch {
+          await new Promise((resolve) => setTimeout(resolve, 1200 * (i + 1)));
+        }
+      }
+      if (!accessToken) {
+        try {
+          const fromStorage = localStorage.getItem('authToken');
+          if (isLikelyJwt(fromStorage)) {
+            accessToken = fromStorage;
+          }
+        } catch {
+          // ignore localStorage errors
+        }
+      }
+
+      // Primary path: direct authenticated function call with explicit bearer token.
+      if (supabaseUrl && supabaseAnonKey && accessToken) {
+        try {
+          const response = await fetch(`${supabaseUrl}/functions/v1/sync-notification-from-push`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              apikey: supabaseAnonKey,
+              Authorization: `Bearer ${accessToken}`,
+            },
+            body: JSON.stringify({
+              notification_id: notificationId,
+              type,
+              title,
+              message,
+              product_id: productId,
+              price_id: priceId,
+            }),
+          });
+          const json = await response.json().catch(() => null);
+          if (response.ok && (!json || json.ok !== false)) {
+            return true;
+          }
+        } catch (directFnError) {
+          console.warn('Direct sync-notification-from-push call failed:', directFnError);
+        }
+      }
+
+      const invokeRes = await supabase.functions.invoke('sync-notification-from-push', {
+        body: {
+          notification_id: notificationId,
+          type,
+          title,
+          message,
+          product_id: productId,
+          price_id: priceId,
+        },
+      });
+
+      const invokeFailed = !!invokeRes?.error || (invokeRes?.data && invokeRes?.data?.ok === false);
+      if (!invokeFailed) return true;
+
+      // Fallback write path from client if edge function path fails.
+      if (priceId && type === 'price_drop') {
+        const { data: existing } = await supabase
+          .from('notifications')
+          .select('id')
+          .eq('user_id', user.id)
+          .eq('type', 'price_drop')
+          .eq('price_id', priceId)
+          .maybeSingle();
+        if (existing?.id) return true;
+      }
+
+      const { error: insertError } = await supabase.from('notifications').insert({
+        user_id: user.id,
+        type,
+        title,
+        message,
+        product_id: productId,
+        price_id: priceId,
+      });
+      if (insertError) return false;
+      return true;
+    } catch (error) {
+      console.warn('sync-notification-from-push skipped:', error);
+      return false;
+    }
+  }, [user?.id, extractPushPayload]);
 
   useEffect(() => {
     if (isMerchant && location.pathname.includes('/app/add')) {
@@ -110,58 +253,31 @@ export default function MainApp() {
     }
   }, [isMerchant, location.pathname, navigate]);
 
-  useEffect(() => {
-    let cancelled = false;
-    const registerPush = async () => {
-      if (!user?.id) return;
-      const platform = Capacitor.getPlatform();
-      const isNative = Capacitor.isNativePlatform();
-      const markerKey = `push_registered:${platform}:${user.id}`;
-      if (!isNative && localStorage.getItem(markerKey) === 'true') return;
-      try {
-        if (isNative) {
-          await FirebaseMessaging.createChannel({
-            id: 'price_alerts',
-            name: 'Fiyat Bildirimleri',
-            description: 'Fiyat dususleri ve onemli bildirimler',
-            importance: Importance.High,
-            vibration: true,
-          });
+  usePendingPushDrain({
+    userId: user?.id,
+    pendingQueueKey,
+    persistLocalNotification,
+    syncNotificationFromPush,
+  });
 
-          const permissions = await Promise.race([
-            FirebaseMessaging.requestPermissions(),
-            new Promise<any>((resolve) => setTimeout(() => resolve(null), 5000)),
-          ]);
-          const receive = String(permissions?.receive || '').toLowerCase();
-          if (receive === 'denied' || cancelled) return;
+  usePendingPushRetry({
+    userId: user?.id,
+    syncNotificationFromPush,
+  });
 
-          const tokenResult = await Promise.race([
-            FirebaseMessaging.getToken(),
-            new Promise<any>((resolve) => setTimeout(() => resolve(null), 6000)),
-          ]);
-          const token = tokenResult?.token;
-          if (!token || cancelled) return;
+  usePendingPushRoute({
+    userId: user?.id,
+    pathname: location.pathname,
+    navigate,
+  });
 
-          await pushTokensAPI.upsert(user.id, token, platform === 'ios' ? 'ios' : 'android');
-        } else {
-          const token = await registerWebPushAndGetToken();
-          if (!token || cancelled) return;
-          await pushTokensAPI.upsert(user.id, token, 'web');
-        }
-
-        if (cancelled) return;
-        if (!isNative) {
-          localStorage.setItem(markerKey, 'true');
-        }
-      } catch (error) {
-        console.warn('Push token registration skipped:', error);
-      }
-    };
-    registerPush();
-    return () => {
-      cancelled = true;
-    };
-  }, [user?.id]);
+  usePushRegistration({
+    userId: user?.id,
+    navigate,
+    persistLocalNotification,
+    syncNotificationFromPush,
+    extractPushPayload,
+  });
   
   // Debug: Log tabs
   useEffect(() => {
@@ -178,6 +294,7 @@ export default function MainApp() {
                      location.pathname.includes('/location/') ||
                      location.pathname.includes('/notifications') ||
                      location.pathname.includes('/settings') ||
+                     location.pathname.includes('/badges') ||
                      location.pathname.includes('/contributions') ||
                      location.pathname.includes('/add') ||
                      (isMerchant && location.pathname.includes('/merchant-shop/') && location.pathname !== `/app/merchant-shop/${user?.id}`);
@@ -196,6 +313,13 @@ export default function MainApp() {
   
   // Check if merchant-shop tab is active
   const isMerchantShopActive = isMerchant && location.pathname.includes('/merchant-shop/') && location.pathname === `/app/merchant-shop/${user?.id}`;
+
+  useEffect(() => {
+    // Keep add flow isolated from explore URL search params.
+    if (!location.pathname.startsWith('/app/add')) return;
+    if (!location.search) return;
+    navigate('/app/add', { replace: true });
+  }, [location.pathname, location.search, navigate]);
 
   return (
     <div className="min-h-screen bg-gray-50 pb-safe">
@@ -236,6 +360,7 @@ export default function MainApp() {
           <Route path="favorites" element={<FavoritesScreen />} />
           <Route path="notifications" element={<NotificationsScreen />} />
           <Route path="settings" element={<SettingsScreen />} />
+          <Route path="badges" element={<BadgesScreen />} />
           <Route path="contributions" element={<ContributionsScreen />} />
           <Route path="merchant-shop/:merchantId" element={<MerchantShopScreen />} />
         </Routes>

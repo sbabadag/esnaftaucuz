@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ArrowLeft, TrendingDown, MapPin, CheckCircle2, Bell, X, Package } from 'lucide-react';
 import { Button } from '../ui/button';
@@ -6,6 +6,16 @@ import { notificationsAPI } from '../../services/supabase-api';
 import { useAuth } from '../../contexts/AuthContext';
 import { toast } from 'sonner';
 import { supabase } from '../../lib/supabase';
+import { Capacitor } from '@capacitor/core';
+import { FirebaseMessaging } from '@capacitor-firebase/messaging';
+import {
+  getLocalNotifications as readLocalNotifications,
+  getNotificationsCacheKey,
+  markAllLocalNotificationsRead,
+  markLocalNotificationRead,
+  deleteLocalNotification,
+} from '../../lib/notification-store';
+import { asUuidOrNull, isUuid } from '../../lib/push-notification-utils';
 
 interface Notification {
   id: string;
@@ -72,12 +82,113 @@ export default function NotificationsScreen() {
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [markingAsRead, setMarkingAsRead] = useState<Set<string>>(new Set());
+  const cacheKey = getNotificationsCacheKey(user?.id || 'anon');
+  const deliveredSyncAttemptedRef = useRef(false);
+
+  const mergeNotifications = useCallback((remoteList: Notification[], localList: Notification[]) => {
+    const mergedMap = new Map<string, Notification>();
+    for (const row of remoteList) {
+      const key = String(row.id || '');
+      if (!key) continue;
+      mergedMap.set(key, row);
+    }
+    for (const row of localList) {
+      const key = String(row.id || '');
+      if (!key) continue;
+      if (!mergedMap.has(key)) {
+        mergedMap.set(key, row);
+      }
+    }
+    return Array.from(mergedMap.values()).sort(
+      (a, b) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime()
+    );
+  }, []);
+
+  const getLocalNotificationsFromStore = useCallback((): Notification[] => {
+    if (!user?.id) return [];
+    return readLocalNotifications<Notification>(user.id);
+  }, [user?.id]);
+
+  const syncDeliveredNotificationsInBackground = useCallback(async () => {
+    if (!Capacitor.isNativePlatform()) return;
+    if (deliveredSyncAttemptedRef.current) return;
+    deliveredSyncAttemptedRef.current = true;
+    try {
+      const delivered = await FirebaseMessaging.getDeliveredNotifications();
+      const deliveredList = Array.isArray(delivered?.notifications) ? delivered.notifications : [];
+      if (deliveredList.length === 0) return;
+      const sbUrl = import.meta.env.VITE_SUPABASE_URL as string;
+      const sbKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
+      const authToken = localStorage.getItem('authToken') || '';
+
+      const tasks = deliveredList.slice(0, 8).map(async (item) => {
+        const payload: any = (item as any) || {};
+        const payloadData: any = payload.data || {};
+        const notificationIdRaw = payload.id || payloadData.notification_id || payloadData.notificationId || '';
+        const body = {
+          notification_id: isUuid(notificationIdRaw) ? String(notificationIdRaw).trim() : undefined,
+          type: payloadData.type || 'other',
+          title: payload.title || payloadData.title || 'Bildirim',
+          message: payload.body || payloadData.message || payloadData.body || 'Yeni bildirim var.',
+          product_id: asUuidOrNull(payloadData.product_id || payloadData.productId),
+          price_id: asUuidOrNull(payloadData.price_id || payloadData.priceId),
+        };
+
+        if (sbUrl && sbKey && authToken) {
+          await fetch(`${sbUrl}/functions/v1/sync-notification-from-push`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              apikey: sbKey,
+              Authorization: `Bearer ${authToken}`,
+            },
+            body: JSON.stringify(body),
+          }).catch(() => null);
+          return;
+        }
+        await supabase.functions.invoke('sync-notification-from-push', { body }).catch(() => null);
+      });
+
+      await Promise.allSettled(tasks);
+    } catch (syncError) {
+      console.warn('Delivered notifications sync failed:', syncError);
+    }
+  }, []);
 
   useEffect(() => {
-    if (user) {
-      loadNotifications();
+    if (!user?.id) return;
+    try {
+      localStorage.removeItem('pending_push_route');
+    } catch {
+      // ignore storage errors
     }
-  }, [user]);
+    try {
+      const raw = localStorage.getItem(cacheKey);
+      if (raw) {
+        const cached = JSON.parse(raw);
+        if (Array.isArray(cached)) {
+          const merged = mergeNotifications(cached as Notification[], getLocalNotificationsFromStore());
+          setNotifications(merged);
+          setIsLoading(false);
+        }
+      }
+    } catch {
+      // ignore cache parsing errors
+    }
+    // If no cache, still render local notifications immediately.
+    try {
+      if (!localStorage.getItem(cacheKey)) {
+        const localOnly = getLocalNotificationsFromStore();
+        if (localOnly.length > 0) {
+          setNotifications(localOnly);
+          setIsLoading(false);
+        }
+      }
+    } catch {
+      // ignore
+    }
+    loadNotifications();
+  }, [user?.id, cacheKey, mergeNotifications, getLocalNotificationsFromStore]);
 
   useEffect(() => {
     if (!user?.id) return;
@@ -94,7 +205,7 @@ export default function NotificationsScreen() {
         },
         () => {
           // Reload so joined product data is shown immediately.
-          loadNotifications();
+          loadNotifications(true);
         }
       )
       .subscribe();
@@ -104,27 +215,55 @@ export default function NotificationsScreen() {
     };
   }, [user?.id]);
 
-  const loadNotifications = async () => {
+  const loadNotifications = async (
+    silent: boolean = false,
+    attemptedDeliveredSync: boolean = false
+  ) => {
     if (!user) {
       setIsLoading(false);
       return;
     }
 
     try {
-      setIsLoading(true);
-      const data = await notificationsAPI.getByUser(user.id);
-      setNotifications(data as Notification[]);
+      if (!silent && notifications.length === 0) setIsLoading(true);
+      const data = await Promise.race([
+        notificationsAPI.getByUser(user.id),
+        new Promise<Notification[]>((resolve) => setTimeout(() => resolve([]), 4500)),
+      ]);
+
+      if (
+        !attemptedDeliveredSync &&
+        Array.isArray(data) &&
+        data.length === 0 &&
+        Capacitor.isNativePlatform()
+      ) {
+        // Don't block UI for delivered sync; do it in background.
+        syncDeliveredNotificationsInBackground()
+          .then(() => loadNotifications(true, true))
+          .catch(() => null);
+      }
+
+      const remoteList = Array.isArray(data) ? (data as Notification[]) : [];
+      const localList = getLocalNotificationsFromStore();
+      const merged = mergeNotifications(remoteList, localList);
+
+      setNotifications(merged);
+      try {
+        localStorage.setItem(cacheKey, JSON.stringify(merged || []));
+      } catch {
+        // ignore cache write errors
+      }
     } catch (error: any) {
       console.error('Failed to load notifications:', error);
       // If table doesn't exist yet, just show empty state
       if (error?.code === '42P01' || error?.message?.includes('does not exist')) {
         console.log('Notifications table not found, showing empty state');
         setNotifications([]);
-      } else {
+      } else if (!silent) {
         toast.error('Bildirimler yüklenemedi');
       }
     } finally {
-      setIsLoading(false);
+      if (!silent) setIsLoading(false);
     }
   };
 
@@ -139,6 +278,7 @@ export default function NotificationsScreen() {
           notif.id === notificationId ? { ...notif, is_read: true } : notif
         )
       );
+      markLocalNotificationRead(user.id, notificationId);
     } catch (error: any) {
       console.error('Failed to mark as read:', error);
       toast.error('İşlem başarısız oldu');
@@ -157,6 +297,7 @@ export default function NotificationsScreen() {
     try {
       await notificationsAPI.markAllAsRead(user.id);
       setNotifications(prev => prev.map(notif => ({ ...notif, is_read: true })));
+      markAllLocalNotificationsRead(user.id);
       toast.success('Tüm bildirimler okundu olarak işaretlendi');
     } catch (error: any) {
       console.error('Failed to mark all as read:', error);
@@ -170,6 +311,7 @@ export default function NotificationsScreen() {
     try {
       await notificationsAPI.delete(notificationId, user.id);
       setNotifications(prev => prev.filter(notif => notif.id !== notificationId));
+      deleteLocalNotification(user.id, notificationId);
       toast.success('Bildirim silindi');
     } catch (error: any) {
       console.error('Failed to delete notification:', error);
@@ -185,6 +327,10 @@ export default function NotificationsScreen() {
     if (notification.product_id) {
       navigate(`/app/product/${notification.product_id}`);
     }
+  };
+
+  const handleBack = () => {
+    navigate('/app/explore');
   };
 
   if (!user) {
@@ -214,7 +360,7 @@ export default function NotificationsScreen() {
       <div className="sticky bg-white border-b border-gray-200 p-4 z-10" style={{ top: 'env(safe-area-inset-top, 0px)', paddingTop: 'calc(1rem + env(safe-area-inset-top, 0px))' }}>
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-4">
-            <button onClick={() => navigate(-1)} className="p-2 -ml-2 hover:bg-gray-100 rounded-full">
+            <button onClick={handleBack} className="p-2 -ml-2 hover:bg-gray-100 rounded-full">
               <ArrowLeft className="w-5 h-5" />
             </button>
             <h1 className="text-xl">Bildirimler</h1>

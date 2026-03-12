@@ -90,7 +90,7 @@ export default function ProfileScreen() {
     ] : []),
     { icon: Share2, label: t('CONTRIBUTIONS'), onClick: () => navigate('/app/contributions') },
     { icon: Heart, label: t('FAVORITES_TITLE'), onClick: () => navigate('/app/favorites') },
-    { icon: Award, label: t('BADGES'), onClick: () => {} },
+    { icon: Award, label: t('BADGES'), onClick: () => navigate('/app/badges') },
     { icon: Settings, label: t('SETTINGS'), onClick: () => navigate('/app/settings') },
     { icon: Share2, label: t('FEEDBACK_AND_SUPPORT'), onClick: () => navigate('/app/feedback') },
     // Theme toggle (not a navigation item)

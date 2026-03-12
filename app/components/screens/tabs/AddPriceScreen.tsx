@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ArrowLeft, Search, Camera, Image as ImageIcon, Check, MapPin, Loader2 } from 'lucide-react';
+import { ArrowLeft, Search, Camera, Image as ImageIcon, Check, MapPin, Loader2, Package } from 'lucide-react';
 import { Button } from '../../ui/button';
 import { Input } from '../../ui/input';
 import { Label } from '../../ui/label';
@@ -17,6 +17,9 @@ const steps = ['product', 'price', 'location', 'photo', 'confirm'];
 interface Product {
   id: string;
   name: string;
+  image?: string;
+  category?: string;
+  _id?: string;
 }
 
 interface Location {
@@ -31,15 +34,6 @@ export default function AddPriceScreen() {
   const { getCurrentPosition } = useGeolocation();
   const isMerchant = (user as any)?.is_merchant === true;
 
-  // Esnaf kontrolü - esnaf ise ürün sayfasına yönlendir
-  useEffect(() => {
-    if (isMerchant) {
-      toast.info('Esnaf sadece ürün sayfasından ürün ekleyebilir', {
-        duration: 3000,
-      });
-      navigate('/app/explore');
-    }
-  }, [isMerchant, navigate]);
   const [currentStep, setCurrentStep] = useState(0);
   const [products, setProducts] = useState<Product[]>([]);
   const [allProductsIndex, setAllProductsIndex] = useState<Product[]>([]);
@@ -330,9 +324,11 @@ export default function AddPriceScreen() {
           const accessToken = (sessionRes as any)?.data?.session?.access_token;
           return pricesAPI.create({
           product: formData.productId,
+          productName: formData.productName,
           price: parseFloat(formData.price),
           unit: formData.unit,
           location: formData.locationId,
+          locationName: formData.locationName,
           userId: user.id,
           accessToken,
           photo: formData.photo || undefined,
@@ -610,8 +606,20 @@ export default function AddPriceScreen() {
     }
   };
 
+  const handleAddSearchKeyDownCapture = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (e.key !== 'Enter') return;
+    const target = e.target as HTMLElement | null;
+    if (!target) return;
+    const isAddSearchInput = !!target.closest('[data-add-search-input="true"]');
+    if (isAddSearchInput) {
+      // Prevent browser-level "submit/search" behavior from leaking to other screens.
+      e.preventDefault();
+      e.stopPropagation();
+    }
+  };
+
   return (
-    <div className="min-h-screen bg-white">
+    <div className="min-h-screen bg-white" onKeyDownCapture={handleAddSearchKeyDownCapture}>
       {/* Header */}
       <div className="sticky bg-white border-b border-gray-200 p-4 z-10" style={{ top: 'env(safe-area-inset-top, 0px)', paddingTop: 'calc(1rem + env(safe-area-inset-top, 0px))' }}>
         <div className="flex items-center gap-4">
@@ -645,16 +653,33 @@ export default function AddPriceScreen() {
                 className="pl-10"
                 value={searchProductQuery}
                 onChange={(e) => handleProductSearch(e.target.value)}
+                autoComplete="off"
+                autoCorrect="off"
+                autoCapitalize="none"
+                spellCheck={false}
+                data-add-search-input="true"
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    e.stopPropagation();
+                  }
+                }}
               />
             </div>
-            <div className="grid grid-cols-2 gap-2 max-h-96 overflow-y-auto">
+            <div className="grid grid-cols-2 gap-3 max-h-96 overflow-y-auto">
               {products.map((product) => {
                 const productId = product.id || (product as any)._id; // Support both formats
+                const isSelected = formData.productId === productId;
                 return (
                   <Button
                     key={productId}
-                    variant={formData.productId === productId ? 'default' : 'outline'}
-                    className={formData.productId === productId ? 'bg-green-600 hover:bg-green-700' : ''}
+                    type="button"
+                    variant="outline"
+                    className={`h-auto p-2 flex-col gap-2 border-2 ${
+                      isSelected
+                        ? 'border-green-600 bg-green-50 hover:bg-green-100'
+                        : 'border-gray-200 bg-white hover:bg-gray-50'
+                    }`}
                     onClick={() => {
                       setFormData({
                         ...formData,
@@ -664,13 +689,30 @@ export default function AddPriceScreen() {
                       setCurrentStep(currentStep + 1);
                     }}
                   >
-                    {product.name}
+                    <div className="w-full h-20 rounded-md bg-gray-100 flex items-center justify-center overflow-hidden">
+                      {product.image ? (
+                        <img
+                          src={product.image}
+                          alt={product.name}
+                          className="w-full h-full object-cover"
+                          onError={(e) => {
+                            (e.target as HTMLImageElement).style.display = 'none';
+                            (e.target as HTMLImageElement).nextElementSibling?.classList.remove('hidden');
+                          }}
+                        />
+                      ) : null}
+                      <Package className={`w-6 h-6 text-gray-400 ${product.image ? 'hidden' : ''}`} />
+                    </div>
+                    <span className={`text-xs text-center leading-tight whitespace-normal ${isSelected ? 'text-green-800' : 'text-gray-900'}`}>
+                      {product.name}
+                    </span>
                   </Button>
                 );
               })}
             </div>
             {searchProductQuery && !products.find((p) => p.name.toLowerCase() === searchProductQuery.toLowerCase()) && (
               <Button
+                type="button"
                 variant="outline"
                 className="w-full mt-4"
                 onClick={() => createProduct(searchProductQuery)}
@@ -729,6 +771,17 @@ export default function AddPriceScreen() {
                 className="pl-10"
                 value={searchLocationQuery}
                 onChange={(e) => handleLocationSearch(e.target.value)}
+                autoComplete="off"
+                autoCorrect="off"
+                autoCapitalize="none"
+                spellCheck={false}
+                data-add-search-input="true"
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    e.stopPropagation();
+                  }
+                }}
               />
             </div>
             <div className="space-y-2 mb-4 max-h-64 overflow-y-auto">
@@ -761,6 +814,7 @@ export default function AddPriceScreen() {
                 return (
                   <Button
                     key={locationId}
+                    type="button"
                     variant={formData.locationId === locationId ? 'default' : 'outline'}
                     className={`w-full justify-start ${formData.locationId === locationId ? 'bg-green-600 hover:bg-green-700' : ''}`}
                     onClick={() => {
@@ -787,6 +841,7 @@ export default function AddPriceScreen() {
             </div>
             {searchLocationQuery && !locations.find((l) => l.name.toLowerCase() === searchLocationQuery.toLowerCase()) && (
               <Button
+                type="button"
                 variant="outline"
                 className="w-full"
                 onClick={() => createLocation(searchLocationQuery)}
@@ -795,6 +850,7 @@ export default function AddPriceScreen() {
               </Button>
             )}
             <Button 
+              type="button"
               variant="outline" 
               className="w-full mt-2"
               onClick={handleUseCurrentLocation}
@@ -826,6 +882,7 @@ export default function AddPriceScreen() {
             )}
             <div className="grid grid-cols-2 gap-4">
               <Button
+                type="button"
                 variant="outline"
                 className="h-32 flex-col gap-2"
                 onClick={() => {
@@ -844,6 +901,7 @@ export default function AddPriceScreen() {
                 <span>Kamera</span>
               </Button>
               <Button
+                type="button"
                 variant="outline"
                 className="h-32 flex-col gap-2"
                 onClick={() => {
@@ -894,6 +952,7 @@ export default function AddPriceScreen() {
       {/* Footer */}
       <div className="fixed bottom-0 left-0 right-0 p-4 bg-white border-t border-gray-200 z-[100] pb-safe" style={{ paddingBottom: 'calc(1rem + env(safe-area-inset-bottom))' }}>
         <Button
+          type="button"
           onClick={handleNext}
           disabled={
             isSubmitting ||

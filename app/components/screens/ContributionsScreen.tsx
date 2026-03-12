@@ -1,11 +1,11 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ArrowLeft, MapPin, Clock, CheckCircle2, Package } from 'lucide-react';
 import { Badge } from '../ui/badge';
 import { useAuth } from '../../contexts/AuthContext';
-import { usersAPI } from '../../services/supabase-api';
-import { toast } from 'sonner';
+import { pricesAPI, usersAPI } from '../../services/supabase-api';
 import { useLanguage } from '../../contexts/LanguageContext';
+import { supabase } from '../../lib/supabase';
 
 interface Price {
   id: string;
@@ -33,12 +33,137 @@ interface Price {
   isVerified?: boolean;
 }
 
+const CONTRIBUTIONS_TIMEOUT_MS = 8000;
+const getContributionsCacheKey = (userId: string) => `contributions-cache:${userId}`;
+const GLOBAL_CONTRIBUTIONS_CACHE_KEY = 'contributions-cache:last';
+
+const readContributionsCache = (userId: string): Price[] => {
+  try {
+    const raw = localStorage.getItem(getContributionsCacheKey(userId));
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+};
+
+const writeContributionsCache = (userId: string, values: Price[]) => {
+  try {
+    localStorage.setItem(getContributionsCacheKey(userId), JSON.stringify(values || []));
+    localStorage.setItem(GLOBAL_CONTRIBUTIONS_CACHE_KEY, JSON.stringify(values || []));
+  } catch {
+    // Ignore quota/serialization issues; cache is best effort.
+  }
+};
+
+const enrichMissingRelations = async (items: Price[], userId?: string): Promise<Price[]> => {
+  const list = Array.isArray(items) ? items : [];
+  if (list.length === 0) return [];
+
+  const missingProductIds = Array.from(
+    new Set(
+      list
+        .filter((item: any) => {
+          const productRef = item?.product;
+          const missingObj = !productRef || typeof productRef !== 'object' || !productRef?.name;
+          return missingObj && (item?.product_id || (typeof productRef === 'string' ? productRef : null));
+        })
+        .map((item: any) => item.product_id || (typeof item?.product === 'string' ? item.product : null))
+        .filter(Boolean)
+    )
+  );
+  const missingLocationIds = Array.from(
+    new Set(
+      list
+        .filter((item: any) => !item?.location && item?.location_id)
+        .map((item: any) => item.location_id)
+        .filter(Boolean)
+    )
+  );
+
+  if (missingProductIds.length === 0 && missingLocationIds.length === 0) return list;
+
+  const [productsRes, locationsRes] = await Promise.all([
+    missingProductIds.length
+      ? supabase
+          .from('products')
+          .select('id, name, category, image, default_unit')
+          .in('id', missingProductIds as string[])
+      : Promise.resolve({ data: [], error: null } as any),
+    missingLocationIds.length
+      ? supabase
+          .from('locations')
+          .select('id, name, type, city, district')
+          .in('id', missingLocationIds as string[])
+      : Promise.resolve({ data: [], error: null } as any),
+  ]);
+
+  const productMap = new Map((productsRes.data || []).map((p: any) => [p.id, p]));
+  const locationMap = new Map((locationsRes.data || []).map((l: any) => [l.id, l]));
+
+  // Offline fallback: product index cache used by AddPrice screen.
+  try {
+    const candidateKeys = [
+      userId ? `add-price-products-index:${userId}` : '',
+      'add-price-products-index:anon',
+    ].filter(Boolean);
+    for (const key of candidateKeys) {
+      const raw = localStorage.getItem(key);
+      if (!raw) continue;
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) continue;
+      for (const row of parsed) {
+        if (row?.id && row?.name && !productMap.has(row.id)) {
+          productMap.set(row.id, row);
+        }
+      }
+    }
+  } catch {
+    // best effort only
+  }
+
+  return list.map((item: any) => ({
+    ...item,
+    product:
+      (item?.product && typeof item.product === 'object' && item.product?.name
+        ? item.product
+        : undefined) ||
+      (item.product_id ? productMap.get(item.product_id) || undefined : undefined) ||
+      (typeof item?.product === 'string' ? productMap.get(item.product) || undefined : undefined),
+    location: item.location || (item.location_id ? locationMap.get(item.location_id) || undefined : undefined),
+  }));
+};
+
 export default function ContributionsScreen() {
   const navigate = useNavigate();
   const { user } = useAuth();
   const { t } = useLanguage();
   const [prices, setPrices] = useState<Price[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const productNameById = useMemo(() => {
+    const map = new Map<string, string>();
+    try {
+      const keys = [
+        user?.id ? `add-price-products-index:${user.id}` : '',
+        'add-price-products-index:anon',
+      ].filter(Boolean);
+      for (const key of keys) {
+        const raw = localStorage.getItem(key);
+        if (!raw) continue;
+        const parsed = JSON.parse(raw);
+        if (!Array.isArray(parsed)) continue;
+        for (const row of parsed) {
+          if (row?.id && row?.name && !map.has(row.id)) {
+            map.set(String(row.id), String(row.name));
+          }
+        }
+      }
+    } catch {
+      // best effort
+    }
+    return map;
+  }, [user?.id]);
 
   useEffect(() => {
     if (user?.id) {
@@ -47,13 +172,111 @@ export default function ContributionsScreen() {
   }, [user?.id]);
 
   const loadContributions = async () => {
-    try {
+    if (!user?.id) return;
+
+    const cached = readContributionsCache(user.id);
+    const globalCached = (() => {
+      try {
+        const raw = localStorage.getItem(GLOBAL_CONTRIBUTIONS_CACHE_KEY);
+        if (!raw) return [];
+        const parsed = JSON.parse(raw);
+        return Array.isArray(parsed) ? parsed : [];
+      } catch {
+        return [];
+      }
+    })();
+    const initialData = cached.length > 0 ? cached : globalCached;
+
+    if (initialData.length > 0) {
+      setPrices(initialData);
+      setIsLoading(false);
+    } else {
       setIsLoading(true);
-      const data = await usersAPI.getContributions(user!.id);
-      setPrices(data || []);
+    }
+
+    try {
+      const fallbackFromRecentFeed = async (): Promise<Price[]> => {
+        const authToken = localStorage.getItem('authToken');
+        const candidateUserIds = Array.from(
+          new Set([user.id, authToken].filter((v): v is string => typeof v === 'string' && v.length > 0))
+        );
+        if (candidateUserIds.length === 0) return [];
+
+        try {
+          const recent = await pricesAPI.getAll({ sort: 'newest', limit: 400 });
+          const mine = (recent || []).filter((item: any) => {
+            const ownerId = String(item?.user_id || item?.user?.id || '');
+            return candidateUserIds.includes(ownerId);
+          });
+          return enrichMissingRelations(mine as Price[], user.id);
+        } catch (recentError) {
+          console.error('Recent feed fallback failed:', recentError);
+          return [];
+        }
+      };
+
+      const apiPromise = usersAPI.getContributions(user.id).then((items) => items || []);
+      const timeoutPromise = new Promise<Price[] | null>((resolve) =>
+        setTimeout(() => resolve(null), CONTRIBUTIONS_TIMEOUT_MS)
+      );
+      const data = await Promise.race([apiPromise, timeoutPromise]);
+
+      // Soft-timeout: unblock UI and update when API eventually returns.
+      if (data === null) {
+        setIsLoading(false);
+        apiPromise
+          .then((lateData) => {
+            if (lateData.length > 0) {
+              enrichMissingRelations(lateData)
+                .then((enrichedLateData) => {
+                  setPrices(enrichedLateData);
+                  writeContributionsCache(user.id, enrichedLateData);
+                })
+                .catch(() => {
+                  setPrices(lateData);
+                  writeContributionsCache(user.id, lateData);
+                });
+            } else if (initialData.length === 0) {
+              fallbackFromRecentFeed()
+                .then((recentFallback) => {
+                  if (recentFallback.length > 0) {
+                    setPrices(recentFallback);
+                    writeContributionsCache(user.id, recentFallback);
+                  } else {
+                    setPrices([]);
+                  }
+                })
+                .catch(() => setPrices([]));
+            }
+          })
+          .catch((lateError) => {
+            console.error('Late contributions load failed:', lateError);
+          });
+        return;
+      }
+
+      const normalized = data || [];
+      if (normalized.length > 0) {
+        try {
+          const enriched = await enrichMissingRelations(normalized, user.id);
+          setPrices(enriched);
+          writeContributionsCache(user.id, enriched);
+        } catch {
+          setPrices(normalized);
+          writeContributionsCache(user.id, normalized);
+        }
+      } else if (initialData.length === 0) {
+        const recentFallback = await fallbackFromRecentFeed();
+        if (recentFallback.length > 0) {
+          setPrices(recentFallback);
+          writeContributionsCache(user.id, recentFallback);
+        } else {
+          setPrices([]);
+        }
+      }
     } catch (error) {
       console.error('Failed to load contributions:', error);
-      toast.error(t('CONTRIBUTIONS_LOAD_ERROR'));
+      // Keep cache/empty state visible and avoid blocking the user with repeated toasts.
     } finally {
       setIsLoading(false);
     }
@@ -84,6 +307,24 @@ export default function ContributionsScreen() {
     const date = new Date(dateString);
     const today = new Date();
     return date.toDateString() === today.toDateString();
+  };
+
+  const resolveProductName = (item: any): string => {
+    if (item?.product && typeof item.product === 'object' && item.product?.name) {
+      return String(item.product.name);
+    }
+    if (typeof item?.product === 'string') {
+      const value = item.product.trim();
+      // If backend returned direct name as string, show it.
+      if (value && !/^[0-9a-f-]{36}$/i.test(value)) return value;
+    }
+    if (typeof item?.product_name === 'string' && item.product_name.trim()) return item.product_name;
+    if (typeof item?.productName === 'string' && item.productName.trim()) return item.productName;
+    const productId = String(item?.product_id || item?.product?.id || '');
+    if (productId && productNameById.has(productId)) {
+      return productNameById.get(productId)!;
+    }
+    return t('UNKNOWN_PRODUCT');
   };
 
   if (isLoading) {
@@ -147,7 +388,7 @@ export default function ContributionsScreen() {
                     <div className="flex justify-between items-start mb-2">
                       <div className="flex-1 min-w-0">
                         <h3 className="text-lg font-semibold text-gray-900 mb-1">
-                          {item.product?.name || t('UNKNOWN_PRODUCT')}
+                          {resolveProductName(item)}
                         </h3>
                         <div className="text-2xl text-green-600 font-semibold">
                           {formatPrice(item.price)} TL{' '}
