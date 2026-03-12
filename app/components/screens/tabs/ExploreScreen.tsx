@@ -1706,7 +1706,11 @@ export default function ExploreScreen() {
                           return (
                         <div
                           key={item.id || item._id}
-                          onClick={() => navigate(`/app/product/${item.product?.id || item.product?._id || ''}`)}
+                          onClick={() => {
+                            const pid = item.product?.id || item.product?._id || (item as any).product_id;
+                            if (!pid) return;
+                            navigate(`/app/product/${pid}`);
+                          }}
                           className="bg-white rounded-lg p-3 sm:p-4 border border-gray-200 hover:border-green-600 hover:shadow-md cursor-pointer transition-all"
                         >
                           <div className="flex gap-3 sm:gap-4">
@@ -1955,7 +1959,11 @@ export default function ExploreScreen() {
                     return (
                       <div
                         key={item.id || item._id}
-                        onClick={() => navigate(`/app/product/${item.product?.id || item.product?._id || ''}`)}
+                        onClick={() => {
+                          const pid = item.product?.id || item.product?._id || (item as any).product_id;
+                          if (!pid) return;
+                          navigate(`/app/product/${pid}`);
+                        }}
                         className="bg-white rounded-lg p-3 sm:p-4 border border-gray-200 hover:border-green-600 hover:shadow-md cursor-pointer transition-all"
                       >
                         <div className="flex justify-between items-start mb-1.5 sm:mb-2">
@@ -2006,7 +2014,11 @@ export default function ExploreScreen() {
                     return (
                       <div
                         key={item.id || item._id}
-                        onClick={() => navigate(`/app/product/${item.product?.id || item.product?._id || ''}`)}
+                        onClick={() => {
+                          const pid = item.product?.id || item.product?._id || (item as any).product_id;
+                          if (!pid) return;
+                          navigate(`/app/product/${pid}`);
+                        }}
                         className="bg-white rounded-lg p-3 sm:p-4 border border-gray-200 hover:border-green-600 hover:shadow-md cursor-pointer transition-all"
                       >
                         <div className="flex gap-3 sm:gap-4">

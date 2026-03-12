@@ -2660,6 +2660,22 @@ export const pushTokensAPI = {
   upsert: async (userId: string, token: string, platform: 'ios' | 'android' | 'web') => {
     try {
       if (!userId || !token) return null;
+      try {
+        const fnResult = await Promise.race([
+          supabase.functions.invoke('register-push-token', {
+            body: { token, platform },
+          }),
+          new Promise<any>((resolve) =>
+            setTimeout(() => resolve({ data: null, error: new Error('register-push-token-timeout') }), 6000),
+          ),
+        ]);
+        if (!(fnResult as any)?.error && (fnResult as any)?.data?.ok) {
+          return (fnResult as any)?.data?.row || null;
+        }
+      } catch (invokeError) {
+        console.warn('register-push-token function failed, falling back:', invokeError);
+      }
+
       const extractAccessTokenFromUnknownShape = (value: any): string | null => {
         try {
           if (!value) return null;

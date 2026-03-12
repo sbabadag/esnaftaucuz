@@ -175,10 +175,80 @@ export default function ProductDetailScreen() {
   const loadProductData = async () => {
     try {
       setIsLoading(true);
-
       const sbUrl = import.meta.env.VITE_SUPABASE_URL as string;
       const sbKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
-      const headers = { apikey: sbKey, Authorization: `Bearer ${sbKey}`, Accept: 'application/json' };
+      const resolveAccessTokenQuick = async (): Promise<string | null> => {
+        const direct = localStorage.getItem('authToken');
+        if (direct) return direct;
+        try {
+          const sessionResult = await Promise.race([
+            supabase.auth.getSession(),
+            new Promise<any>((resolve) => setTimeout(() => resolve(null), 1500)),
+          ]);
+          return (sessionResult as any)?.data?.session?.access_token || null;
+        } catch {
+          return null;
+        }
+      };
+      const authToken = await resolveAccessTokenQuick();
+
+      // Primary path: direct Edge Function fetch to avoid client auth/RLS edge cases on mobile.
+      try {
+        const feedResponse = await Promise.race([
+          fetch(`${sbUrl}/functions/v1/product-detail-feed`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              apikey: sbKey,
+              Authorization: `Bearer ${authToken || sbKey}`,
+            },
+            body: JSON.stringify({ product_id: id, sort_by: sortBy, limit: 50 }),
+          }),
+          new Promise<any>((resolve) =>
+            setTimeout(() => resolve(null), 10000),
+          ),
+        ]);
+        const feedJson =
+          feedResponse && (feedResponse as any).ok
+            ? await (feedResponse as any).json().catch(() => null)
+            : null;
+        if (feedJson?.ok) {
+          const productData = feedJson.product;
+          const rows = Array.isArray(feedJson.prices) ? feedJson.prices : [];
+          if (productData) setProduct(productData);
+          setPrices(rows);
+
+          if (rows.length > 0) {
+            const total = rows.reduce((sum: number, p: Price) => sum + Number((p as any).price || 0), 0);
+            setAveragePrice(total / rows.length);
+          } else {
+            setAveragePrice(0);
+          }
+
+          const today = new Date();
+          today.setHours(0, 0, 0, 0);
+          const todayPrices = rows.filter((p: Price) => {
+            const priceDate = new Date((p as any).created_at || (p as any).createdAt || '');
+            return priceDate >= today;
+          });
+          if (todayPrices.length > 0) {
+            const cheapest = todayPrices.reduce((min: Price, p: Price) =>
+              Number((p as any).price || 0) < Number((min as any).price || 0) ? p : min
+            );
+            setCheapestToday(cheapest);
+          } else {
+            setCheapestToday(null);
+          }
+          return;
+        }
+      } catch (feedError) {
+        console.warn('product-detail-feed failed, falling back:', feedError);
+      }
+      const headers = {
+        apikey: sbKey,
+        Authorization: `Bearer ${authToken || sbKey}`,
+        Accept: 'application/json',
+      };
 
       const controller = new AbortController();
       const tid = setTimeout(() => controller.abort(), 12000);
@@ -231,6 +301,24 @@ export default function ProductDetailScreen() {
           }));
         }
       }
+      // Fallback to client API when direct REST path returns empty (usually auth/RLS edge cases on mobile).
+      if (priceData.length === 0 && id) {
+        try {
+          const fallbackRows = await pricesAPI.getByProduct(id, sortBy);
+          if (Array.isArray(fallbackRows) && fallbackRows.length > 0) {
+            priceData = fallbackRows as any[];
+          }
+        } catch (fallbackError) {
+          console.warn('Price fallback load failed:', fallbackError);
+        }
+      }
+
+      // Keep numeric math stable even if backend returns numeric strings.
+      priceData = (priceData || []).map((row: any) => ({
+        ...row,
+        price: typeof row?.price === 'number' ? row.price : Number(row?.price || 0),
+      }));
+
       setPrices(priceData);
 
       // Calculate average price
