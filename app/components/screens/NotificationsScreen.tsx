@@ -34,6 +34,26 @@ interface Notification {
   };
 }
 
+const getDeletedNotificationsKey = (userId: string) => `notifications-deleted:${userId}`;
+
+const readDeletedNotificationIds = (userId: string): Set<string> => {
+  try {
+    const raw = localStorage.getItem(getDeletedNotificationsKey(userId));
+    const parsed = raw ? JSON.parse(raw) : [];
+    return new Set(Array.isArray(parsed) ? parsed.map((v: any) => String(v)) : []);
+  } catch {
+    return new Set();
+  }
+};
+
+const saveDeletedNotificationIds = (userId: string, ids: Set<string>) => {
+  try {
+    localStorage.setItem(getDeletedNotificationsKey(userId), JSON.stringify(Array.from(ids)));
+  } catch {
+    // ignore storage errors
+  }
+};
+
 const getNotificationIcon = (type: string) => {
   switch (type) {
     case 'price_drop':
@@ -109,6 +129,13 @@ export default function NotificationsScreen() {
     return readLocalNotifications<Notification>(user.id);
   }, [user?.id]);
 
+  const applyDeletedFilter = useCallback((list: Notification[]): Notification[] => {
+    if (!user?.id) return list;
+    const deleted = readDeletedNotificationIds(user.id);
+    if (deleted.size === 0) return list;
+    return list.filter((row) => !deleted.has(String(row?.id || '')));
+  }, [user?.id]);
+
   const syncDeliveredNotificationsInBackground = useCallback(async () => {
     if (!Capacitor.isNativePlatform()) return;
     if (deliveredSyncAttemptedRef.current) return;
@@ -167,7 +194,9 @@ export default function NotificationsScreen() {
       if (raw) {
         const cached = JSON.parse(raw);
         if (Array.isArray(cached)) {
-          const merged = mergeNotifications(cached as Notification[], getLocalNotificationsFromStore());
+          const merged = applyDeletedFilter(
+            mergeNotifications(cached as Notification[], getLocalNotificationsFromStore())
+          );
           setNotifications(merged);
           setIsLoading(false);
         }
@@ -180,7 +209,7 @@ export default function NotificationsScreen() {
       if (!localStorage.getItem(cacheKey)) {
         const localOnly = getLocalNotificationsFromStore();
         if (localOnly.length > 0) {
-          setNotifications(localOnly);
+          setNotifications(applyDeletedFilter(localOnly));
           setIsLoading(false);
         }
       }
@@ -188,7 +217,7 @@ export default function NotificationsScreen() {
       // ignore
     }
     loadNotifications();
-  }, [user?.id, cacheKey, mergeNotifications, getLocalNotificationsFromStore]);
+  }, [user?.id, cacheKey, mergeNotifications, getLocalNotificationsFromStore, applyDeletedFilter]);
 
   useEffect(() => {
     if (!user?.id) return;
@@ -245,7 +274,7 @@ export default function NotificationsScreen() {
 
       const remoteList = Array.isArray(data) ? (data as Notification[]) : [];
       const localList = getLocalNotificationsFromStore();
-      const merged = mergeNotifications(remoteList, localList);
+      const merged = applyDeletedFilter(mergeNotifications(remoteList, localList));
 
       setNotifications(merged);
       try {
@@ -309,13 +338,19 @@ export default function NotificationsScreen() {
     if (!user) return;
 
     try {
-      await notificationsAPI.delete(notificationId, user.id);
       setNotifications(prev => prev.filter(notif => notif.id !== notificationId));
       deleteLocalNotification(user.id, notificationId);
+      const deleted = readDeletedNotificationIds(user.id);
+      deleted.add(String(notificationId));
+      saveDeletedNotificationIds(user.id, deleted);
+      if (isUuid(notificationId)) {
+        await notificationsAPI.delete(notificationId, user.id);
+      }
       toast.success('Bildirim silindi');
     } catch (error: any) {
       console.error('Failed to delete notification:', error);
-      toast.error('Bildirim silinemedi');
+      // Keep optimistic delete result in UI.
+      toast.success('Bildirim silindi');
     }
   };
 
