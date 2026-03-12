@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Google Play Store Görselleri - esnaftaucuz</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: #f5f5f5;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            padding: 40px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        
+        h1 {
+            color: #16a34a;
+            margin-bottom: 30px;
+            text-align: center;
+        }
+        
+        .asset-section {
+            margin-bottom: 60px;
+            padding: 30px;
+            background: #f9fafb;
+            border-radius: 8px;
+            border: 2px dashed #16a34a;
+        }
+        
+        .asset-title {
+            font-size: 18px;
+            font-weight: bold;
+            color: #059669;
+            margin-bottom: 15px;
+        }
+        
+        .asset-info {
+            font-size: 14px;
+            color: #666;
+            margin-bottom: 20px;
+        }
+        
+        /* App Icon - 512x512 */
+        .app-icon {
+            width: 512px;
+            height: 512px;
+            background: linear-gradient(135deg, #16a34a 0%, #059669 100%);
+            border-radius: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            position: relative;
+        }
+        
+        .app-icon-content {
+            text-align: center;
+            color: white;
+        }
+        
+        .app-icon-logo {
+            font-size: 120px;
+            font-weight: bold;
+            margin-bottom: 10px;
+        }
+        
+        .app-icon-text {
+            font-size: 32px;
+            font-weight: 600;
+            letter-spacing: 2px;
+        }
+        
+        /* Feature Graphic - 1024x500 */
+        .feature-graphic {
+            width: 1024px;
+            height: 500px;
+            background: linear-gradient(135deg, #16a34a 0%, #059669 50%, #047857 100%);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .feature-graphic::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: radial-gradient(circle at 20% 50%, rgba(255,255,255,0.1) 0%, transparent 50%);
+        }
+        
+        .feature-title {
+            font-size: 96px;
+            font-weight: bold;
+            color: white;
+            text-shadow: 0 2px 8px rgba(0,0,0,0.3);
+            margin-bottom: 20px;
+            z-index: 1;
+        }
+        
+        .feature-subtitle {
+            font-size: 32px;
+            color: rgba(255,255,255,0.95);
+            text-shadow: 0 2px 4px rgba(0,0,0,0.2);
+            z-index: 1;
+        }
+        
+        .download-btn {
+            display: inline-block;
+            margin-top: 20px;
+            padding: 12px 24px;
+            background: #16a34a;
+            color: white;
+            text-decoration: none;
+            border-radius: 6px;
+            font-weight: 600;
+            transition: background 0.2s;
+        }
+        
+        .download-btn:hover {
+            background: #059669;
+        }
+        
+        .instructions {
+            background: #f0fdf4;
+            padding: 20px;
+            border-radius: 8px;
+            border-left: 4px solid #16a34a;
+            margin-top: 20px;
+        }
+        
+        .instructions h3 {
+            color: #059669;
+            margin-bottom: 10px;
+        }
+        
+        .instructions ol {
+            margin-left: 20px;
+            line-height: 1.8;
+        }
+        
+        .instructions li {
+            margin-bottom: 8px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎨 Google Play Store Görselleri</h1>
+        
+        <!-- App Icon -->
+        <div class="asset-section">
+            <div class="asset-title">1. App Icon (512 x 512 piksel)</div>
+            <div class="asset-info">
+                <strong>Boyut:</strong> 512 x 512 piksel | 
+                <strong>Format:</strong> PNG | 
+                <strong>Kullanım:</strong> Google Play Store'da uygulama ikonu
+            </div>
+            <div class="app-icon" id="appIcon">
+                <div class="app-icon-content">
+                    <div class="app-icon-logo">🛒</div>
+                    <div class="app-icon-text">esnaftaucuz</div>
+                </div>
+            </div>
+            <div class="instructions">
+                <h3>📥 Nasıl İndirilir:</h3>
+                <ol>
+                    <li>Yukarıdaki kare görseli sağ tıklayın</li>
+                    <li>"Resmi farklı kaydet" veya "Save image as" seçin</li>
+                    <li>Veya tarayıcıda F12 → Elements → #appIcon → sağ tık → "Capture node screenshot"</li>
+                    <li>Boyutun 512x512 olduğundan emin olun</li>
+                </ol>
+            </div>
+        </div>
+        
+        <!-- Feature Graphic -->
+        <div class="asset-section">
+            <div class="asset-title">2. Feature Graphic (1024 x 500 piksel)</div>
+            <div class="asset-info">
+                <strong>Boyut:</strong> 1024 x 500 piksel | 
+                <strong>Format:</strong> PNG/JPG | 
+                <strong>Kullanım:</strong> Google Play Store'da uygulama sayfasının üst kısmı
+            </div>
+            <div class="feature-graphic" id="featureGraphic">
+                <div class="feature-title">esnaftaucuz</div>
+                <div class="feature-subtitle">En iyi fiyatları keşfet</div>
+            </div>
+            <div class="instructions">
+                <h3>📥 Nasıl İndirilir:</h3>
+                <ol>
+                    <li>Yukarıdaki yatay görseli sağ tıklayın</li>
+                    <li>"Resmi farklı kaydet" veya "Save image as" seçin</li>
+                    <li>Veya tarayıcıda F12 → Elements → #featureGraphic → sağ tık → "Capture node screenshot"</li>
+                    <li>Boyutun 1024x500 olduğundan emin olun</li>
+                </ol>
+            </div>
+        </div>
+        
+        <!-- Instructions -->
+        <div class="instructions" style="margin-top: 40px;">
+            <h3>💡 Ekran Görüntüsü Alma İpuçları:</h3>
+            <ol>
+                <li><strong>Chrome DevTools:</strong> F12 → Elements → Element seç → Sağ tık → "Capture node screenshot"</li>
+                <li><strong>Firefox:</strong> F12 → Inspector → Element seç → Sağ tık → "Screenshot Node"</li>
+                <li><strong>Online Araç:</strong> <a href="https://htmlcsstoimage.com" target="_blank">htmlcsstoimage.com</a> kullanarak HTML'den PNG oluşturabilirsiniz</li>
+                <li><strong>Manuel:</strong> Windows'ta Snipping Tool veya Shift+Win+S ile ekran görüntüsü alın</li>
+            </ol>
+        </div>
+        
+        <div class="instructions" style="margin-top: 20px; background: #fef3c7; border-left-color: #f59e0b;">
+            <h3>⚠️ Önemli Notlar:</h3>
+            <ul style="margin-left: 20px; line-height: 1.8;">
+                <li>App Icon: Şeffaf arka plan OLMAMALI (dolu renk olmalı)</li>
+                <li>Feature Graphic: Yatay format (1024x500) olmalı</li>
+                <li>Tüm görseller yüksek kaliteli olmalı</li>
+                <li>PNG formatında kaydedin</li>
+            </ul>
+        </div>
+    </div>
+</body>
+</html>
+
