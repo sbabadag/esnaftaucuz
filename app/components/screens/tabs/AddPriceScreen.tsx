@@ -338,7 +338,7 @@ export default function AddPriceScreen() {
         })(),
         new Promise((_, reject) =>
           // On slower web networks/db load, 15s was too aggressive and produced false timeout errors.
-          setTimeout(() => reject(new Error('price-submit-timeout')), 35000)
+          setTimeout(() => reject(new Error('price-submit-timeout')), 75000)
         ),
       ]) as any;
 
@@ -411,7 +411,7 @@ export default function AddPriceScreen() {
       console.warn('AddPrice submit exceeded safety threshold, resetting submit state.');
       setIsSubmitting(false);
       toast.warning('Islem beklenenden uzun surdu. Lutfen tekrar deneyin.');
-    }, 45000);
+    }, 90000);
     return () => clearTimeout(timer);
   }, [isSubmitting]);
 

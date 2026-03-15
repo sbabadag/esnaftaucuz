@@ -8,6 +8,7 @@
 import { supabase } from '../lib/supabase';
 import { v4 as uuidv4 } from 'uuid';
 import { Browser } from '@capacitor/browser';
+import { App as CapacitorApp } from '@capacitor/app';
 import { getImmediateUnreadCount } from '../lib/notification-store';
 
 const normalizeMerchantFlag = (value: any): boolean => {
@@ -27,6 +28,43 @@ const resolveMerchantStatus = (profile: any): boolean => {
   const subscriptionStatus = String(profile?.merchant_subscription_status || '').toLowerCase();
   const hasMerchantSubscription = subscriptionStatus === 'active' || subscriptionStatus === 'past_due';
   return explicit || hasMerchantSubscription;
+};
+
+const getSafeOAuthUrl = (rawUrl: string): string => {
+  const normalized = String(rawUrl || '').trim();
+  if (!normalized) {
+    throw new Error('Google OAuth URL boş döndü');
+  }
+
+  let parsed: URL;
+  try {
+    parsed = new URL(normalized);
+  } catch {
+    throw new Error('Google OAuth URL geçersiz');
+  }
+
+  if (parsed.protocol !== 'https:') {
+    throw new Error('Google OAuth URL güvenli değil');
+  }
+
+  const currentSupabaseHost = (() => {
+    try {
+      return new URL(String(import.meta.env.VITE_SUPABASE_URL || '')).hostname.toLowerCase();
+    } catch {
+      return '';
+    }
+  })();
+
+  const host = parsed.hostname.toLowerCase();
+  const allowedBySupabaseHost = currentSupabaseHost && host === currentSupabaseHost;
+  const allowedByDefaultSupabase = host.endsWith('.supabase.co');
+  const allowedByGoogle = host === 'accounts.google.com';
+
+  if (!allowedBySupabaseHost && !allowedByDefaultSupabase && !allowedByGoogle) {
+    throw new Error(`Google OAuth URL host izinli değil: ${host}`);
+  }
+
+  return parsed.toString();
 };
 
 // ============================================================================
@@ -343,10 +381,7 @@ export const authAPI = {
       let error: any = null;
 
       if (isMobile) {
-        const redirectCandidates = [
-          'com.esnaftaucuz.app://auth/callback',
-          'com.esnaftaucuz.app://',
-        ];
+        const redirectCandidates = ['com.esnaftaucuz.app://auth/callback'];
 
         for (const redirectTo of redirectCandidates) {
           const { data: candidateData, error: candidateError } = await supabase.auth.signInWithOAuth({
@@ -386,23 +421,20 @@ export const authAPI = {
       
       console.log('✅ Google OAuth redirect URL:', data.url);
 
-      // On native mobile, open OAuth in system browser.
+      // On native mobile, open OAuth only with validated HTTPS URL.
       // The callback deep link is handled by App.tsx via appUrlOpen listener.
       if (isMobile && data.url) {
+        const safeOAuthUrl = getSafeOAuthUrl(data.url);
         try {
-          await Browser.open({ url: data.url });
-          return { redirectUrl: data.url, openedInBrowser: true };
+          await Browser.open({ url: safeOAuthUrl });
+          return { redirectUrl: safeOAuthUrl, openedInBrowser: true };
         } catch (browserOpenError) {
           console.warn('⚠️ Capacitor Browser.open failed, using fallback:', browserOpenError);
         }
 
-        // Fallback: try opening an external browser tab/window.
-        const popup = window.open(data.url, '_blank', 'noopener,noreferrer');
-        if (!popup) {
-          // Last fallback: navigate current webview.
-          window.location.assign(data.url);
-        }
-        return { redirectUrl: data.url, openedInBrowser: true };
+        // Fallback: ask the OS to open the URL in a trusted browser app.
+        await CapacitorApp.openUrl({ url: safeOAuthUrl });
+        return { redirectUrl: safeOAuthUrl, openedInBrowser: true };
       }
 
       // On web, redirect in the same window
@@ -1097,7 +1129,7 @@ export const pricesAPI = {
   }) => {
     // Add overall timeout for the entire operation
     const overallTimeout = new Promise((_, reject) => {
-      setTimeout(() => reject(new Error('İşlem zaman aşımına uğradı. Lütfen tekrar deneyin.')), 30000); // 30 second timeout
+      setTimeout(() => reject(new Error('İşlem zaman aşımına uğradı. Lütfen tekrar deneyin.')), 70000); // 70 second timeout
     });
 
     const createOperation = async () => {
@@ -2901,22 +2933,21 @@ export const pushTokensAPI = {
   upsert: async (userId: string, token: string, platform: 'ios' | 'android' | 'web') => {
     try {
       if (!userId || !token) return null;
-      try {
-        const fnResult = await Promise.race([
-          supabase.functions.invoke('register-push-token', {
-            body: { token, platform },
-          }),
-          new Promise<any>((resolve) =>
-            setTimeout(() => resolve({ data: null, error: new Error('register-push-token-timeout') }), 6000),
-          ),
-        ]);
-        if (!(fnResult as any)?.error && (fnResult as any)?.data?.ok) {
-          return (fnResult as any)?.data?.row || null;
+      const serializeError = (value: any) => {
+        try {
+          if (!value) return null;
+          return {
+            name: value?.name,
+            message: value?.message,
+            code: value?.code,
+            status: value?.status,
+            details: value?.details,
+            hint: value?.hint,
+          };
+        } catch {
+          return { message: String(value) };
         }
-      } catch (invokeError) {
-        console.warn('register-push-token function failed, falling back:', invokeError);
-      }
-
+      };
       const extractAccessTokenFromUnknownShape = (value: any): string | null => {
         try {
           if (!value) return null;
@@ -2961,15 +2992,7 @@ export const pushTokensAPI = {
             if (parsedToken) return parsedToken;
           }
         } catch {}
-        try {
-          const sessionResult = await Promise.race([
-            supabase.auth.getSession(),
-            new Promise<any>((resolve) => setTimeout(() => resolve(null), 1500)),
-          ]);
-          return (sessionResult as any)?.data?.session?.access_token || null;
-        } catch {
-          return null;
-        }
+        return null;
       };
 
       const payload = {
@@ -2979,47 +3002,64 @@ export const pushTokensAPI = {
         is_active: true,
         last_seen_at: new Date().toISOString(),
       };
-
-      const upsertPromise = supabase
-        .from('user_push_tokens')
-        .upsert(payload, {
-          onConflict: 'token',
-          ignoreDuplicates: false,
-        })
-        .select()
-        .maybeSingle();
-
-      const { data, error } = await Promise.race([
-        upsertPromise,
-        new Promise<any>((resolve) => setTimeout(() => resolve({ data: null, error: new Error('push-token-upsert-timeout') }), 6000)),
-      ]);
-
-      if (error) {
-        console.error('❌ Push token upsert error:', error);
-        // REST fallback for native session edge-cases.
-        const sbUrl = import.meta.env.VITE_SUPABASE_URL as string;
-        const sbKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
-        const authToken = await resolveAccessTokenQuick();
-        if (!sbUrl || !sbKey || !authToken) throw error;
-
-        const response = await fetch(`${sbUrl}/rest/v1/user_push_tokens`, {
-          method: 'POST',
-          headers: {
-            apikey: sbKey,
-            Authorization: `Bearer ${authToken}`,
-            'Content-Type': 'application/json',
-            Prefer: 'resolution=merge-duplicates,return=representation',
-          },
-          body: JSON.stringify(payload),
-        });
-        if (!response.ok) {
-          throw new Error(`Push token REST upsert failed: ${response.status}`);
-        }
-        const rows = await response.json().catch(() => []);
-        return Array.isArray(rows) ? rows[0] : null;
+      const sbUrl = String(import.meta.env.VITE_SUPABASE_URL || '');
+      const sbKey = String(import.meta.env.VITE_SUPABASE_ANON_KEY || '');
+      const authToken = await resolveAccessTokenQuick();
+      if (!sbUrl || !sbKey) {
+        throw new Error('supabase-url-or-anon-missing');
       }
 
-      return data;
+      const baseHeaders: Record<string, string> = {
+        apikey: sbKey,
+        'Content-Type': 'application/json',
+      };
+      if (authToken) baseHeaders.Authorization = `Bearer ${authToken}`;
+
+      // 1) Prefer Edge Function registration and avoid Supabase client auth/session path.
+      try {
+        const fnController = new AbortController();
+        const fnTimeout = setTimeout(() => fnController.abort(), 20000);
+        const fnResponse = await fetch(`${sbUrl}/functions/v1/register-push-token`, {
+          method: 'POST',
+          headers: baseHeaders,
+          body: JSON.stringify(payload),
+          signal: fnController.signal,
+        });
+        clearTimeout(fnTimeout);
+        const fnJson = await fnResponse.json().catch(() => null);
+        if (fnResponse.ok && fnJson?.ok !== false) {
+          return fnJson?.row || fnJson?.data?.row || null;
+        }
+        console.warn(
+          'register-push-token HTTP failed:',
+          JSON.stringify({ status: fnResponse.status, body: fnJson }),
+        );
+      } catch (invokeError) {
+        console.warn(
+          'register-push-token HTTP exception, falling back:',
+          JSON.stringify(serializeError(invokeError)),
+        );
+      }
+
+      // 2) REST fallback with conflict-merge.
+      const restController = new AbortController();
+      const restTimeout = setTimeout(() => restController.abort(), 20000);
+      const restResponse = await fetch(`${sbUrl}/rest/v1/user_push_tokens?on_conflict=token`, {
+        method: 'POST',
+        headers: {
+          ...baseHeaders,
+          Prefer: 'resolution=merge-duplicates,return=representation',
+        },
+        body: JSON.stringify(payload),
+        signal: restController.signal,
+      });
+      clearTimeout(restTimeout);
+      if (!restResponse.ok) {
+        const errBody = await restResponse.text().catch(() => '');
+        throw new Error(`push-token-rest-failed:${restResponse.status}:${errBody}`);
+      }
+      const rows = await restResponse.json().catch(() => []);
+      return Array.isArray(rows) ? rows[0] || null : null;
     } catch (error: any) {
       console.error('❌ Push token registration failed:', error);
       return null;
