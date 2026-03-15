@@ -74,6 +74,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return explicit || hasMerchantSubscription;
   };
 
+  const clearAuthStorage = () => {
+    try {
+      localStorage.removeItem('authToken');
+      localStorage.removeItem('user');
+      // Supabase session keys are stored under sb-...-auth-token on web.
+      const keysToDelete: string[] = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (!key) continue;
+        if (key.startsWith('sb-') && key.includes('auth-token')) {
+          keysToDelete.push(key);
+        }
+      }
+      keysToDelete.forEach((key) => localStorage.removeItem(key));
+    } catch {
+      // Ignore storage errors; best effort cleanup.
+    }
+  };
+
   useEffect(() => {
     userRef.current = user;
   }, [user]);
@@ -732,22 +751,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const logout = async () => {
     try {
       console.log('🚪 Logging out...');
-      // Sign out from Supabase
-      await authAPI.logout();
-      // Clear local state
+      // Sign out from Supabase, but never block logout UX indefinitely.
+      await Promise.race([
+        authAPI.logout(),
+        new Promise<void>((resolve) => setTimeout(resolve, 4500)),
+      ]);
+      // Ensure local Supabase session is cleared even if global signOut failed/timed out.
+      await supabase.auth.signOut({ scope: 'local' }).catch(() => undefined);
+      // Clear local state/storage no matter what.
       setToken(null);
       setUser(null);
-      // Clear localStorage
-      localStorage.removeItem('authToken');
-      localStorage.removeItem('user');
+      clearAuthStorage();
       console.log('✅ Logout successful');
     } catch (error) {
       console.error('❌ Logout error:', error);
-      // Even if logout fails, clear local state
+      // Even if logout fails, force local state cleanup.
+      await supabase.auth.signOut({ scope: 'local' }).catch(() => undefined);
       setToken(null);
       setUser(null);
-      localStorage.removeItem('authToken');
-      localStorage.removeItem('user');
+      clearAuthStorage();
     }
   };
 

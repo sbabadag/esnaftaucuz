@@ -6,6 +6,17 @@ export interface Position {
   longitude: number;
 }
 
+type PermissionState = 'granted' | 'denied' | 'prompt' | 'prompt-with-rationale' | string;
+
+const isGranted = (value: PermissionState | undefined): boolean =>
+  String(value || '').toLowerCase() === 'granted';
+
+const hasLocationPermission = (permissions: any): boolean => {
+  const fine = permissions?.location as PermissionState | undefined;
+  const coarse = permissions?.coarseLocation as PermissionState | undefined;
+  return isGranted(fine) || isGranted(coarse);
+};
+
 /**
  * Hook for geolocation (works on both web and native)
  */
@@ -18,12 +29,12 @@ export const useGeolocation = () => {
         const permissions = await Geolocation.checkPermissions();
         console.log('📱 Native: Current permissions:', permissions);
         
-        if (permissions.location !== 'granted') {
+        if (!hasLocationPermission(permissions)) {
           console.log('📱 Native: Requesting location permission...');
           const requestResult = await Geolocation.requestPermissions();
           console.log('📱 Native: Permission request result:', requestResult);
           
-          if (requestResult.location !== 'granted') {
+          if (!hasLocationPermission(requestResult)) {
             console.error('📱 Native: Location permission denied');
             throw new Error('Location permission denied');
           }
@@ -31,10 +42,21 @@ export const useGeolocation = () => {
         
         // Increased timeout for Android/iOS (30 seconds) to handle slower GPS acquisition
         console.log('📱 Native: Getting current position...');
-        const position = await Geolocation.getCurrentPosition({
-          enableHighAccuracy: true,
-          timeout: 30000, // 30 seconds (increased for better GPS acquisition)
-        });
+        let position;
+        try {
+          position = await Geolocation.getCurrentPosition({
+            enableHighAccuracy: true,
+            timeout: 30000, // 30 seconds (increased for better GPS acquisition)
+            maximumAge: 10000,
+          });
+        } catch {
+          // Fallback for devices that only provide coarse location initially.
+          position = await Geolocation.getCurrentPosition({
+            enableHighAccuracy: false,
+            timeout: 30000,
+            maximumAge: 60000,
+          });
+        }
         console.log('📱 Native: Position obtained:', position);
         return {
           latitude: position.coords.latitude,

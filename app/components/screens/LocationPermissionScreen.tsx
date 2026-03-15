@@ -14,6 +14,12 @@ export default function LocationPermissionScreen({ onAllow }: { onAllow: () => v
   const { getCurrentPosition } = useGeolocation();
   const { user } = useAuth(); // Check if user is logged in
   const [isRequesting, setIsRequesting] = useState(false);
+
+  const hasNativePermission = (permissions: any) => {
+    const fine = String(permissions?.location || '').toLowerCase();
+    const coarse = String(permissions?.coarseLocation || '').toLowerCase();
+    return fine === 'granted' || coarse === 'granted';
+  };
   
   // Determine where to navigate after location permission
   const getNextRoute = () => {
@@ -37,7 +43,7 @@ export default function LocationPermissionScreen({ onAllow }: { onAllow: () => v
           const permissions = await Geolocation.checkPermissions();
           console.log('📱 Native: Current permissions:', permissions);
           
-          if (permissions.location === 'granted') {
+          if (hasNativePermission(permissions)) {
             // Already granted, get position with timeout
             console.log('📱 Native: Permission already granted, getting position...');
             
@@ -65,7 +71,12 @@ export default function LocationPermissionScreen({ onAllow }: { onAllow: () => v
               navigate(getNextRoute());
               return;
             }
-          } else if (permissions.location === 'prompt' || permissions.location === 'prompt-with-rationale') {
+          } else if (
+            permissions.location === 'prompt' ||
+            permissions.location === 'prompt-with-rationale' ||
+            permissions.coarseLocation === 'prompt' ||
+            permissions.coarseLocation === 'prompt-with-rationale'
+          ) {
             // Request permission with timeout
             console.log('📱 Native: Requesting location permission...');
             
@@ -83,7 +94,7 @@ export default function LocationPermissionScreen({ onAllow }: { onAllow: () => v
             const requestResult = await Promise.race([permissionPromise, timeoutPromise]);
             console.log('📱 Native: Permission request result:', requestResult);
             
-            if (requestResult.location === 'granted') {
+            if (hasNativePermission(requestResult)) {
               // Wait for the system to fully process the permission
               // iOS needs more time, Android is usually faster
               console.log('📱 Native: Permission granted, waiting for system to process...');

@@ -112,6 +112,10 @@ export default function ExploreScreen() {
     withPhoto: false,
     verified: false,
   });
+  const isBenignAddressUnavailableError = (value: unknown) => {
+    const msg = String(value || '').toLowerCase();
+    return msg.includes('adres bilgisi şu an alınamıyor') || msg.includes('konumunuz yine de kullanılacak');
+  };
   const hasAnyData =
     trendProducts.length > 0 ||
     recentPrices.length > 0 ||
@@ -343,7 +347,11 @@ export default function ExploreScreen() {
                 console.log('⚠️ Auto geocoding failed:', result.error || 'Bilinmeyen hata');
                 console.log('📍 Using coordinates for filtering:', { lat: latitude, lng: longitude });
                 // Show silent toast only if it's a critical error (not timeout)
-                if (result.error && !result.error.includes('Zaman aşımı')) {
+                if (
+                  result.error &&
+                  !result.error.includes('Zaman aşımı') &&
+                  !isBenignAddressUnavailableError(result.error)
+                ) {
                   toast.info('Konum tespit edildi', {
                     description: result.error || 'Adres bilgisi yüklenemedi. Konumunuz kaydedildi.',
                   });
@@ -1207,9 +1215,11 @@ export default function ExploreScreen() {
             const errorMsg = result.error || 'Bilinmeyen hata';
             console.error('❌ Geocoding failed:', errorMsg);
             setCurrentLocation('Mevcut Konum');
-            toast.warning('Konum tespit edildi', {
-              description: `Adres bilgisi yüklenemedi: ${errorMsg}. Konumunuz kaydedildi.`,
-            });
+            if (!isBenignAddressUnavailableError(errorMsg)) {
+              toast.warning('Konum tespit edildi', {
+                description: `Adres bilgisi yüklenemedi: ${errorMsg}. Konumunuz kaydedildi.`,
+              });
+            }
             // Reload data with new location even if geocoding failed
             loadData();
           }
