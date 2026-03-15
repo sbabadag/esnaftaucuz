@@ -337,7 +337,8 @@ export default function AddPriceScreen() {
         });
         })(),
         new Promise((_, reject) =>
-          setTimeout(() => reject(new Error('price-submit-timeout')), 15000)
+          // On slower web networks/db load, 15s was too aggressive and produced false timeout errors.
+          setTimeout(() => reject(new Error('price-submit-timeout')), 35000)
         ),
       ]) as any;
 
@@ -410,7 +411,7 @@ export default function AddPriceScreen() {
       console.warn('AddPrice submit exceeded safety threshold, resetting submit state.');
       setIsSubmitting(false);
       toast.warning('Islem beklenenden uzun surdu. Lutfen tekrar deneyin.');
-    }, 20000);
+    }, 45000);
     return () => clearTimeout(timer);
   }, [isSubmitting]);
 
@@ -666,7 +667,7 @@ export default function AddPriceScreen() {
                 }}
               />
             </div>
-            <div className="grid grid-cols-2 gap-3 max-h-96 overflow-y-auto">
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3 max-h-96 overflow-y-auto">
               {products.map((product) => {
                 const productId = product.id || (product as any)._id; // Support both formats
                 const isSelected = formData.productId === productId;
