@@ -446,6 +446,20 @@ export default function MerchantSubscriptionScreen() {
 
         <div className="bg-white rounded-lg p-4 border border-gray-200">
           <h2 className="text-lg font-semibold mb-3">iyzico ile Güvenli Ödeme</h2>
+          <div className="space-y-2 mb-3">
+            <img
+              src="/iyzico-assets/logo-band-colored.png"
+              alt="VISA, Mastercard ve iyzico logolari"
+              className="w-full rounded-md border border-gray-200 bg-white p-2"
+              loading="lazy"
+            />
+            <img
+              src="/iyzico-assets/iyzico-ile-ode-horizontal.png"
+              alt="iyzico ile ode logosu"
+              className="w-full rounded-md border border-gray-200 bg-white p-2"
+              loading="lazy"
+            />
+          </div>
           <div className="grid grid-cols-1 gap-2">
             <Button onClick={handleCardPayment} disabled={isPaying}>
               <CreditCard className="w-4 h-4 mr-2" />
