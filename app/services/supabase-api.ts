@@ -27,7 +27,8 @@ const resolveMerchantStatus = (profile: any): boolean => {
   const explicit = normalizeMerchantFlag(profile?.is_merchant);
   const subscriptionStatus = String(profile?.merchant_subscription_status || '').toLowerCase();
   const hasMerchantSubscription = subscriptionStatus === 'active' || subscriptionStatus === 'past_due';
-  return explicit || hasMerchantSubscription;
+  const hasMerchantPlan = String(profile?.merchant_subscription_plan || '').trim().length > 0;
+  return explicit || hasMerchantSubscription || hasMerchantPlan;
 };
 
 type ApiCacheEntry<T> = {
@@ -547,6 +548,24 @@ export const authAPI = {
         throw new Error('Kullanıcı profili bulunamadı');
       }
 
+      // Some legacy merchant accounts can have stale is_merchant=false while still
+      // owning merchant product rows. Use an additional fallback to avoid normal UI.
+      let hasMerchantProducts = false;
+      try {
+        const { data: merchantRows, error: merchantErr } = await supabase
+          .from('merchant_products')
+          .select('id')
+          .eq('merchant_id', data.user.id)
+          .limit(1);
+        if (!merchantErr && Array.isArray(merchantRows) && merchantRows.length > 0) {
+          hasMerchantProducts = true;
+        }
+      } catch {
+        hasMerchantProducts = false;
+      }
+
+      const resolvedMerchant = resolveMerchantStatus(profile) || hasMerchantProducts;
+
       return {
         user: {
           id: profile.id,
@@ -556,7 +575,7 @@ export const authAPI = {
           level: profile.level,
           points: profile.points,
           contributions: profile.contributions,
-          is_merchant: resolveMerchantStatus(profile),
+          is_merchant: resolvedMerchant,
         },
         token: data.session.access_token,
         session: data.session,
