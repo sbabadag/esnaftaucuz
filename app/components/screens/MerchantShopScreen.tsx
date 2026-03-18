@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
-import { useNavigate, useParams, useLocation } from 'react-router-dom';
-import { ArrowLeft, Plus, Edit, Trash2, Camera, Image as ImageIcon, X, MapPin, Navigation, CheckCircle2, XCircle } from 'lucide-react';
+import { useNavigate, useParams, useLocation, useSearchParams } from 'react-router-dom';
+import { ArrowLeft, Plus, Edit, Trash2, Camera, Image as ImageIcon, X, MapPin, Navigation, CheckCircle2, XCircle, Search, Eye } from 'lucide-react';
 import { Button } from '../ui/button';
 import { Input } from '../ui/input';
 import { Label } from '../ui/label';
@@ -13,6 +13,7 @@ import { useGeolocation } from '../../../src/hooks/useGeolocation';
 import { forwardGeocode } from '../../utils/geocoding';
 import { supabase } from '../../lib/supabase';
 import { v4 as uuidv4 } from 'uuid';
+import { Capacitor } from '@capacitor/core';
 
 interface MerchantProduct {
   id: string;
@@ -40,11 +41,13 @@ interface Product {
   id: string;
   name: string;
   category: string;
+  image?: string;
 }
 
 export default function MerchantShopScreen() {
   const navigate = useNavigate();
   const location = useLocation();
+  const [searchParams] = useSearchParams();
   const { merchantId } = useParams<{ merchantId: string }>();
   const { user } = useAuth();
   const { getCurrentPosition } = useGeolocation();
@@ -66,13 +69,51 @@ export default function MerchantShopScreen() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isGettingLocation, setIsGettingLocation] = useState(false);
   const [userVerifications, setUserVerifications] = useState<Record<string, { is_verified: boolean }>>({});
+  const [isLoadingAvailableProducts, setIsLoadingAvailableProducts] = useState(false);
+  const [productSearchQuery, setProductSearchQuery] = useState('');
 
-  const isOwnShop = merchantId === user?.id;
+  const isOwnShopById = merchantId === user?.id;
+  const isMerchantOnboardingPending = (() => {
+    try {
+      return !!user?.id && localStorage.getItem('merchant-subscription-onboarding-user') === user.id;
+    } catch {
+      return false;
+    }
+  })();
+  const isOwnShop = isOwnShopById && !isMerchantOnboardingPending;
+  const isNativePlatform = Capacitor.isNativePlatform();
+  const headerTopOffsetPx = isNativePlatform ? 14 : 0;
   const withTimeout = <T,>(promise: Promise<T>, ms: number, label: string): Promise<T> =>
     Promise.race([
       promise,
       new Promise<T>((_, reject) => setTimeout(() => reject(new Error(`${label} timeout`)), ms)),
     ]);
+
+  const normalizeForSearch = (value: string) =>
+    (value || '')
+      .toLocaleLowerCase('tr')
+      .replace(/ı/g, 'i')
+      .replace(/ş/g, 's')
+      .replace(/ğ/g, 'g')
+      .replace(/ü/g, 'u')
+      .replace(/ö/g, 'o')
+      .replace(/ç/g, 'c')
+      .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+  const normalizedQuery = normalizeForSearch(productSearchQuery);
+  const filteredProducts = availableProducts
+    .filter((p) => {
+      if (!normalizedQuery) return true;
+      const normalizedName = normalizeForSearch(p.name || '');
+      const normalizedCategory = normalizeForSearch(p.category || '');
+      return (
+        normalizedName.includes(normalizedQuery) ||
+        normalizedCategory.includes(normalizedQuery)
+      );
+    })
+    .slice(0, 40);
 
   useEffect(() => {
     if (merchantId) {
@@ -94,51 +135,28 @@ export default function MerchantShopScreen() {
     }
   }, [isDialogOpen, isOwnShop]);
 
+  useEffect(() => {
+    if (!isOwnShop) return;
+    if (searchParams.get('openAdd') !== '1') return;
+    setEditingProduct(null);
+    setProductSearchQuery('');
+    setFormData({
+      productId: '',
+      price: '',
+      unit: 'kg',
+      images: [],
+      imagePreviews: [],
+      locationId: '',
+      locationName: '',
+      coordinates: null,
+    });
+    setIsDialogOpen(true);
+    if (merchantId) {
+      navigate(`/app/merchant-shop/${merchantId}`, { replace: true });
+    }
+  }, [isOwnShop, merchantId, navigate, searchParams]);
+
   const loadMerchantProducts = async () => {
-    const hydrateRelations = async (rows: any[]): Promise<MerchantProduct[]> => {
-      const list = Array.isArray(rows) ? rows : [];
-      if (list.length === 0) return [];
-
-      const productIds = Array.from(new Set(list.map((r: any) => r.product_id).filter(Boolean)));
-      const locationIds = Array.from(new Set(list.map((r: any) => r.location_id).filter(Boolean)));
-
-      const sbUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined;
-      const sbKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
-
-      let productRows: any[] = [];
-      let locationRows: any[] = [];
-
-      if (sbUrl && sbKey) {
-        const controller = new AbortController();
-        const tid = setTimeout(() => controller.abort(), 8000);
-        const headers = { apikey: sbKey, Authorization: `Bearer ${sbKey}` };
-        try {
-          const [pRes, lRes] = await Promise.all([
-            productIds.length
-              ? fetch(`${sbUrl}/rest/v1/products?select=id,name,category,image&id=in.(${productIds.join(',')})`, { headers, signal: controller.signal })
-              : Promise.resolve(null),
-            locationIds.length
-              ? fetch(`${sbUrl}/rest/v1/locations?select=id,name,coordinates&id=in.(${locationIds.join(',')})`, { headers, signal: controller.signal })
-              : Promise.resolve(null),
-          ]);
-          clearTimeout(tid);
-          if (pRes?.ok) productRows = await pRes.json().catch(() => []);
-          if (lRes?.ok) locationRows = await lRes.json().catch(() => []);
-        } catch {
-          clearTimeout(tid);
-        }
-      }
-
-      const productMap = new Map((productRows || []).map((p: any) => [p.id, p]));
-      const locationMap = new Map((locationRows || []).map((l: any) => [l.id, l]));
-
-      return list.map((row: any) => ({
-        ...row,
-        product: row.product || productMap.get(row.product_id) || { id: row.product_id, name: 'Ürün', category: 'Diğer' },
-        location: row.location || (row.location_id ? (locationMap.get(row.location_id) || null) : null),
-      })) as MerchantProduct[];
-    };
-
     let isCompleted = false;
     const hardTimeout = window.setTimeout(() => {
       if (isCompleted) return;
@@ -149,66 +167,13 @@ export default function MerchantShopScreen() {
 
     try {
       setIsLoading(true);
-      const sbUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined;
-      const sbKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
-
-      // Step 1 (fastest): Raw REST fetch - bypasses Supabase client wrapper entirely
-      if (sbUrl && sbKey) {
-        try {
-          const controller = new AbortController();
-          const tid = setTimeout(() => controller.abort(), 10000);
-          const fields = 'id,merchant_id,product_id,price,unit,images,location_id,coordinates,verification_count,unverification_count,created_at,is_active';
-          const restUrl = `${sbUrl}/rest/v1/merchant_products?select=${fields}&merchant_id=eq.${merchantId}&or=(is_active.eq.true,is_active.is.null)&order=created_at.desc`;
-          const resp = await fetch(restUrl, {
-            headers: { apikey: sbKey, Authorization: `Bearer ${sbKey}` },
-            signal: controller.signal,
-          });
-          clearTimeout(tid);
-          if (resp.ok) {
-            const rows = await resp.json().catch(() => []);
-            
-            if (isCompleted) return;
-            if (Array.isArray(rows) && rows.length > 0) {
-              const hydrated = await hydrateRelations(rows);
-              setProducts(hydrated);
-              return;
-            }
-          }
-        } catch (restErr: any) {
-          
-        }
-      } else {
-        
-      }
-
+      const rows = await withTimeout(
+        merchantProductsAPI.getByMerchant(merchantId!),
+        10000,
+        'merchant products'
+      );
       if (isCompleted) return;
-
-      // Step 2: Supabase JS client (may be slow due to global fetch wrapper)
-      try {
-        const res = await withTimeout(
-          supabase
-            .from('merchant_products')
-            .select('id, merchant_id, product_id, price, unit, images, location_id, coordinates, verification_count, unverification_count, created_at, is_active')
-            .eq('merchant_id', merchantId!)
-            .or('is_active.eq.true,is_active.is.null')
-            .order('created_at', { ascending: false }),
-          10000,
-          'merchant products client'
-        );
-        if (res.error) throw res.error;
-        const clientRows = res.data || [];
-        
-        if (isCompleted) return;
-        if (clientRows.length > 0) {
-          const hydrated = await hydrateRelations(clientRows);
-          setProducts(hydrated);
-          return;
-        }
-      } catch (clientErr: any) {
-        
-      }
-
-      setProducts([]);
+      setProducts(Array.isArray(rows) ? rows : []);
     } catch (error: any) {
       if (isCompleted) return;
       console.error('Failed to load merchant products:', error);
@@ -223,11 +188,39 @@ export default function MerchantShopScreen() {
   };
 
   const loadAvailableProducts = async () => {
+    setIsLoadingAvailableProducts(true);
     try {
       const data = await productsAPI.getAll();
-      setAvailableProducts(data);
+      if (Array.isArray(data) && data.length > 0) {
+        setAvailableProducts(data);
+        return;
+      }
+
+      // Fallback: use locally cached global products index if API returns empty.
+      const cacheKeys = [
+        `products-search-index:${user?.id || 'anon'}`,
+        'products-search-index:anon',
+      ];
+      for (const key of cacheKeys) {
+        try {
+          const raw = localStorage.getItem(key);
+          if (!raw) continue;
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            setAvailableProducts(parsed);
+            return;
+          }
+        } catch {
+          // ignore cache parse errors
+        }
+      }
+
+      setAvailableProducts([]);
     } catch (error) {
       console.error('Failed to load products:', error);
+      toast.error('Ürün listesi yüklenemedi, lütfen tekrar deneyin');
+    } finally {
+      setIsLoadingAvailableProducts(false);
     }
   };
 
@@ -399,6 +392,68 @@ export default function MerchantShopScreen() {
     return uploadedUrls;
   };
 
+  const isSubscriptionCheckTimeoutError = (error: unknown) => {
+    const msg = String((error as any)?.message || error || '').toLocaleLowerCase('tr');
+    return (
+      msg.includes('abonelik') &&
+      (msg.includes('zaman aşım') || msg.includes('timeout') || msg.includes('time out'))
+    );
+  };
+
+  const saveMerchantProductViaRest = async (imageUrls: string[]) => {
+    const sbUrl = import.meta.env.VITE_SUPABASE_URL as string;
+    const sbKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
+    if (!sbUrl || !sbKey || !user) {
+      throw new Error('Kayıt için gerekli ayarlar eksik');
+    }
+
+    const sessionRes = await supabase.auth.getSession();
+    const accessToken = sessionRes?.data?.session?.access_token || localStorage.getItem('authToken');
+    const headers: Record<string, string> = {
+      apikey: sbKey,
+      'Content-Type': 'application/json',
+    };
+    if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
+
+    const payload: any = {
+      price: parseFloat(formData.price),
+      unit: formData.unit,
+      images: imageUrls.length > 0 ? imageUrls : (editingProduct?.images || []),
+      location_id: formData.locationId || null,
+      updated_at: new Date().toISOString(),
+    };
+    if (!editingProduct) {
+      payload.merchant_id = user.id;
+      payload.product_id = formData.productId;
+    }
+    if (formData.coordinates) {
+      payload.coordinates = `(${formData.coordinates.lng},${formData.coordinates.lat})`;
+    }
+
+    const controller = new AbortController();
+    const tid = setTimeout(() => controller.abort(), 20000);
+    const url = editingProduct
+      ? `${sbUrl}/rest/v1/merchant_products?id=eq.${editingProduct.id}`
+      : `${sbUrl}/rest/v1/merchant_products?on_conflict=merchant_id,product_id`;
+    const method = editingProduct ? 'PATCH' : 'POST';
+    const prefer = editingProduct ? 'return=representation' : 'resolution=merge-duplicates,return=representation';
+
+    const resp = await fetch(url, {
+      method,
+      headers: {
+        ...headers,
+        Prefer: prefer,
+      },
+      body: JSON.stringify(payload),
+      signal: controller.signal,
+    });
+    clearTimeout(tid);
+    if (!resp.ok) {
+      const body = await resp.text().catch(() => '');
+      throw new Error(body || 'REST kayıt başarısız');
+    }
+  };
+
   const handleSubmit = async () => {
     if (!user || !isOwnShop) {
       toast.error('Yetkiniz yok');
@@ -421,7 +476,7 @@ export default function MerchantShopScreen() {
         try {
           const uploadPromise = uploadImages(formData.images);
           const timeoutPromise = new Promise<string[]>((_, reject) => 
-            setTimeout(() => reject(new Error('Resim yükleme zaman aşımına uğradı')), 30000)
+            setTimeout(() => reject(new Error('Resim yükleme zaman aşımına uğradı')), 60000)
           );
           imageUrls = await Promise.race([uploadPromise, timeoutPromise]);
           console.log('✅ Images uploaded:', imageUrls.length);
@@ -453,7 +508,7 @@ export default function MerchantShopScreen() {
           });
       
       const timeoutPromise = new Promise((_, reject) => 
-        setTimeout(() => reject(new Error('İşlem zaman aşımına uğradı')), 20000)
+        setTimeout(() => reject(new Error('İşlem zaman aşımına uğradı')), 45000)
       );
       
       await Promise.race([savePromise, timeoutPromise]);
@@ -472,6 +527,7 @@ export default function MerchantShopScreen() {
         locationName: '',
         coordinates: null,
       });
+      setProductSearchQuery('');
       setEditingProduct(null);
       
       // Reload products first (with error handling)
@@ -493,6 +549,30 @@ export default function MerchantShopScreen() {
       }
     } catch (error: any) {
       console.error('❌ Submit error:', error);
+      if (isSubscriptionCheckTimeoutError(error)) {
+        try {
+          const fallbackImageUrls = formData.images.length > 0 ? await uploadImages(formData.images) : [];
+          await saveMerchantProductViaRest(fallbackImageUrls);
+          toast.success(editingProduct ? 'Ürün güncellendi' : 'Ürün eklendi');
+          setFormData({
+            productId: '',
+            price: '',
+            unit: 'kg',
+            images: [],
+            imagePreviews: [],
+            locationId: '',
+            locationName: '',
+            coordinates: null,
+          });
+          setProductSearchQuery('');
+          setEditingProduct(null);
+          await loadMerchantProducts();
+          setIsDialogOpen(false);
+          return;
+        } catch (fallbackError: any) {
+          console.error('❌ Fallback REST submit error:', fallbackError);
+        }
+      }
       const errorMessage = error.message || 'Bir hata oluştu';
       toast.error(errorMessage);
     } finally {
@@ -504,6 +584,7 @@ export default function MerchantShopScreen() {
 
   const handleEdit = (product: MerchantProduct) => {
     setEditingProduct(product);
+    setProductSearchQuery(product.product?.name || '');
     setFormData({
       productId: product.product.id,
       price: product.price.toString(),
@@ -570,10 +651,27 @@ export default function MerchantShopScreen() {
     }
   };
 
+  const handleInspectProduct = async (merchantProduct: MerchantProduct) => {
+    const productId = merchantProduct?.product?.id;
+    if (!productId || !merchantId) return;
+
+    await merchantProductsAPI.trackClick({
+      merchant_product_id: merchantProduct.id,
+      merchant_id: merchantId,
+      product_id: productId,
+      viewer_user_id: user?.id,
+    });
+
+    navigate(`/app/product/${productId}`);
+  };
+
   return (
     <div className="min-h-screen bg-gray-50 relative">
       {/* Header */}
-      <div className="bg-white border-b border-gray-200 sticky top-0 z-20 relative">
+      <div
+        className="bg-white border-b border-gray-200 sticky z-20 relative"
+        style={{ top: `calc(env(safe-area-inset-top, 0px) + ${headerTopOffsetPx}px)` }}
+      >
         <div className="flex items-center justify-between p-4">
           <div className="flex items-center gap-3">
             <Button
@@ -604,6 +702,7 @@ export default function MerchantShopScreen() {
                     locationName: '',
                     coordinates: null,
                   });
+                  setProductSearchQuery('');
                 }
               }}
             >
@@ -620,6 +719,7 @@ export default function MerchantShopScreen() {
                     locationName: '',
                     coordinates: null,
                   });
+                  setProductSearchQuery('');
                 }}>
                   <Plus className="w-4 h-4 mr-2" />
                   Ürün Ekle
@@ -635,19 +735,64 @@ export default function MerchantShopScreen() {
                   {/* Product Selection */}
                   <div>
                     <Label>Ürün</Label>
-                    <select
-                      value={formData.productId}
-                      onChange={(e) => setFormData({ ...formData, productId: e.target.value })}
-                      className="w-full mt-1 p-2 border rounded-md"
-                      disabled={!!editingProduct}
-                    >
-                      <option value="">Ürün seçin</option>
-                      {availableProducts.map((product) => (
-                        <option key={product.id} value={product.id}>
-                          {product.name}
-                        </option>
-                      ))}
-                    </select>
+                    <div className="mt-1 space-y-2">
+                      <div className="relative">
+                        <Search className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                        <Input
+                          value={productSearchQuery}
+                          onChange={(e) => setProductSearchQuery(e.target.value)}
+                          placeholder={editingProduct ? 'Ürün adı' : 'Ürün ara (örn: domates)'}
+                          className="pl-9"
+                          disabled={!!editingProduct}
+                        />
+                      </div>
+
+                      <div className="max-h-52 overflow-y-auto rounded-md border border-gray-200 p-2">
+                        {isLoadingAvailableProducts ? (
+                          <div className="text-sm text-gray-500 p-2">Ürün listesi yükleniyor...</div>
+                        ) : filteredProducts.length === 0 ? (
+                          <div className="text-sm text-gray-500 p-2">Ürün bulunamadı</div>
+                        ) : (
+                          <div className="grid grid-cols-2 gap-2">
+                            {filteredProducts.map((product) => {
+                              const isSelected = formData.productId === product.id;
+                              return (
+                                <button
+                                  key={product.id}
+                                  type="button"
+                                  disabled={!!editingProduct}
+                                  onClick={() => {
+                                    setFormData((prev) => ({ ...prev, productId: product.id }));
+                                    setProductSearchQuery(product.name || '');
+                                  }}
+                                  className={`text-left rounded-md border p-2 transition ${
+                                    isSelected
+                                      ? 'border-green-600 bg-green-50'
+                                      : 'border-gray-200 bg-white hover:border-green-400'
+                                  } ${editingProduct ? 'opacity-70 cursor-not-allowed' : ''}`}
+                                >
+                                  <div className="w-full h-16 rounded mb-2 bg-gray-100 overflow-hidden flex items-center justify-center">
+                                    {product.image ? (
+                                      <img
+                                        src={product.image}
+                                        alt={product.name}
+                                        className="w-full h-full object-cover"
+                                        loading="lazy"
+                                        decoding="async"
+                                      />
+                                    ) : (
+                                      <ImageIcon className="w-5 h-5 text-gray-400" />
+                                    )}
+                                  </div>
+                                  <div className="text-xs font-medium text-gray-900 truncate">{product.name}</div>
+                                  <div className="text-[11px] text-gray-500 truncate">{product.category}</div>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    </div>
                   </div>
 
                   {/* Price */}
@@ -765,6 +910,12 @@ export default function MerchantShopScreen() {
         </div>
       </div>
 
+      {isOwnShopById && isMerchantOnboardingPending && (
+        <div className="mx-4 mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+          Abonelik baslatilana kadar dukkani sadece goruntuleyebilirsiniz. Urun ekleme, duzenleme ve silme kapatildi.
+        </div>
+      )}
+
       {/* Navigation Button */}
       {!isOwnShop && getShopCoordinates() && (
         <div className="p-4 bg-white border-b border-gray-200">
@@ -811,6 +962,8 @@ export default function MerchantShopScreen() {
                             src={img}
                             alt={`${productName} ${idx + 1}`}
                             className="w-full h-full object-cover"
+                            loading="lazy"
+                            decoding="async"
                           />
                         </div>
                       ))}
@@ -851,8 +1004,17 @@ export default function MerchantShopScreen() {
                   </div>
 
                   {/* Verify Button (only for non-owners) */}
-                  {!isOwnShop && user && (
+                  {!isOwnShopById && user && (
                     <div className="mt-3">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => handleInspectProduct(product)}
+                        className="w-full mb-2 border-blue-600 text-blue-600 hover:bg-blue-50"
+                      >
+                        <Eye className="w-4 h-4 mr-1" />
+                        Ürünü İncele
+                      </Button>
                       {userVerifications[product.id]?.is_verified ? (
                         <Button
                           variant="outline"

@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ArrowLeft, MapPin, Bell, Lock, Globe, Info, ChevronRight, Search, Trash2, Settings } from 'lucide-react';
+import { ArrowLeft, MapPin, Bell, Lock, Globe, Info, ChevronRight, Search, Trash2, Settings, FileText, Truck } from 'lucide-react';
 import { Button } from '../ui/button';
 import { Label } from '../ui/label';
 import { Slider } from '../ui/slider';
@@ -12,13 +12,18 @@ import { toast } from 'sonner';
 import { useGeolocation } from '../../../src/hooks/useGeolocation';
 import { isNative } from '../../../src/utils/capacitor';
 import { Geolocation } from '@capacitor/geolocation';
+import { FirebaseMessaging } from '@capacitor-firebase/messaging';
 import { reverseGeocode } from '../../utils/geocoding';
 import { useTheme } from '../../contexts/ThemeContext';
 import { useLanguage } from '../../contexts/LanguageContext';
+import { supabase } from '../../lib/supabase';
 
 const settingsItems = [
   { icon: Bell, label: 'Bildirimler', path: null },
   { icon: Lock, label: 'Gizlilik Politikası', path: '/app/privacy-policy' },
+  { icon: FileText, label: 'Kullanım Koşulları', path: '/app/terms-of-service' },
+  { icon: FileText, label: 'Mesafeli Satış Sözleşmesi', path: '/app/distance-sales-agreement' },
+  { icon: Truck, label: 'Teslimat ve İade Şartları', path: '/app/delivery-return-policy' },
   { icon: Globe, label: 'Dil', path: null },
   { icon: Info, label: 'Hakkında', path: '/app/about' },
 ];
@@ -43,6 +48,8 @@ export default function SettingsScreen() {
   const [isRequestingLocation, setIsRequestingLocation] = useState(false);
   const [currentAddress, setCurrentAddress] = useState<string>('');
   const [isLoadingAddress, setIsLoadingAddress] = useState(false);
+  const [isRunningPushTest, setIsRunningPushTest] = useState(false);
+  const [pushTestResult, setPushTestResult] = useState<string>('');
   // Detect at runtime if the WebView is loading from an HTTP origin (dev server)
   const isDevWebview = typeof window !== 'undefined' && typeof window.location !== 'undefined' && window.location.protocol.startsWith('http');
 
@@ -239,6 +246,114 @@ export default function SettingsScreen() {
     const index = value[0];
     const newRadius = getRadiusFromIndex(index);
     setSearchRadius(newRadius);
+  };
+
+  const runPushConnectivityTest = async () => {
+    if (!user?.id) {
+      toast.error('Önce giriş yapmanız gerekiyor');
+      return;
+    }
+
+    setIsRunningPushTest(true);
+    setPushTestResult('');
+    const startedAt = Date.now();
+    const lines: string[] = [];
+    const sbUrl = String(import.meta.env.VITE_SUPABASE_URL || '');
+    const sbAnon = String(import.meta.env.VITE_SUPABASE_ANON_KEY || '');
+
+    const withTimeout = async <T,>(promise: Promise<T>, ms: number, name: string): Promise<T> => {
+      return await Promise.race([
+        promise,
+        new Promise<T>((_, reject) =>
+          setTimeout(() => reject(new Error(`${name} timeout after ${ms}ms`)), ms),
+        ),
+      ]);
+    };
+
+    try {
+      lines.push(`Platform: ${isNative() ? 'native' : 'web'}`);
+      lines.push(`Online: ${typeof navigator !== 'undefined' ? String(navigator.onLine) : 'unknown'}`);
+      lines.push(`Supabase URL: ${sbUrl ? 'ok' : 'missing'}`);
+      lines.push(`Supabase Anon Key: ${sbAnon ? 'ok' : 'missing'}`);
+
+      let accessToken = '';
+      try {
+        const sessionRes = await withTimeout(supabase.auth.getSession(), 10000, 'getSession');
+        accessToken = sessionRes?.data?.session?.access_token || '';
+        lines.push(`Session token: ${accessToken ? `ok (${accessToken.length} chars)` : 'missing'}`);
+      } catch (sessionError: any) {
+        lines.push(`Session token: timeout/error (${String(sessionError?.message || sessionError)})`);
+      }
+
+      if (!accessToken) {
+        try {
+          const direct = localStorage.getItem('authToken') || '';
+          if (direct) {
+            accessToken = direct;
+            lines.push(`Local authToken: ok (${direct.length} chars)`);
+          } else {
+            lines.push('Local authToken: missing');
+          }
+        } catch {
+          lines.push('Local authToken: read-error');
+        }
+      }
+
+      if (sbUrl && sbAnon) {
+        const restUrl = `${sbUrl}/rest/v1/users?select=id&id=eq.${encodeURIComponent(String(user.id))}&limit=1`;
+        const restResponse = await withTimeout(
+          fetch(restUrl, {
+            method: 'GET',
+            headers: {
+              apikey: sbAnon,
+              ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+            },
+          }),
+          15000,
+          'REST /users',
+        );
+        lines.push(`REST /users status: ${restResponse.status}`);
+
+        const fnResponse = await withTimeout(
+          fetch(`${sbUrl}/functions/v1/register-push-token`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              apikey: sbAnon,
+              ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+            },
+            // Invalid body on purpose: only reachability/status test.
+            body: JSON.stringify({}),
+          }),
+          15000,
+          'Function register-push-token',
+        );
+        lines.push(`Function register-push-token status: ${fnResponse.status}`);
+      }
+
+      if (isNative()) {
+        const tokenResult = await withTimeout(FirebaseMessaging.getToken(), 15000, 'FirebaseMessaging.getToken');
+        const fcmToken = String(tokenResult?.token || '');
+        lines.push(`FCM token: ${fcmToken ? `ok (${fcmToken.length} chars)` : 'empty'}`);
+      }
+
+      lines.push(`Elapsed: ${Date.now() - startedAt}ms`);
+      const report = lines.join('\n');
+      setPushTestResult(report);
+      toast.success('Push bağlantı testi tamamlandı');
+      console.log('Push connectivity test report:\n' + report);
+    } catch (error: any) {
+      lines.push(`Error: ${String(error?.message || error || 'unknown')}`);
+      lines.push(`Elapsed: ${Date.now() - startedAt}ms`);
+      const report = lines.join('\n');
+      setPushTestResult(report);
+      toast.error('Push bağlantı testi başarısız', {
+        description: String(error?.message || error || 'Bilinmeyen hata'),
+      });
+      console.error('Push connectivity test failed:', error);
+    } finally {
+      setIsRunningPushTest(false);
+    }
   };
 
   return (
@@ -525,6 +640,20 @@ export default function SettingsScreen() {
                 className="w-5 h-5 text-green-600 rounded focus:ring-green-500"
               />
             </div>
+            <div className="pt-2 border-t border-gray-100">
+              <Button
+                onClick={runPushConnectivityTest}
+                disabled={isRunningPushTest}
+                className="w-full bg-gray-900 hover:bg-black text-white"
+              >
+                {isRunningPushTest ? 'Push testi çalışıyor...' : 'Push Bağlantı Testi Çalıştır'}
+              </Button>
+              {pushTestResult && (
+                <pre className="mt-3 bg-gray-50 border border-gray-200 rounded p-3 text-xs text-gray-700 whitespace-pre-wrap break-words">
+{pushTestResult}
+                </pre>
+              )}
+            </div>
           </div>
         </div>
       </div>
@@ -575,20 +704,6 @@ export default function SettingsScreen() {
             {item.path && <ChevronRight className="w-5 h-5 text-gray-400" />}
           </button>
         ))}
-      </div>
-
-      {/* Terms of Service Link */}
-      <div className="p-4" style={{ scrollSnapAlign: 'start' }}>
-        <button
-          onClick={() => navigate('/app/terms-of-service')}
-          className="w-full bg-white rounded-lg p-4 flex items-center justify-between hover:bg-gray-50 transition-colors border border-gray-200"
-        >
-          <div className="flex items-center gap-3">
-            <Lock className="w-5 h-5 text-gray-600" />
-            <span>Kullanım Koşulları</span>
-          </div>
-          <ChevronRight className="w-5 h-5 text-gray-400" />
-        </button>
       </div>
 
       {/* Delete Account Section - only for full users */}

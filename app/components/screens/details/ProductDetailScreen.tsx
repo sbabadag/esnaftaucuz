@@ -409,6 +409,14 @@ export default function ProductDetailScreen() {
   };
 
   const isMerchant = (user as any)?.is_merchant === true;
+  const isMerchantOnboardingPending = (() => {
+    try {
+      return !!user?.id && localStorage.getItem('merchant-subscription-onboarding-user') === user.id;
+    } catch {
+      return false;
+    }
+  })();
+  const canManageMerchantPrices = isMerchant && !isMerchantOnboardingPending;
 
   const loadLocations = async () => {
     try {
@@ -635,7 +643,7 @@ export default function ProductDetailScreen() {
           <div className="flex-1">
             <div className="flex items-center justify-between mb-1">
               <div className="text-sm text-gray-600">Ortalama fiyat</div>
-              {isMerchant && (
+              {canManageMerchantPrices && (
                 <Button
                   size="sm"
                   onClick={() => setIsAddPriceDialogOpen(true)}

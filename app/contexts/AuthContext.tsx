@@ -1,6 +1,7 @@
 import { createContext, useContext, useState, useEffect, useRef, ReactNode } from 'react';
 import { authAPI } from '../services/supabase-api';
 import { supabase } from '../lib/supabase';
+import { toast } from 'sonner';
 
 interface User {
   id: string;
@@ -40,7 +41,7 @@ interface AuthContextType {
   isLoading: boolean;
   register: (email: string, password: string, name: string, isMerchant?: boolean) => Promise<void>;
   login: (email: string, password: string) => Promise<void>;
-  googleLogin: () => Promise<void>;
+  googleLogin: (options?: { merchantSignupIntent?: boolean; loginHint?: string }) => Promise<void>;
   guestLogin: () => Promise<void>;
   logout: () => Promise<void>;
   refreshUser: () => Promise<void>;
@@ -55,6 +56,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [isOAuthCallback, setIsOAuthCallback] = useState(false);
   const userRef = useRef<User | null>(null);
   const isOAuthCallbackRef = useRef(false);
+  const OAUTH_PENDING_MAX_AGE_MS = 2 * 60 * 1000;
+  const MERCHANT_SIGNUP_INTENT_KEY = 'merchant-signup-intent';
+  const MERCHANT_SUBSCRIPTION_ONBOARDING_KEY = 'merchant-subscription-onboarding-user';
   const normalizeMerchantFlag = (value: any): boolean => {
     if (value === true) return true;
     if (value === false || value == null) return false;
@@ -71,19 +75,41 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const explicit = normalizeMerchantFlag(profile?.is_merchant);
     const subscriptionStatus = String(profile?.merchant_subscription_status || '').toLowerCase();
     const hasMerchantSubscription = subscriptionStatus === 'active' || subscriptionStatus === 'past_due';
-    return explicit || hasMerchantSubscription;
+  const hasMerchantPlan = String(profile?.merchant_subscription_plan || '').trim().length > 0;
+  return explicit || hasMerchantSubscription || hasMerchantPlan;
+  };
+
+  const getAppRootPath = (): string => {
+    const configuredBase = String(import.meta.env.BASE_URL || '/').trim();
+    const normalize = (value: string) => {
+      let out = value || '/';
+      if (!out.startsWith('/')) out = `/${out}`;
+      if (!out.endsWith('/')) out = `${out}/`;
+      return out.replace(/\/{2,}/g, '/');
+    };
+    const normalizedConfigured = normalize(configuredBase);
+    if (normalizedConfigured !== '/') return normalizedConfigured;
+    const pathname = String(window.location.pathname || '/');
+    if (pathname.startsWith('/esnaftaucuz/')) return '/esnaftaucuz/';
+    if (pathname === '/esnaftaucuz') return '/esnaftaucuz/';
+    return '/';
   };
 
   const clearAuthStorage = () => {
     try {
       localStorage.removeItem('authToken');
       localStorage.removeItem('user');
+      localStorage.removeItem(MERCHANT_SIGNUP_INTENT_KEY);
+      localStorage.removeItem(MERCHANT_SUBSCRIPTION_ONBOARDING_KEY);
       // Supabase session keys are stored under sb-...-auth-token on web.
       const keysToDelete: string[] = [];
       for (let i = 0; i < localStorage.length; i++) {
         const key = localStorage.key(i);
         if (!key) continue;
-        if (key.startsWith('sb-') && key.includes('auth-token')) {
+        if (
+          (key.startsWith('sb-') && key.includes('auth-token')) ||
+          key.startsWith('supabase.auth.')
+        ) {
           keysToDelete.push(key);
         }
       }
@@ -104,22 +130,50 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     // Check for OAuth callback in URL (Supabase adds hash fragments)
     const hashParams = new URLSearchParams(window.location.hash.substring(1));
+    const searchParams = new URLSearchParams(window.location.search);
     const accessToken = hashParams.get('access_token');
     const code = hashParams.get('code');
     const error = hashParams.get('error');
+    const oauthPendingTs = (() => {
+      try {
+        return Number(localStorage.getItem('oauth-pending-ts') || '0');
+      } catch {
+        return 0;
+      }
+    })();
+    const hasRecentOAuthPending = oauthPendingTs > 0 && (Date.now() - oauthPendingTs) < OAUTH_PENDING_MAX_AGE_MS;
+    const merchantIntentFromUrl =
+      searchParams.get('merchant_intent') === '1' || hashParams.get('merchant_intent') === '1';
+    if (merchantIntentFromUrl) {
+      try {
+        localStorage.setItem(MERCHANT_SIGNUP_INTENT_KEY, '1');
+      } catch {
+        // best effort
+      }
+    }
     
     if (error) {
       console.error('OAuth error in URL:', error);
+      toast.error('Google giriş tamamlanamadı', {
+        description: 'İnternet bağlantınızı kontrol edip tekrar deneyin.',
+      });
       // Clean up URL
       window.history.replaceState({}, document.title, window.location.pathname);
       setIsLoading(false);
       setIsOAuthCallback(false);
       isOAuthCallbackRef.current = false;
+      try {
+        localStorage.removeItem('oauth-pending-ts');
+      } catch {
+        // best effort
+      }
       return;
     }
     
-    // If OAuth callback detected, keep loading until session is processed
-    const hasOAuthCallback = !!(accessToken || code);
+    // If explicit OAuth callback is detected, keep loading until session is processed.
+    // Pending flag alone can be stale after interrupted flows and should not block startup.
+    const hasExplicitOAuthCallback = !!(accessToken || code);
+    const hasOAuthCallback = !!(hasExplicitOAuthCallback || hasRecentOAuthPending);
     setIsOAuthCallback(hasOAuthCallback);
     isOAuthCallbackRef.current = hasOAuthCallback;
     
@@ -184,12 +238,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           console.log('⚠️ Using fallback user due to safety timeout');
         }
         setIsLoading(false);
-      }, 8000); // 8 seconds safety timeout (reduced from 15)
+      }, 20000); // Network-tolerant safety timeout
+
+      const merchantSignupIntent = (() => {
+        try {
+          return localStorage.getItem(MERCHANT_SIGNUP_INTENT_KEY) === '1';
+        } catch {
+          return false;
+        }
+      })();
 
       try {
         console.log('🔄 Loading user profile for:', session.user.email);
         setToken(session.access_token);
         localStorage.setItem('authToken', session.access_token);
+        try {
+          if (session.user?.email) {
+            localStorage.setItem('last-google-login-hint', session.user.email);
+          }
+        } catch {
+          // best effort
+        }
         
         // Get user profile with explicit timeout using Promise.race.
         const profilePromise = supabase
@@ -199,7 +268,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           .single();
         
         const timeoutPromise = new Promise((_, reject) => {
-          setTimeout(() => reject(new Error('Profile fetch timeout after 8 seconds')), 8000);
+          setTimeout(() => reject(new Error('Profile fetch timeout after 20 seconds')), 20000);
         });
         
         let profile: any = null;
@@ -247,6 +316,66 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             console.error('❌ Profile fetch retry error:', retryErr);
           }
         }
+
+        // Web/native session edge-case: when profile fetch times out we can end up
+        // with a valid auth session but missing/undetected public users row.
+        // Ensure the profile row exists using direct REST upsert with current token.
+        if (!profile && (event === 'SIGNED_IN' || event === 'INITIAL_SESSION')) {
+          try {
+            const sbUrl = String(import.meta.env.VITE_SUPABASE_URL || '');
+            const sbKey = String(import.meta.env.VITE_SUPABASE_ANON_KEY || '');
+            const authToken = String(session?.access_token || '');
+            const userMetadata = session.user.user_metadata || {};
+
+            if (sbUrl && sbKey && authToken) {
+              const ensurePayload = {
+                id: session.user.id,
+                email: session.user.email || '',
+                name: userMetadata.name || userMetadata.full_name || session.user.email?.split('@')[0] || 'Kullanıcı',
+                avatar: userMetadata.avatar_url || userMetadata.picture || null,
+                google_id: userMetadata.provider === 'google' ? session.user.id : null,
+                is_guest: false,
+                is_merchant: merchantSignupIntent || normalizeMerchantFlag(userMetadata.is_merchant),
+                search_radius: 15,
+                ...(merchantSignupIntent ? {
+                  merchant_subscription_status: 'inactive',
+                  merchant_subscription_plan: 'merchant_basic_500_tl_monthly',
+                  merchant_subscription_fee_tl: 500,
+                } : {}),
+              };
+
+              const controller = new AbortController();
+              const timer = setTimeout(() => controller.abort(), 15000);
+              const ensureResponse = await fetch(`${sbUrl}/rest/v1/users?on_conflict=id`, {
+                method: 'POST',
+                headers: {
+                  apikey: sbKey,
+                  Authorization: `Bearer ${authToken}`,
+                  'Content-Type': 'application/json',
+                  Prefer: 'resolution=merge-duplicates,return=representation',
+                },
+                body: JSON.stringify(ensurePayload),
+                signal: controller.signal,
+              });
+              clearTimeout(timer);
+
+              if (ensureResponse.ok) {
+                const ensuredRows = await ensureResponse.json().catch(() => []);
+                const ensuredProfile = Array.isArray(ensuredRows) ? ensuredRows[0] : null;
+                if (ensuredProfile?.id) {
+                  profile = ensuredProfile;
+                  profileError = null;
+                  console.log('✅ Profile ensured via REST upsert');
+                }
+              } else {
+                const ensureErr = await ensureResponse.text().catch(() => '');
+                console.warn('⚠️ Profile ensure REST upsert failed:', ensureResponse.status, ensureErr);
+              }
+            }
+          } catch (ensureError) {
+            console.warn('⚠️ Profile ensure fallback failed:', ensureError);
+          }
+        }
         
         // Only create profile when DB explicitly reports "row not found".
         if (!profile && profileError?.code === 'PGRST116' && (event === 'SIGNED_IN' || event === 'INITIAL_SESSION')) {
@@ -264,7 +393,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             avatar: userMetadata.avatar_url || userMetadata.picture,
             google_id: userMetadata.provider === 'google' ? session.user.id : null,
             is_guest: false,
+            is_merchant: merchantSignupIntent || normalizeMerchantFlag(userMetadata.is_merchant),
             search_radius: 15, // Default search radius (ensures constraint is satisfied: 1-1000)
+            ...(merchantSignupIntent ? {
+              merchant_subscription_status: 'inactive',
+              merchant_subscription_plan: 'merchant_basic_500_tl_monthly',
+              merchant_subscription_fee_tl: 500,
+            } : {}),
           };
           
           console.log('📝 Creating OAuth user profile with data:', {
@@ -273,7 +408,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             search_radius_type: typeof newUserData.search_radius,
           });
           
-          // Create profile in background (reduced timeout from 10s to 5s)
+          // Create profile in background with network-tolerant timeout
           const createPromise = supabase
             .from('users')
             .insert(newUserData)
@@ -281,7 +416,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             .single();
           
           const createTimeoutPromise = new Promise((_, reject) => {
-            setTimeout(() => reject(new Error('Profile creation timeout after 5 seconds')), 5000);
+            setTimeout(() => reject(new Error('Profile creation timeout after 12 seconds')), 12000);
           });
           
           // Create profile in background - don't block UI
@@ -306,6 +441,38 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         clearTimeout(profileTimeout);
         
         if (profile) {
+          // If user explicitly started "merchant sign-up" from login screen (including Google OAuth),
+          // elevate account to merchant and force subscription onboarding.
+          if (merchantSignupIntent) {
+            try {
+              const merchantSetupUpdate = {
+                is_merchant: true,
+                merchant_subscription_status: 'inactive',
+                merchant_subscription_plan: 'merchant_basic_500_tl_monthly',
+                merchant_subscription_fee_tl: 500,
+                merchant_subscription_current_period_start: null,
+                merchant_subscription_current_period_end: null,
+              };
+              const { data: merchantProfile, error: merchantSetupError } = await supabase
+                .from('users')
+                .update(merchantSetupUpdate)
+                .eq('id', session.user.id)
+                .select('*')
+                .single();
+
+              if (!merchantSetupError && merchantProfile) {
+                profile = merchantProfile;
+                console.log('✅ Merchant sign-up intent applied after auth callback');
+              } else if (merchantSetupError) {
+                console.warn('⚠️ Could not apply merchant sign-up intent:', merchantSetupError);
+              }
+              localStorage.setItem(MERCHANT_SUBSCRIPTION_ONBOARDING_KEY, session.user.id);
+              localStorage.removeItem(MERCHANT_SIGNUP_INTENT_KEY);
+            } catch (intentError) {
+              console.warn('⚠️ Merchant sign-up intent handling failed:', intentError);
+            }
+          }
+
           // Ensure preferences and search_radius are properly set
           // Priority: preferences.searchRadius (newer) > search_radius (legacy) > default
           const preferencesRadius = profile.preferences?.searchRadius;
@@ -365,13 +532,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               verifications: 0,
             },
             isGuest: false,
-            is_merchant: preservedMerchant,
+            is_merchant: merchantSignupIntent || preservedMerchant,
             preferences: {
               notifications: true,
               searchRadius: 15,
             },
             search_radius: 15,
           };
+          if (merchantSignupIntent) {
+            try {
+              localStorage.setItem(MERCHANT_SUBSCRIPTION_ONBOARDING_KEY, session.user.id);
+              localStorage.removeItem(MERCHANT_SIGNUP_INTENT_KEY);
+            } catch {
+              // best effort
+            }
+          }
           setUser(fallbackUser);
           localStorage.setItem('user', JSON.stringify(fallbackUser));
           console.log('⚠️ Using fallback user - profile not available');
@@ -388,8 +563,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             console.log('🧹 OAuth callback hash cleaned from URL');
           }
           // Then ensure we're on root path for navigation
-          if (window.location.pathname !== '/') {
-            window.history.replaceState({}, document.title, '/');
+          const appRootPath = getAppRootPath();
+          if (window.location.pathname !== appRootPath) {
+            window.history.replaceState({}, document.title, appRootPath);
             console.log('🧹 OAuth callback URL cleaned, redirected to root');
           }
         }
@@ -399,6 +575,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         // Even on error, try to set user from session
         if (session?.user) {
           const userMetadata = session.user.user_metadata || {};
+          const preservedMerchant = cachedUser?.id === session.user.id
+            ? normalizeMerchantFlag(cachedUser?.is_merchant)
+            : normalizeMerchantFlag(userMetadata?.is_merchant);
           const fallbackUser = {
             id: session.user.id,
             email: session.user.email || '',
@@ -411,12 +590,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               verifications: 0,
             },
             isGuest: false,
+            is_merchant: merchantSignupIntent || preservedMerchant,
             preferences: {
               notifications: true,
               searchRadius: 15, // Default search radius
             },
             search_radius: 15, // Legacy column for backward compatibility
           };
+          if (merchantSignupIntent) {
+            try {
+              localStorage.setItem(MERCHANT_SUBSCRIPTION_ONBOARDING_KEY, session.user.id);
+              localStorage.removeItem(MERCHANT_SIGNUP_INTENT_KEY);
+            } catch {
+              // best effort
+            }
+          }
           setUser(fallbackUser);
           localStorage.setItem('user', JSON.stringify(fallbackUser));
           console.log('⚠️ Using fallback user due to error');
@@ -427,28 +615,50 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     // Initial session check with timeout
     const initializeAuth = async () => {
-      // If OAuth callback detected, skip initial auth check
-      // onAuthStateChange will handle it
-      if (hasOAuthCallback) {
+      // Only explicit callback params should skip initial auth check.
+      // Pending flag alone must not freeze app startup.
+      if (hasExplicitOAuthCallback) {
         console.log('🔐 OAuth callback detected, skipping initial auth check - waiting for onAuthStateChange');
         // Don't set loading to false yet - wait for onAuthStateChange
-        // Set a timeout for OAuth callback (reduced from 30s to 15s)
-        setTimeout(() => {
+        // Keep enough time for slower devices/networks during Google callback.
+        setTimeout(async () => {
           if (isLoading && isOAuthCallbackRef.current) {
+            // Recovery attempt: if session already exists, continue instead of dropping to login.
+            try {
+              const { data: { session } } = await supabase.auth.getSession();
+              if (session) {
+                console.log('✅ OAuth timeout recovery: session found, continuing profile load');
+                await loadUserProfile(session, 'INITIAL_SESSION', true);
+                setIsOAuthCallback(false);
+                isOAuthCallbackRef.current = false;
+                return;
+              }
+            } catch (recoveryError) {
+              console.warn('⚠️ OAuth timeout recovery failed:', recoveryError);
+            }
+
             console.warn('⚠️ OAuth callback timeout - forcing loading to false');
             setIsLoading(false);
             setIsOAuthCallback(false);
             isOAuthCallbackRef.current = false;
+            try {
+              localStorage.removeItem('oauth-pending-ts');
+            } catch {
+              // best effort
+            }
+            toast.error('Google giriş zaman aşımına uğradı', {
+              description: 'Bağlantı yavaş veya kesik olabilir. Lütfen tekrar deneyin.',
+            });
           }
-        }, 15000); // 15 second timeout for OAuth (reduced from 30)
+        }, 60000); // 60 second timeout for OAuth
         return;
       }
 
-      // Safety timeout - force loading to false after 8 seconds (reduced from 15)
+      // Safety timeout - force loading to false after network-tolerant window
       const safetyTimeout = setTimeout(() => {
         console.warn('⚠️ Auth initialization timeout - forcing loading to false');
         setIsLoading(false);
-      }, 8000);
+      }, 20000);
 
       try {
         const { data: { session }, error: sessionError } = await supabase.auth.getSession();
@@ -526,16 +736,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       
       let stateChangeTimeout: NodeJS.Timeout | null = null;
       
-      // Only set timeout if we actually need to process this event (reduced from 25s to 12s)
+      // Only set timeout if we actually need to process this event.
       if (needsProcessing) {
         stateChangeTimeout = setTimeout(() => {
           console.warn('⚠️ Auth state change timeout - forcing loading to false');
           setIsLoading(false);
-        }, 12000);
+        }, 25000);
       }
       
       try {
         if (session) {
+          try {
+            localStorage.removeItem('oauth-pending-ts');
+          } catch {
+            // best effort
+          }
           // Reload profile if:
           // 1. User is not already set
           // 2. It's a SIGNED_IN event
@@ -552,6 +767,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             setIsLoading(true); // Set loading during profile load
             const shouldCleanUrl = event === 'SIGNED_IN' || (event === 'TOKEN_REFRESHED' && oauthInProgress);
             await loadUserProfile(session, event, shouldCleanUrl);
+            // Authoritative second-pass refresh: prevents merchant users from
+            // being stuck as normal users when first profile load falls back.
+            if (event === 'SIGNED_IN' || event === 'INITIAL_SESSION' || event === 'USER_UPDATED') {
+              setTimeout(() => {
+                void refreshUser();
+              }, 300);
+            }
             
             // Profile loaded successfully - ensure URL is clean and trigger navigation
             if (event === 'SIGNED_IN') {
@@ -565,8 +787,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                 console.log('🧹 OAuth callback hash cleaned from URL');
               }
               // Clean up URL to root path to trigger AppRoutes navigation
-              if (window.location.pathname !== '/') {
-                window.history.replaceState({}, document.title, '/');
+              const appRootPath = getAppRootPath();
+              if (window.location.pathname !== appRootPath) {
+                window.history.replaceState({}, document.title, appRootPath);
               }
               // Minimal delay for state update (reduced from 200ms to 50ms)
               await new Promise(resolve => setTimeout(resolve, 50));
@@ -702,21 +925,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         localStorage.setItem('authToken', data.token);
       }
 
-      // Ensure we refresh the authoritative user profile from the database
-      // before returning from login. This guarantees user.is_merchant is correct.
+      // Always set user immediately from auth API response.
+      // This prevents stale non-merchant UI when refreshUser is delayed/fails.
+      if (data.user) {
+        setUser(data.user as any);
+        localStorage.setItem('user', JSON.stringify(data.user));
+      }
+
+      // Then refresh authoritative profile in background to reconcile any stale fields.
       try {
         console.log('🔄 Forcing profile refresh after login (refreshUser)...');
         await refreshUser();
         console.log('✅ refreshUser completed successfully after login');
-        return;
       } catch (refreshErr) {
         console.error('❌ refreshUser failed after login:', refreshErr);
-        // Fallback to API response if refresh failed
-        if (data.user) {
-          setUser(data.user);
-          localStorage.setItem('user', JSON.stringify(data.user));
-          console.warn('⚠️ Using API response data as fallback for user state');
-        }
+        console.warn('⚠️ Keeping auth API user snapshot as fallback state');
       }
     } catch (error) {
       console.error('Login error:', error);
@@ -724,9 +947,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   };
 
-  const googleLogin = async () => {
+  const googleLogin = async (options?: { merchantSignupIntent?: boolean; loginHint?: string }) => {
     try {
-      const data = await authAPI.googleLogin();
+      const data = await authAPI.googleLogin(options);
       // Web flow redirects in current window; mobile flow is opened via Capacitor Browser.
       if (data.redirectUrl && !data.openedInBrowser) {
         window.location.href = data.redirectUrl;
@@ -749,6 +972,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const logout = async () => {
+    const safeSignOut = async (scope: 'local' | 'global') => {
+      await Promise.race([
+        supabase.auth.signOut({ scope }),
+        new Promise<void>((resolve) => setTimeout(resolve, 2500)),
+      ]).catch(() => undefined);
+    };
+
     try {
       console.log('🚪 Logging out...');
       // Sign out from Supabase, but never block logout UX indefinitely.
@@ -756,20 +986,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         authAPI.logout(),
         new Promise<void>((resolve) => setTimeout(resolve, 4500)),
       ]);
-      // Ensure local Supabase session is cleared even if global signOut failed/timed out.
-      await supabase.auth.signOut({ scope: 'local' }).catch(() => undefined);
+      // Ensure both local and remote sessions are requested to sign out, without hanging UI.
+      await safeSignOut('local');
+      await safeSignOut('global');
       // Clear local state/storage no matter what.
       setToken(null);
       setUser(null);
       clearAuthStorage();
+      setIsOAuthCallback(false);
+      isOAuthCallbackRef.current = false;
       console.log('✅ Logout successful');
     } catch (error) {
       console.error('❌ Logout error:', error);
       // Even if logout fails, force local state cleanup.
-      await supabase.auth.signOut({ scope: 'local' }).catch(() => undefined);
+      await safeSignOut('local');
       setToken(null);
       setUser(null);
       clearAuthStorage();
+      setIsOAuthCallback(false);
+      isOAuthCallbackRef.current = false;
     }
   };
 
@@ -781,16 +1016,41 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return;
       }
       
-      // Fetch fresh user data from Supabase
-      const { data: profile, error } = await supabase
-        .from('users')
-        .select('*')
-        .eq('id', session.user.id)
-        .single();
-      
-      if (error) {
-        console.error('❌ Error refreshing user:', error);
+      // Fetch fresh user data from Supabase with retry to survive transient
+      // mobile callback/session races.
+      let profile: any = null;
+      let error: any = null;
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        const result = await supabase
+          .from('users')
+          .select('*')
+          .eq('id', session.user.id)
+          .maybeSingle();
+        profile = result.data;
+        error = result.error;
+        if (!error && profile) break;
+        await new Promise((resolve) => setTimeout(resolve, 600 * (attempt + 1)));
+      }
+
+      if (error || !profile) {
+        console.error('❌ Error refreshing user:', error || 'Profile not found');
         return;
+      }
+
+      // Merchant role can exist through active merchant products even if
+      // profile flag arrives stale right after OAuth.
+      let hasMerchantProducts = false;
+      try {
+        const { data: merchantRows, error: merchantErr } = await supabase
+          .from('merchant_products')
+          .select('id')
+          .eq('merchant_id', session.user.id)
+          .limit(1);
+        if (!merchantErr && Array.isArray(merchantRows) && merchantRows.length > 0) {
+          hasMerchantProducts = true;
+        }
+      } catch {
+        hasMerchantProducts = false;
       }
       
       if (profile) {
@@ -804,7 +1064,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         
         const userData = {
           ...profile,
-          is_merchant: resolveMerchantStatus(profile),
+          is_merchant: resolveMerchantStatus(profile) || hasMerchantProducts,
           preferences: {
             ...(profile.preferences || {}),
             searchRadius: finalSearchRadius, // Ensure preferences.searchRadius is always set

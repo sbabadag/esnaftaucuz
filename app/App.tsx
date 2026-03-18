@@ -37,6 +37,15 @@ function AppRoutes() {
   const { user, isLoading } = useAuth(); // useAuth handles live-reload cases internally
   const location = useLocation();
   const navigate = useNavigate();
+  const OAUTH_PENDING_MAX_AGE_MS = 2 * 60 * 1000;
+  const oauthPendingTs = (() => {
+    try {
+      return Number(localStorage.getItem('oauth-pending-ts') || '0');
+    } catch {
+      return 0;
+    }
+  })();
+  const hasRecentOAuthPending = oauthPendingTs > 0 && (Date.now() - oauthPendingTs) < OAUTH_PENDING_MAX_AGE_MS;
   const [hasSeenOnboarding, setHasSeenOnboarding] = useState<boolean>(() => {
     if (typeof window === 'undefined') return false;
     return localStorage.getItem('hasSeenOnboarding') === 'true';
@@ -71,9 +80,10 @@ function AppRoutes() {
     
     // Check if this is an OAuth callback (has hash fragments with access_token)
     const hashParams = new URLSearchParams(window.location.hash.substring(1));
-    const isOAuthCallback = hashParams.has('access_token') || hashParams.has('code');
+    const hasExplicitOAuthCallback = hashParams.has('access_token') || hashParams.has('code');
+    const isOAuthCallback = hasExplicitOAuthCallback || hasRecentOAuthPending;
     
-    if (isOAuthCallback) {
+    if (isOAuthCallback && isLoading) {
       console.log('🔐 OAuth callback detected, waiting for user to load...');
       // Don't navigate yet, wait for user to be loaded
       return;
@@ -93,14 +103,15 @@ function AppRoutes() {
       return;
     }
 
-    if (!user && !isLoading && location.pathname.startsWith('/app')) {
+    if (!user && !isLoading && location.pathname.startsWith('/app') && !hasExplicitOAuthCallback) {
       navigate('/login', { replace: true });
     }
-  }, [user, isLoading, location.pathname, location.search, hasCheckoutRedirect, navigate]);
+  }, [user, isLoading, location.pathname, location.search, hasCheckoutRedirect, hasRecentOAuthPending, navigate]);
 
   // Check if this is an OAuth callback - if so, keep loading until user is ready
   const hashParams = new URLSearchParams(window.location.hash.substring(1));
-  const isOAuthCallback = hashParams.has('access_token') || hashParams.has('code');
+  const hasExplicitOAuthCallback = hashParams.has('access_token') || hashParams.has('code');
+  const isOAuthCallback = hasExplicitOAuthCallback || hasRecentOAuthPending;
   
   // If OAuth callback is in progress, show loading
   if (isOAuthCallback && isLoading) {
@@ -179,6 +190,38 @@ function AppRoutes() {
 
 function App() {
   useEffect(() => {
+    const OAUTH_PENDING_KEY = 'oauth-pending-ts';
+    const MERCHANT_SIGNUP_INTENT_KEY = 'merchant-signup-intent';
+    const MERCHANT_SUBSCRIPTION_ONBOARDING_KEY = 'merchant-subscription-onboarding-user';
+    const getAppRootPath = () => {
+      const normalize = (value: string) => {
+        let out = String(value || '/').trim();
+        if (!out.startsWith('/')) out = `/${out}`;
+        if (!out.endsWith('/')) out = `${out}/`;
+        return out.replace(/\/{2,}/g, '/');
+      };
+      const configuredBase = normalize(String(import.meta.env.BASE_URL || '/'));
+      if (configuredBase !== '/') return configuredBase;
+      const pathname = String(window.location.pathname || '/');
+      if (pathname.startsWith('/esnaftaucuz/')) return '/esnaftaucuz/';
+      if (pathname === '/esnaftaucuz') return '/esnaftaucuz/';
+      return '/';
+    };
+    const markOAuthPending = () => {
+      try {
+        localStorage.setItem(OAUTH_PENDING_KEY, String(Date.now()));
+      } catch {
+        // best effort
+      }
+    };
+    const clearOAuthPending = () => {
+      try {
+        localStorage.removeItem(OAUTH_PENDING_KEY);
+      } catch {
+        // best effort
+      }
+    };
+
     let pushActionListener: any = null;
     const pendingQueueKey = 'pending_push_events_v1';
     const trySyncPushImmediately = async (normalized: any) => {
@@ -263,12 +306,46 @@ function App() {
       (window as any).Capacitor?.isNativePlatform();
     
     // Function to handle OAuth code exchange
-    const handleOAuthCode = async (code: string, source: string) => {
+    const handleOAuthCode = async (code: string, source: string, merchantIntentHint: boolean = false) => {
       console.log(`🔐 OAuth PKCE callback detected (${source})`);
       console.log('🔐 Code:', code.substring(0, 20) + '...');
+      if (merchantIntentHint) {
+        try {
+          localStorage.setItem(MERCHANT_SIGNUP_INTENT_KEY, '1');
+          console.log('🏪 Merchant intent preserved from callback URL');
+        } catch {
+          // best effort
+        }
+      }
+      markOAuthPending();
       
       try {
-        const { data, error } = await supabase.auth.exchangeCodeForSession(code);
+        let exchangeResult: any = null;
+        let lastError: any = null;
+        for (let attempt = 1; attempt <= 2; attempt++) {
+          try {
+            exchangeResult = await Promise.race([
+              supabase.auth.exchangeCodeForSession(code),
+              new Promise<any>((_, reject) =>
+                setTimeout(() => reject(new Error('oauth_exchange_timeout')), 30000)
+              ),
+            ]);
+            lastError = null;
+            break;
+          } catch (attemptError) {
+            lastError = attemptError;
+            console.warn(`⚠️ OAuth code exchange attempt ${attempt} failed:`, attemptError);
+            if (attempt < 2) {
+              await new Promise((resolve) => setTimeout(resolve, 1200));
+            }
+          }
+        }
+
+        if (!exchangeResult) {
+          throw lastError || new Error('oauth_exchange_timeout');
+        }
+
+        const { data, error } = exchangeResult as any;
         
         if (error) {
           console.error('❌ Failed to exchange code for session:', error);
@@ -276,6 +353,7 @@ function App() {
             message: error.message,
             status: error.status,
           });
+          clearOAuthPending();
           window.location.hash = `error=${encodeURIComponent(error.message || 'Failed to exchange code')}`;
           return;
         }
@@ -286,15 +364,29 @@ function App() {
           hasUser: !!data.user,
           userId: data.user?.id,
         });
+        if (merchantIntentHint && data?.user?.id) {
+          try {
+            localStorage.setItem(MERCHANT_SUBSCRIPTION_ONBOARDING_KEY, data.user.id);
+          } catch {
+            // best effort
+          }
+        }
         
         // Session is now set, AuthContext will handle the rest via onAuthStateChange
         // Clean up URL
-        window.history.replaceState({}, document.title, '/');
+        clearOAuthPending();
+        window.history.replaceState({}, document.title, getAppRootPath());
         // Notify router listeners when callback URL is normalized.
         window.dispatchEvent(new PopStateEvent('popstate'));
       } catch (err: any) {
         console.error('❌ Error exchanging code for session:', err);
-        window.location.hash = `error=${encodeURIComponent(err.message || 'Unknown error')}`;
+        const rawMessage = String(err?.message || 'Unknown error');
+        const normalizedMessage =
+          rawMessage === 'oauth_exchange_timeout'
+            ? 'Google giriş isteği zaman aşımına uğradı. Lütfen tekrar deneyin.'
+            : rawMessage;
+        clearOAuthPending();
+        window.location.hash = `error=${encodeURIComponent(normalizedMessage)}`;
       }
     };
     
@@ -316,10 +408,11 @@ function App() {
           const url = new URL(currentUrl);
           const code = url.searchParams.get('code');
           const error = url.searchParams.get('error') || url.searchParams.get('error_description');
+          const merchantIntent = url.searchParams.get('merchant_intent') === '1';
           
           if (code) {
             console.log('🔐 Found OAuth code in current URL');
-            handleOAuthCode(code, 'current URL');
+            handleOAuthCode(code, 'current URL', merchantIntent);
             return true;
           } else if (error) {
             console.error('❌ OAuth error in current URL:', error);
@@ -359,8 +452,14 @@ function App() {
     if (isMobile) {
       const handleIncomingDeepLink = (incomingUrl: string, source: string) => {
         console.log(`🔗 App opened with URL (${source}):`, incomingUrl);
-        // Close in-app browser if OAuth returns via deep link.
-        Browser.close().catch(() => {});
+        const normalizedIncoming = String(incomingUrl || '').toLowerCase();
+        const isKnownOAuthCallback =
+          normalizedIncoming.startsWith('com.esnaftaucuz.app:') ||
+          normalizedIncoming.includes('supabase.co/auth/v1/callback');
+        if (!isKnownOAuthCallback) {
+          console.log('ℹ️ Ignoring unrelated deep link URL');
+          return;
+        }
         try {
           // Fix URL format if needed (com.esnaftaucuz.app:?code=... -> com.esnaftaucuz.app://?code=...)
           let urlString = incomingUrl;
@@ -389,28 +488,46 @@ function App() {
           const error = url.searchParams.get('error') || url.searchParams.get('error_description');
           const checkout = url.searchParams.get('checkout');
           const paymentId = url.searchParams.get('paymentId');
+          const merchantIntent = url.searchParams.get('merchant_intent') === '1';
 
           const hash = url.hash.substring(1);
           const hashParams = new URLSearchParams(hash);
           const accessToken = hashParams.get('access_token');
           const hashError = hashParams.get('error');
+          const hasActionableParams =
+            !!code ||
+            !!accessToken ||
+            !!error ||
+            !!hashError ||
+            checkout === 'success' ||
+            checkout === 'cancel';
+
+          // Close in-app browser only when callback payload is actionable.
+          // Some devices can emit stale callback URLs without query params.
+          if (hasActionableParams) {
+            Browser.close().catch(() => {});
+          }
 
           if (code) {
-            handleOAuthCode(code, `${source} deep link`);
+            handleOAuthCode(code, `${source} deep link`, merchantIntent);
           } else if (checkout === 'success' || checkout === 'cancel') {
             const qs = new URLSearchParams();
             qs.set('checkout', checkout);
             if (paymentId) qs.set('paymentId', paymentId);
-            window.history.replaceState({}, document.title, `/?${qs.toString()}`);
-            window.location.replace(`/?${qs.toString()}`);
+            const appRootPath = getAppRootPath();
+            const target = `${appRootPath}?${qs.toString()}`;
+            window.history.replaceState({}, document.title, target);
+            window.location.replace(target);
           } else if (accessToken) {
             console.log('🔐 OAuth implicit callback detected in deep link (access_token)');
+            markOAuthPending();
             window.location.hash = hash;
           } else if (error || hashError) {
             console.error('❌ OAuth error in deep link:', error || hashError);
+            clearOAuthPending();
             window.location.hash = `error=${encodeURIComponent(error || hashError || 'Unknown error')}`;
           } else {
-            console.log('⚠️ No OAuth parameters found in deep link URL');
+            console.log('⚠️ No actionable OAuth parameters in deep link URL; ignoring stale callback');
           }
         } catch (e) {
           console.error('❌ Failed to parse deep link URL:', e);
@@ -418,16 +535,30 @@ function App() {
         }
       };
 
+      const probeLaunchUrl = (source: string) => {
+        CapacitorApp.getLaunchUrl()
+          .then((result) => {
+            if (result?.url) {
+              handleIncomingDeepLink(result.url, source);
+            }
+          })
+          .catch(() => {});
+      };
+
+      // Some Android devices deliver deep-link before JS listeners are attached.
+      // Probe launch URL a few times right after startup to avoid missing OAuth callback.
+      let launchProbeCount = 0;
+      const maxLaunchProbes = 8;
+      const launchProbeTimer = setInterval(() => {
+        launchProbeCount += 1;
+        probeLaunchUrl(`launch-probe-${launchProbeCount}`);
+        if (launchProbeCount >= maxLaunchProbes) {
+          clearInterval(launchProbeTimer);
+        }
+      }, 700);
+
       // iOS can cold-start app from OAuth callback before listener is attached.
-      CapacitorApp.getLaunchUrl()
-        .then((result) => {
-          if (result?.url) {
-            handleIncomingDeepLink(result.url, 'launch');
-          }
-        })
-        .catch((e) => {
-          console.warn('⚠️ Failed to read launch URL:', e);
-        });
+      probeLaunchUrl('launch');
 
       // Listen for app URL open events (deep links)
       const listener = CapacitorApp.addListener('appUrlOpen', (event) => {
@@ -439,13 +570,7 @@ function App() {
       const appStateListener = CapacitorApp.addListener('appStateChange', (state) => {
         console.log('📱 App state changed:', state.isActive ? 'active' : 'inactive');
         if (state.isActive) {
-          CapacitorApp.getLaunchUrl()
-            .then((result) => {
-              if (result?.url) {
-                handleIncomingDeepLink(result.url, 'resume');
-              }
-            })
-            .catch(() => {});
+          probeLaunchUrl('resume');
           // Check if we're on a Supabase callback page
           checkCurrentUrlForOAuth();
         }
@@ -473,6 +598,7 @@ function App() {
         listener.remove();
         appStateListener.remove();
         clearInterval(intervalId);
+        clearInterval(launchProbeTimer);
       };
     }
 

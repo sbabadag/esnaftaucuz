@@ -8,7 +8,7 @@
 import { supabase } from '../lib/supabase';
 import { v4 as uuidv4 } from 'uuid';
 import { Browser } from '@capacitor/browser';
-import { App as CapacitorApp } from '@capacitor/app';
+import { Capacitor, CapacitorHttp } from '@capacitor/core';
 import { getImmediateUnreadCount } from '../lib/notification-store';
 
 const normalizeMerchantFlag = (value: any): boolean => {
@@ -28,6 +28,151 @@ const resolveMerchantStatus = (profile: any): boolean => {
   const subscriptionStatus = String(profile?.merchant_subscription_status || '').toLowerCase();
   const hasMerchantSubscription = subscriptionStatus === 'active' || subscriptionStatus === 'past_due';
   return explicit || hasMerchantSubscription;
+};
+
+type ApiCacheEntry<T> = {
+  expiresAt: number;
+  value?: T;
+  pending?: Promise<T>;
+};
+
+const apiQueryCache = new Map<string, ApiCacheEntry<any>>();
+
+const stableKey = (prefix: string, payload?: unknown) => {
+  try {
+    return `${prefix}:${JSON.stringify(payload ?? {})}`;
+  } catch {
+    return `${prefix}:fallback`;
+  }
+};
+
+const cachedQuery = async <T,>(key: string, ttlMs: number, fetcher: () => Promise<T>): Promise<T> => {
+  const now = Date.now();
+  const existing = apiQueryCache.get(key) as ApiCacheEntry<T> | undefined;
+  if (existing?.value !== undefined && existing.expiresAt > now) {
+    return existing.value;
+  }
+  if (existing?.pending) {
+    return existing.pending;
+  }
+
+  const pending = fetcher()
+    .then((value) => {
+      apiQueryCache.set(key, {
+        value,
+        expiresAt: Date.now() + ttlMs,
+      });
+      return value;
+    })
+    .catch((error) => {
+      apiQueryCache.delete(key);
+      throw error;
+    });
+
+  apiQueryCache.set(key, {
+    expiresAt: now + ttlMs,
+    pending,
+  });
+
+  return pending;
+};
+
+const invalidateCachedQueries = (prefix: string) => {
+  for (const key of apiQueryCache.keys()) {
+    if (key.startsWith(prefix)) {
+      apiQueryCache.delete(key);
+    }
+  }
+};
+
+const withHardTimeout = async <T,>(promise: Promise<T>, timeoutMs: number, timeoutMessage: string): Promise<T> => {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) => {
+      setTimeout(() => reject(new Error(timeoutMessage)), timeoutMs);
+    }),
+  ]);
+};
+
+const extractAccessTokenFromUnknown = (rawValue: string | null): string | null => {
+  const raw = String(rawValue || '').trim();
+  if (!raw) return null;
+
+  if (raw.includes('.') && !raw.startsWith('{') && !raw.startsWith('[')) {
+    return raw;
+  }
+
+  try {
+    const parsed: any = JSON.parse(raw);
+    const stack: any[] = [parsed];
+    while (stack.length > 0) {
+      const current = stack.pop();
+      if (!current) continue;
+
+      if (typeof current === 'object') {
+        const accessTokenValue = current.access_token || current.accessToken;
+        if (typeof accessTokenValue === 'string' && accessTokenValue.includes('.')) {
+          return accessTokenValue;
+        }
+
+        if (Array.isArray(current)) {
+          for (const item of current) stack.push(item);
+        } else {
+          for (const value of Object.values(current)) stack.push(value);
+        }
+      }
+    }
+  } catch {
+    // ignore parse errors
+  }
+
+  return null;
+};
+
+const getAccessTokenFromStorageFallback = (): string | null => {
+  try {
+    const directToken = extractAccessTokenFromUnknown(localStorage.getItem('authToken'));
+    if (directToken) return directToken;
+
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i) || '';
+      const looksLikeSupabaseAuthKey =
+        (key.startsWith('sb-') && key.endsWith('-auth-token')) ||
+        key.startsWith('supabase.auth.');
+      if (!looksLikeSupabaseAuthKey) continue;
+
+      const token = extractAccessTokenFromUnknown(localStorage.getItem(key));
+      if (token) return token;
+    }
+  } catch {
+    return null;
+  }
+  return null;
+};
+
+const getRestAuthHeaders = async () => {
+  const sbKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
+  let accessToken: string | null = null;
+  try {
+    const sessionResult: any = await Promise.race([
+      supabase.auth.getSession(),
+      new Promise((resolve) => setTimeout(() => resolve(null), 6000)),
+    ]);
+    accessToken = sessionResult?.data?.session?.access_token || null;
+  } catch {
+    accessToken = null;
+  }
+  if (!accessToken) {
+    accessToken = getAccessTokenFromStorageFallback();
+  }
+  const headers: Record<string, string> = {
+    apikey: sbKey,
+    'Content-Type': 'application/json',
+  };
+  if (accessToken) {
+    headers.Authorization = `Bearer ${accessToken}`;
+  }
+  return headers;
 };
 
 const getSafeOAuthUrl = (rawUrl: string): string => {
@@ -64,7 +209,64 @@ const getSafeOAuthUrl = (rawUrl: string): string => {
     throw new Error(`Google OAuth URL host izinli değil: ${host}`);
   }
 
+  // Only allow OAuth authorization pages for Google login flow.
+  if (allowedByDefaultSupabase && !parsed.pathname.includes('/auth/v1/authorize')) {
+    throw new Error(`Beklenmeyen Supabase OAuth yolu: ${parsed.pathname}`);
+  }
+
+  const provider = parsed.searchParams.get('provider');
+  if (provider && provider !== 'google') {
+    throw new Error(`Beklenmeyen OAuth provider: ${provider}`);
+  }
+
   return parsed.toString();
+};
+
+const normalizeBasePath = (base: string): string => {
+  let normalized = String(base || '/').trim();
+  if (!normalized.startsWith('/')) normalized = `/${normalized}`;
+  if (!normalized.endsWith('/')) normalized = `${normalized}/`;
+  return normalized.replace(/\/{2,}/g, '/');
+};
+
+const detectLikelyAppBasePath = (): string => {
+  const configured = normalizeBasePath(String(import.meta.env.BASE_URL || '/'));
+  if (configured !== '/') return configured;
+  const pathname = String(window.location.pathname || '/');
+  if (pathname.startsWith('/esnaftaucuz/')) return '/esnaftaucuz/';
+  if (pathname === '/esnaftaucuz') return '/esnaftaucuz/';
+  return '/';
+};
+
+const buildWebOAuthRedirectCandidates = (merchantIntent: boolean): string[] => {
+  const origin = String(window.location.origin || '').trim();
+  const appBasePath = detectLikelyAppBasePath();
+  const configured = String(import.meta.env.VITE_WEB_OAUTH_REDIRECT_URL || '').trim();
+  const currentPath = String(window.location.pathname || '/');
+  const candidates: string[] = [];
+  const add = (value: string) => {
+    const v = String(value || '').trim();
+    if (!v) return;
+    if (!candidates.includes(v)) candidates.push(v);
+  };
+  const withIntent = (raw: string) => {
+    try {
+      const u = new URL(raw);
+      if (merchantIntent) u.searchParams.set('merchant_intent', '1');
+      return u.toString();
+    } catch {
+      return raw;
+    }
+  };
+
+  if (configured) add(withIntent(configured));
+  add(withIntent(new URL(appBasePath, origin).toString()));
+  add(withIntent(new URL(`${appBasePath}login`, origin).toString()));
+  add(withIntent(new URL(currentPath || '/', origin).toString()));
+  add(withIntent(new URL('/', origin).toString()));
+  add(withIntent(new URL('/login', origin).toString()));
+
+  return candidates;
 };
 
 // ============================================================================
@@ -215,16 +417,33 @@ export const authAPI = {
         }
 
         if (existingType === null) {
+          const initialAccountUpdate: Record<string, any> = {
+            is_merchant: isMerchant,
+          };
+          if (isMerchant) {
+            initialAccountUpdate.merchant_subscription_status = 'inactive';
+            initialAccountUpdate.merchant_subscription_plan = 'merchant_basic_500_tl_monthly';
+            initialAccountUpdate.merchant_subscription_fee_tl = 500;
+            initialAccountUpdate.merchant_subscription_current_period_start = null;
+            initialAccountUpdate.merchant_subscription_current_period_end = null;
+          }
           console.log('📝 Setting initial is_merchant to', isMerchant, 'for user:', profileData.id);
           const { error: updateError } = await supabase
             .from('users')
-            .update({ is_merchant: isMerchant })
+            .update(initialAccountUpdate)
             .eq('id', profileData.id);
 
           if (updateError) {
             console.warn('⚠️ Failed to set is_merchant, default type will be used:', updateError);
           } else {
             profileData.is_merchant = isMerchant;
+            if (isMerchant) {
+              profileData.merchant_subscription_status = initialAccountUpdate.merchant_subscription_status;
+              profileData.merchant_subscription_plan = initialAccountUpdate.merchant_subscription_plan;
+              profileData.merchant_subscription_fee_tl = initialAccountUpdate.merchant_subscription_fee_tl;
+              profileData.merchant_subscription_current_period_start = initialAccountUpdate.merchant_subscription_current_period_start;
+              profileData.merchant_subscription_current_period_end = initialAccountUpdate.merchant_subscription_current_period_end;
+            }
             console.log('✅ Initial is_merchant set successfully to', isMerchant);
           }
         } else {
@@ -348,11 +567,39 @@ export const authAPI = {
     }
   },
 
-  googleLogin: async () => {
+  googleLogin: async (options?: { merchantSignupIntent?: boolean; loginHint?: string }) => {
     try {
       console.log('🔐 Starting Google OAuth...');
       console.log('📍 Current origin:', window.location.origin);
       console.log('📍 Current href:', window.location.href);
+      try {
+        localStorage.setItem('oauth-pending-ts', String(Date.now()));
+      } catch {
+        // best effort
+      }
+      const merchantIntentFromStorage = (() => {
+        try {
+          return localStorage.getItem('merchant-signup-intent') === '1';
+        } catch {
+          return false;
+        }
+      })();
+      const merchantIntent = options?.merchantSignupIntent === true || merchantIntentFromStorage;
+      const loginHint = (() => {
+        const fromOptions = String(options?.loginHint || '').trim();
+        if (fromOptions.includes('@')) return fromOptions;
+        try {
+          const fromLastHint = String(localStorage.getItem('last-google-login-hint') || '').trim();
+          if (fromLastHint.includes('@')) return fromLastHint;
+          const rawUser = localStorage.getItem('user');
+          const parsed = rawUser ? JSON.parse(rawUser) : null;
+          const fromUser = String(parsed?.email || '').trim();
+          if (fromUser.includes('@')) return fromUser;
+        } catch {
+          // best effort
+        }
+        return '';
+      })();
       
       // Detect if we're on mobile (Capacitor)
       const isMobile = typeof window !== 'undefined' && 
@@ -362,7 +609,7 @@ export const authAPI = {
       const oauthOptions: any = {
         queryParams: {
           access_type: 'offline',
-          prompt: 'consent',
+          ...(loginHint ? { login_hint: loginHint } : {}),
         },
       };
       
@@ -370,8 +617,11 @@ export const authAPI = {
         // Prevent Supabase from auto-redirecting current webview on native.
         oauthOptions.skipBrowserRedirect = true;
       } else {
-        // On web, use the current origin
-        oauthOptions.redirectTo = `${window.location.origin}/`;
+        // On web, redirect back to current app base (root or GitHub Pages subpath).
+        const appBasePath = detectLikelyAppBasePath();
+        const redirectUrl = new URL(appBasePath, window.location.origin);
+        if (merchantIntent) redirectUrl.searchParams.set('merchant_intent', '1');
+        oauthOptions.redirectTo = redirectUrl.toString();
         console.log('🌐 Web detected, using redirectTo:', oauthOptions.redirectTo);
       }
 
@@ -381,7 +631,16 @@ export const authAPI = {
       let error: any = null;
 
       if (isMobile) {
-        const redirectCandidates = ['com.esnaftaucuz.app://auth/callback'];
+        const redirectCandidates = merchantIntent
+          ? [
+              'com.esnaftaucuz.app://auth/callback?merchant_intent=1',
+              'com.esnaftaucuz.app://?merchant_intent=1',
+              'com.esnaftaucuz.app://',
+            ]
+          : [
+              'com.esnaftaucuz.app://auth/callback',
+              'com.esnaftaucuz.app://',
+            ];
 
         for (const redirectTo of redirectCandidates) {
           const { data: candidateData, error: candidateError } = await supabase.auth.signInWithOAuth({
@@ -406,12 +665,26 @@ export const authAPI = {
           });
         }
       } else {
-        const result = await supabase.auth.signInWithOAuth({
-          provider: 'google',
-          options: oauthOptions,
-        });
-        data = result.data;
-        error = result.error;
+        const redirectCandidates = buildWebOAuthRedirectCandidates(merchantIntent);
+        for (const redirectTo of redirectCandidates) {
+          const result = await supabase.auth.signInWithOAuth({
+            provider: 'google',
+            options: {
+              ...oauthOptions,
+              redirectTo,
+            },
+          });
+          data = result.data;
+          error = result.error;
+          if (!error) {
+            console.log('🌐 Web OAuth redirect candidate accepted:', redirectTo);
+            break;
+          }
+          console.warn('⚠️ Web OAuth redirect candidate rejected:', {
+            redirectTo,
+            message: error?.message,
+          });
+        }
       }
 
       if (error) {
@@ -425,15 +698,8 @@ export const authAPI = {
       // The callback deep link is handled by App.tsx via appUrlOpen listener.
       if (isMobile && data.url) {
         const safeOAuthUrl = getSafeOAuthUrl(data.url);
-        try {
-          await Browser.open({ url: safeOAuthUrl });
-          return { redirectUrl: safeOAuthUrl, openedInBrowser: true };
-        } catch (browserOpenError) {
-          console.warn('⚠️ Capacitor Browser.open failed, using fallback:', browserOpenError);
-        }
-
-        // Fallback: ask the OS to open the URL in a trusted browser app.
-        await CapacitorApp.openUrl({ url: safeOAuthUrl });
+        // Open in system browser/custom tab on native platforms.
+        await Browser.open({ url: safeOAuthUrl });
         return { redirectUrl: safeOAuthUrl, openedInBrowser: true };
       }
 
@@ -442,7 +708,7 @@ export const authAPI = {
     } catch (error: any) {
       console.error('Google login error:', error);
       if (error.message?.includes('redirect_uri_mismatch')) {
-        throw new Error('Google OAuth yapılandırması hatalı. Lütfen geliştirici ile iletişime geçin.');
+        throw new Error('Google OAuth redirect URL hatalı. Supabase Auth Redirect URLs ve Google Authorized redirect URI ayarlarını kontrol edin.');
       }
       throw new Error(error.message || 'Google ile giriş başarısız');
     }
@@ -546,47 +812,80 @@ export const authAPI = {
 
 export const productsAPI = {
   getAll: async (search?: string, category?: string) => {
-    try {
-      let query = supabase
-        .from('products')
-        .select('*')
-        .eq('is_active', true);
+    return cachedQuery(stableKey('products:getAll', { search, category }), 60000, async () => {
+      try {
+        const sbUrl = import.meta.env.VITE_SUPABASE_URL as string;
+        const sbKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
+        if (sbUrl && sbKey) {
+          try {
+            const controller = new AbortController();
+            const tid = setTimeout(() => controller.abort(), 10000);
+            const params = new URLSearchParams({
+              select: 'id,name,category,image,is_active',
+              is_active: 'eq.true',
+              order: 'name.asc',
+              limit: '2000',
+            });
+            if (search) params.set('name', `ilike.*${search}*`);
+            if (category) params.set('category', `eq.${category}`);
 
-      if (search) {
-        query = query.ilike('name', `%${search}%`);
+            const resp = await fetch(`${sbUrl}/rest/v1/products?${params.toString()}`, {
+              headers: { apikey: sbKey, Authorization: `Bearer ${sbKey}` },
+              signal: controller.signal,
+            });
+            clearTimeout(tid);
+            if (resp.ok) {
+              const rows = await resp.json().catch(() => []);
+              if (Array.isArray(rows)) return rows;
+            }
+          } catch {
+            // Fallback to Supabase client path
+          }
+        }
+
+        let query = supabase
+          .from('products')
+          .select('*')
+          .eq('is_active', true);
+
+        if (search) {
+          query = query.ilike('name', `%${search}%`);
+        }
+        if (category) {
+          query = query.eq('category', category);
+        }
+
+        const { data, error } = await query.order('name', { ascending: true });
+
+        if (error) throw error;
+        return data || [];
+      } catch (error: any) {
+        console.error('Get products error:', error);
+        throw new Error(error.message || 'Ürünler yüklenemedi');
       }
-      if (category) {
-        query = query.eq('category', category);
-      }
-
-      const { data, error } = await query.order('name', { ascending: true });
-
-      if (error) throw error;
-      return data || [];
-    } catch (error: any) {
-      console.error('Get products error:', error);
-      throw new Error(error.message || 'Ürünler yüklenemedi');
-    }
+    });
   },
 
   getTrending: async () => {
-    try {
-      const sbUrl = import.meta.env.VITE_SUPABASE_URL as string;
-      const sbKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
-      if (!sbUrl || !sbKey) return [];
+    return cachedQuery(stableKey('products:getTrending'), 20000, async () => {
+      try {
+        const sbUrl = import.meta.env.VITE_SUPABASE_URL as string;
+        const sbKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
+        if (!sbUrl || !sbKey) return [];
 
-      const controller = new AbortController();
-      const tid = setTimeout(() => controller.abort(), 10000);
-      const resp = await fetch(
-        `${sbUrl}/rest/v1/products?select=id,name,category,image&is_active=eq.true&order=search_count.desc&limit=6`,
-        { headers: { apikey: sbKey, Authorization: `Bearer ${sbKey}` }, signal: controller.signal }
-      );
-      clearTimeout(tid);
-      if (!resp.ok) return [];
-      return await resp.json().catch(() => []);
-    } catch {
-      return [];
-    }
+        const controller = new AbortController();
+        const tid = setTimeout(() => controller.abort(), 10000);
+        const resp = await fetch(
+          `${sbUrl}/rest/v1/products?select=id,name,category,image&is_active=eq.true&order=search_count.desc&limit=6`,
+          { headers: { apikey: sbKey, Authorization: `Bearer ${sbKey}` }, signal: controller.signal }
+        );
+        clearTimeout(tid);
+        if (!resp.ok) return [];
+        return await resp.json().catch(() => []);
+      } catch {
+        return [];
+      }
+    });
   },
 
   getById: async (id: string) => {
@@ -673,8 +972,9 @@ export const locationsAPI = {
     lng?: number;
     radius?: number;
   }) => {
-    try {
-      let query = supabase.from('locations').select('*');
+    return cachedQuery(stableKey('locations:getAll', filters), 30000, async () => {
+      try {
+        let query = supabase.from('locations').select('*');
 
       if (filters?.type) {
         query = query.eq('type', filters.type);
@@ -705,11 +1005,12 @@ export const locationsAPI = {
         });
       }
 
-      return data || [];
-    } catch (error: any) {
-      console.error('Get locations error:', error);
-      throw new Error(error.message || 'Konumlar yüklenemedi');
-    }
+        return data || [];
+      } catch (error: any) {
+        console.error('Get locations error:', error);
+        throw new Error(error.message || 'Konumlar yüklenemedi');
+      }
+    });
   },
 
   getById: async (id: string) => {
@@ -780,7 +1081,8 @@ export const pricesAPI = {
     lng?: number;
     radius?: number;
   }) => {
-    try {
+    return cachedQuery(stableKey('prices:getAll', filters), 12000, async () => {
+      try {
       // REST-first path: bypasses Supabase JS client entirely
       const sbUrl = import.meta.env.VITE_SUPABASE_URL as string;
       const sbKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
@@ -1074,18 +1376,19 @@ export const pricesAPI = {
         })));
       }
       
-      return filteredData;
-    } catch (error: any) {
-      console.error('❌ Get prices error:', error);
-      console.error('Error details:', {
-        message: error.message,
-        code: error.code,
-        details: error.details,
-        hint: error.hint,
-      });
-      // Return empty array instead of throwing to prevent app from hanging
-      return [];
-    }
+        return filteredData;
+      } catch (error: any) {
+        console.error('❌ Get prices error:', error);
+        console.error('Error details:', {
+          message: error.message,
+          code: error.code,
+          details: error.details,
+          hint: error.hint,
+        });
+        // Return empty array instead of throwing to prevent app from hanging
+        return [];
+      }
+    });
   },
 
   getByProduct: async (productId: string, sort: 'newest' | 'cheapest' | 'expensive' | 'verified' = 'cheapest') => {
@@ -3076,25 +3379,54 @@ const MERCHANT_SUBSCRIPTION_MONTHLY_FEE_TL = 1000;
 const getMerchantSubscriptionAccessError = () =>
   `Esnaf aboneliğiniz aktif değil. Dükkanınızı yönetmek için aylık ${MERCHANT_SUBSCRIPTION_MONTHLY_FEE_TL} TL abonelik gereklidir.`;
 
+const isTransientSubscriptionCheckError = (error: unknown) => {
+  const msg = String((error as any)?.message || error || '').toLowerCase();
+  return (
+    msg.includes('zaman aşım') ||
+    msg.includes('timeout') ||
+    msg.includes('aborted') ||
+    msg.includes('network') ||
+    msg.includes('failed to fetch') ||
+    msg.includes('fetch')
+  );
+};
+
 const ensureMerchantSubscriptionActive = async (merchantId: string) => {
-  const { data, error } = await supabase.rpc('has_active_merchant_subscription', {
-    p_user_id: merchantId,
-  });
+  try {
+    const { data, error } = await withHardTimeout(
+      supabase.rpc('has_active_merchant_subscription', {
+        p_user_id: merchantId,
+      }),
+      12000,
+      'Abonelik kontrolü zaman asimina ugradi'
+    );
 
-  if (error) {
-    console.error('❌ Subscription check RPC error:', error);
-    throw new Error('Abonelik durumu kontrol edilemedi. Lütfen tekrar deneyin.');
-  }
+    if (error) {
+      if (isTransientSubscriptionCheckError(error)) {
+        console.warn('⚠️ Subscription check transient error, allowing operation:', error);
+        return;
+      }
+      console.error('❌ Subscription check RPC error:', error);
+      throw new Error('Abonelik durumu kontrol edilemedi. Lütfen tekrar deneyin.');
+    }
 
-  if (!data) {
-    throw new Error(getMerchantSubscriptionAccessError());
+    if (!data) {
+      throw new Error(getMerchantSubscriptionAccessError());
+    }
+  } catch (error: any) {
+    if (isTransientSubscriptionCheckError(error)) {
+      console.warn('⚠️ Subscription check timeout/network, allowing operation:', error);
+      return;
+    }
+    throw error;
   }
 };
 
 export const merchantProductsAPI = {
   // Get all merchant products for a specific merchant
   getByMerchant: async (merchantId: string) => {
-    try {
+    return cachedQuery(stableKey('merchant:getByMerchant', { merchantId }), 12000, async () => {
+      try {
       const hydrateMerchantRows = async (rows: any[]) => {
         const list = Array.isArray(rows) ? rows : [];
         if (list.length === 0) return [];
@@ -3214,10 +3546,11 @@ export const merchantProductsAPI = {
 
       if (error) throw error;
       return await hydrateMerchantRows(data || []);
-    } catch (error: any) {
-      console.error('❌ Get merchant products error:', error);
-      throw error;
-    }
+      } catch (error: any) {
+        console.error('❌ Get merchant products error:', error);
+        throw error;
+      }
+    });
   },
 
   // Get a single merchant product by ID
@@ -3268,23 +3601,54 @@ export const merchantProductsAPI = {
       if (data.coordinates) {
         insertData.coordinates = `(${data.coordinates.lng},${data.coordinates.lat})`;
       }
+
+      const sbUrl = import.meta.env.VITE_SUPABASE_URL as string;
+      if (sbUrl) {
+        try {
+          const headers = await getRestAuthHeaders();
+          const controller = new AbortController();
+          const tid = setTimeout(() => controller.abort(), 20000);
+          const restRes = await fetch(`${sbUrl}/rest/v1/merchant_products?on_conflict=merchant_id,product_id`, {
+            method: 'POST',
+            headers: {
+              ...headers,
+              Prefer: 'resolution=merge-duplicates,return=representation',
+            },
+            body: JSON.stringify(insertData),
+            signal: controller.signal,
+          });
+          clearTimeout(tid);
+          if (restRes.ok) {
+            const rows = await restRes.json().catch(() => []);
+            invalidateCachedQueries('merchant:');
+            return Array.isArray(rows) ? rows[0] || null : null;
+          }
+        } catch {
+          // Fall back to Supabase client path
+        }
+      }
       // Use upsert with conflict on (merchant_id, product_id) so adding the same product
       // for the same merchant will update the existing row instead of throwing a duplicate key error.
-      const { data: result, error } = await supabase
-        .from('merchant_products')
-        .upsert(insertData, { onConflict: 'merchant_id,product_id' })
-        .select(`
-          *,
-          product:products(*),
-          location:locations(*)
-        `)
-        .single();
+      const { data: result, error } = await withHardTimeout(
+        supabase
+          .from('merchant_products')
+          .upsert(insertData, { onConflict: 'merchant_id,product_id' })
+          .select(`
+            *,
+            product:products(*),
+            location:locations(*)
+          `)
+          .single(),
+        20000,
+        'Ürün kaydetme zaman aşımına uğradı'
+      );
 
       if (error) {
         console.error('❌ Create/Upsert merchant product error:', error);
         throw error;
       }
 
+      invalidateCachedQueries('merchant:');
       return result;
     } catch (error: any) {
       console.error('❌ Create merchant product error:', error);
@@ -3302,11 +3666,15 @@ export const merchantProductsAPI = {
     is_active?: boolean;
   }) => {
     try {
-      const { data: currentProduct, error: currentProductError } = await supabase
-        .from('merchant_products')
-        .select('merchant_id')
-        .eq('id', id)
-        .single();
+      const { data: currentProduct, error: currentProductError } = await withHardTimeout(
+        supabase
+          .from('merchant_products')
+          .select('merchant_id')
+          .eq('id', id)
+          .single(),
+        12000,
+        'Ürün güncelleme hazırlığı zaman aşımına uğradı'
+      );
 
       if (currentProductError || !currentProduct?.merchant_id) {
         console.error('❌ Failed to fetch merchant product for subscription check:', currentProductError);
@@ -3328,18 +3696,49 @@ export const merchantProductsAPI = {
 
       updateData.updated_at = new Date().toISOString();
 
-      const { data: result, error } = await supabase
-        .from('merchant_products')
-        .update(updateData)
-        .eq('id', id)
-        .select(`
-          *,
-          product:products(*),
-          location:locations(*)
-        `)
-        .single();
+      const sbUrl = import.meta.env.VITE_SUPABASE_URL as string;
+      if (sbUrl) {
+        try {
+          const headers = await getRestAuthHeaders();
+          const controller = new AbortController();
+          const tid = setTimeout(() => controller.abort(), 20000);
+          const restRes = await fetch(`${sbUrl}/rest/v1/merchant_products?id=eq.${id}`, {
+            method: 'PATCH',
+            headers: {
+              ...headers,
+              Prefer: 'return=representation',
+            },
+            body: JSON.stringify(updateData),
+            signal: controller.signal,
+          });
+          clearTimeout(tid);
+          if (restRes.ok) {
+            const rows = await restRes.json().catch(() => []);
+            invalidateCachedQueries('merchant:');
+            return Array.isArray(rows) ? rows[0] || null : null;
+          }
+        } catch {
+          // Fall back to Supabase client path
+        }
+      }
+
+      const { data: result, error } = await withHardTimeout(
+        supabase
+          .from('merchant_products')
+          .update(updateData)
+          .eq('id', id)
+          .select(`
+            *,
+            product:products(*),
+            location:locations(*)
+          `)
+          .single(),
+        20000,
+        'Ürün güncelleme zaman aşımına uğradı'
+      );
 
       if (error) throw error;
+      invalidateCachedQueries('merchant:');
       return result;
     } catch (error: any) {
       console.error('❌ Update merchant product error:', error);
@@ -3369,6 +3768,7 @@ export const merchantProductsAPI = {
         .eq('id', id);
 
       if (error) throw error;
+      invalidateCachedQueries('merchant:');
       return true;
     } catch (error: any) {
       console.error('❌ Delete merchant product error:', error);
@@ -3393,6 +3793,7 @@ export const merchantProductsAPI = {
         .single();
 
       if (error) throw error;
+      invalidateCachedQueries('merchant:');
       return data;
     } catch (error: any) {
       console.error('❌ Verify merchant product error:', error);
@@ -3418,54 +3819,218 @@ export const merchantProductsAPI = {
     }
   },
 
-  getAllMerchantShops: async (limit: number = 50) => {
+  trackClick: async (params: {
+    merchant_product_id: string;
+    merchant_id: string;
+    product_id: string;
+    viewer_user_id?: string;
+  }) => {
     try {
-      const sbUrl = import.meta.env.VITE_SUPABASE_URL as string;
-      const sbKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
-      const headers = { apikey: sbKey, Authorization: `Bearer ${sbKey}` };
-      const controller = new AbortController();
-      const tid = setTimeout(() => controller.abort(), 10000);
-
-      const mpResp = await fetch(
-        `${sbUrl}/rest/v1/merchant_products?select=merchant_id,coordinates&or=(is_active.eq.true,is_active.is.null)&limit=${limit}`,
-        { headers, signal: controller.signal }
-      );
-      if (!mpResp.ok) { clearTimeout(tid); throw new Error(`merchant_products ${mpResp.status}`); }
-      const mpRows: any[] = await mpResp.json().catch(() => []);
-
-      const merchantIds = [...new Set((mpRows || []).map((r: any) => r.merchant_id).filter(Boolean))];
-      if (merchantIds.length === 0) { clearTimeout(tid); return []; }
-
-      const usersResp = await fetch(
-        `${sbUrl}/rest/v1/users?select=id,name,avatar,email,is_merchant&id=in.(${merchantIds.join(',')})`,
-        { headers, signal: controller.signal }
-      );
-      clearTimeout(tid);
-      const users: any[] = usersResp.ok ? await usersResp.json().catch(() => []) : [];
-      const userMap = new Map(users.map((u: any) => [u.id, u]));
-
-      const coordMap = new Map<string, any>();
-      for (const r of mpRows) {
-        if (r.merchant_id && !coordMap.has(r.merchant_id)) {
-          coordMap.set(r.merchant_id, r.coordinates);
-        }
+      const insertPayload: any = {
+        merchant_product_id: params.merchant_product_id,
+        merchant_id: params.merchant_id,
+        product_id: params.product_id,
+      };
+      if (params.viewer_user_id) {
+        insertPayload.viewer_user_id = params.viewer_user_id;
       }
 
-      return merchantIds.map((mid) => {
-        const u = userMap.get(mid);
-        return {
-          id: mid,
-          name: u?.name || 'Esnaf',
-          avatar: u?.avatar || null,
-          email: u?.email || null,
-          is_merchant: u?.is_merchant === true,
-          coordinates: coordMap.get(mid) || null,
-        };
-      });
+      const { error } = await supabase
+        .from('merchant_product_clicks')
+        .insert(insertPayload);
+
+      if (error) {
+        console.warn('⚠️ Track merchant product click failed:', error);
+      }
+      return !error;
     } catch (error: any) {
-      console.error('Get all merchant shops error:', error);
-      throw error;
+      console.warn('⚠️ Track merchant product click exception:', error);
+      return false;
     }
+  },
+
+  getDailyClickReport: async (merchantId: string, days: number = 14) => {
+    return cachedQuery(stableKey('merchant:dailyClickReport', { merchantId, days }), 15000, async () => {
+      try {
+        const dayCount = Math.min(Math.max(Number(days) || 14, 1), 60);
+        const since = new Date();
+        since.setHours(0, 0, 0, 0);
+        since.setDate(since.getDate() - (dayCount - 1));
+        let data: any[] = [];
+
+        // REST-first with explicit timeout to avoid hanging query states on mobile/webview.
+        const sbUrl = import.meta.env.VITE_SUPABASE_URL as string;
+        if (sbUrl) {
+          try {
+            const headers = await getRestAuthHeaders();
+            const params = new URLSearchParams({
+              select: 'clicked_at,merchant_product_id,product_id',
+              merchant_id: `eq.${merchantId}`,
+              clicked_at: `gte.${since.toISOString()}`,
+              order: 'clicked_at.asc',
+              limit: '10000',
+            });
+            const controller = new AbortController();
+            const tid = setTimeout(() => controller.abort(), 10000);
+            const resp = await fetch(`${sbUrl}/rest/v1/merchant_product_clicks?${params.toString()}`, {
+              method: 'GET',
+              headers,
+              signal: controller.signal,
+            });
+            clearTimeout(tid);
+            if (resp.ok) {
+              data = await resp.json().catch(() => []);
+            }
+          } catch {
+            // Fallback below
+          }
+        }
+
+        if (!Array.isArray(data) || data.length === 0) {
+          const { data: fallbackData, error } = await withHardTimeout(
+            supabase
+              .from('merchant_product_clicks')
+              .select('clicked_at,merchant_product_id,product_id')
+              .eq('merchant_id', merchantId)
+              .gte('clicked_at', since.toISOString())
+              .order('clicked_at', { ascending: true })
+              .limit(10000),
+            12000,
+            'Rapor sorgusu zaman aşımına uğradı'
+          );
+
+          if (error) {
+            const msg = String((error as any)?.message || '').toLowerCase();
+            if ((error as any)?.code === '42P01' || msg.includes('does not exist')) {
+              return { daily: [], products: [] };
+            }
+            throw error;
+          }
+          data = Array.isArray(fallbackData) ? fallbackData : [];
+        }
+
+        const productIds = Array.from(
+          new Set((data || []).map((row: any) => row?.product_id).filter(Boolean))
+        );
+        const productNameMap = new Map<string, string>();
+        if (productIds.length > 0) {
+          try {
+            const { data: productRows } = await withHardTimeout(
+              supabase
+                .from('products')
+                .select('id,name')
+                .in('id', productIds),
+              8000,
+              'Rapor ürün adları zaman aşımına uğradı'
+            );
+            for (const p of productRows || []) {
+              if ((p as any)?.id) {
+                productNameMap.set(String((p as any).id), String((p as any).name || 'Ürün'));
+              }
+            }
+          } catch {
+            // Keep default "Ürün" labels when product-name hydration fails.
+          }
+        }
+
+        const byDay = new Map<string, number>();
+        const byProduct = new Map<string, { merchant_product_id: string; product_id: string; product_name: string; count: number }>();
+
+        for (const row of data || []) {
+          const dayKey = String((row as any)?.clicked_at || '').slice(0, 10);
+          if (dayKey) {
+            byDay.set(dayKey, (byDay.get(dayKey) || 0) + 1);
+          }
+
+          const merchantProductId = String((row as any)?.merchant_product_id || '');
+          if (!merchantProductId) continue;
+          const current = byProduct.get(merchantProductId);
+          const productId = String((row as any)?.product_id || '');
+          const productName = productNameMap.get(productId) || 'Ürün';
+          if (current) {
+            current.count += 1;
+          } else {
+            byProduct.set(merchantProductId, {
+              merchant_product_id: merchantProductId,
+              product_id: productId,
+              product_name: productName,
+              count: 1,
+            });
+          }
+        }
+
+        const daily: Array<{ date: string; count: number }> = [];
+        for (let i = 0; i < dayCount; i++) {
+          const d = new Date(since);
+          d.setDate(since.getDate() + i);
+          const key = d.toISOString().slice(0, 10);
+          daily.push({ date: key, count: byDay.get(key) || 0 });
+        }
+
+        const products = Array.from(byProduct.values()).sort((a, b) => b.count - a.count);
+        return { daily, products };
+      } catch (error: any) {
+        const msg = String(error?.message || '').toLowerCase();
+        if (error?.code === '42P01' || msg.includes('does not exist')) {
+          return { daily: [], products: [] };
+        }
+        // Never block reports screen indefinitely. Fail closed to an empty report.
+        console.error('❌ Get merchant daily click report error, returning empty:', error);
+        return { daily: [], products: [] };
+      }
+    });
+  },
+
+  getAllMerchantShops: async (limit: number = 50) => {
+    return cachedQuery(stableKey('merchant:getAllShops', { limit }), 12000, async () => {
+      try {
+        const sbUrl = import.meta.env.VITE_SUPABASE_URL as string;
+        const sbKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
+        const headers = { apikey: sbKey, Authorization: `Bearer ${sbKey}` };
+        const controller = new AbortController();
+        const tid = setTimeout(() => controller.abort(), 10000);
+
+        const mpResp = await fetch(
+          `${sbUrl}/rest/v1/merchant_products?select=merchant_id,coordinates&or=(is_active.eq.true,is_active.is.null)&limit=${limit}`,
+          { headers, signal: controller.signal }
+        );
+        if (!mpResp.ok) { clearTimeout(tid); throw new Error(`merchant_products ${mpResp.status}`); }
+        const mpRows: any[] = await mpResp.json().catch(() => []);
+
+        const merchantIds = [...new Set((mpRows || []).map((r: any) => r.merchant_id).filter(Boolean))];
+        if (merchantIds.length === 0) { clearTimeout(tid); return []; }
+
+        const usersResp = await fetch(
+          `${sbUrl}/rest/v1/users?select=id,name,avatar,email,is_merchant&id=in.(${merchantIds.join(',')})`,
+          { headers, signal: controller.signal }
+        );
+        clearTimeout(tid);
+        const users: any[] = usersResp.ok ? await usersResp.json().catch(() => []) : [];
+        const userMap = new Map(users.map((u: any) => [u.id, u]));
+
+        const coordMap = new Map<string, any>();
+        for (const r of mpRows) {
+          if (r.merchant_id && !coordMap.has(r.merchant_id)) {
+            coordMap.set(r.merchant_id, r.coordinates);
+          }
+        }
+
+        return merchantIds.map((mid) => {
+          const u = userMap.get(mid);
+          return {
+            id: mid,
+            name: u?.name || 'Esnaf',
+            avatar: u?.avatar || null,
+            email: u?.email || null,
+            is_merchant: u?.is_merchant === true,
+            coordinates: coordMap.get(mid) || null,
+          };
+        });
+      } catch (error: any) {
+        console.error('Get all merchant shops error:', error);
+        throw error;
+      }
+    });
   },
 };
 
@@ -3475,16 +4040,37 @@ export const merchantProductsAPI = {
 
 export const merchantSubscriptionAPI = {
   getStatus: async (userId: string) => {
-    try {
-      const { error: syncError } = await supabase.rpc('sync_merchant_subscription_status', {
-        p_user_id: userId,
-      });
+    const isTransientError = (error: any) => {
+      const msg = String(error?.message || error || '').toLowerCase();
+      return (
+        msg.includes('zaman aşım') ||
+        msg.includes('timeout') ||
+        msg.includes('network') ||
+        msg.includes('failed to fetch') ||
+        msg.includes('fetch')
+      );
+    };
 
-      if (syncError) {
-        console.warn('⚠️ Failed to sync merchant subscription status:', syncError);
+    try {
+      try {
+        const { error: syncError } = await withHardTimeout(
+          supabase.rpc('sync_merchant_subscription_status', {
+            p_user_id: userId,
+          }),
+          9000,
+          'Abonelik senkronizasyonu zaman aşımına uğradı'
+        );
+        if (syncError) {
+          console.warn('⚠️ Failed to sync merchant subscription status:', syncError);
+        }
+      } catch (syncError: any) {
+        if (!isTransientError(syncError)) {
+          console.warn('⚠️ Subscription sync non-transient error:', syncError);
+        }
+        // Fail-open: continue with current profile snapshot.
       }
 
-      const [{ data: profile, error: profileError }, { data: isActive, error: activeError }] = await Promise.all([
+      const { data: profile, error: profileError } = await withHardTimeout(
         supabase
           .from('users')
           .select(`
@@ -3498,35 +4084,69 @@ export const merchantSubscriptionAPI = {
           `)
           .eq('id', userId)
           .single(),
-        supabase.rpc('has_active_merchant_subscription', { p_user_id: userId }),
-      ]);
-
+        12000,
+        'Abonelik profil sorgusu zaman aşımına uğradı'
+      );
       if (profileError) throw profileError;
-      if (activeError) throw activeError;
+
+      let isActive = false;
+      try {
+        const activeResult = await withHardTimeout(
+          supabase.rpc('has_active_merchant_subscription', { p_user_id: userId }),
+          9000,
+          'Abonelik aktiflik sorgusu zaman aşımına uğradı'
+        );
+        if (!(activeResult as any)?.error) {
+          isActive = !!(activeResult as any)?.data;
+        }
+      } catch {
+        const status = String((profile as any)?.merchant_subscription_status || '').toLowerCase();
+        isActive = status === 'active' || status === 'past_due';
+      }
 
       return {
         ...(profile || {}),
         is_active: !!isActive,
       };
     } catch (error: any) {
-      console.error('❌ Get merchant subscription status error:', error);
+      console.error('❌ Get merchant subscription status error (fallback):', error);
+      if (isTransientError(error)) {
+        return {
+          id: userId,
+          is_merchant: true,
+          merchant_subscription_status: 'inactive',
+          merchant_subscription_plan: 'merchant_basic_500_tl_monthly',
+          merchant_subscription_fee_tl: 500,
+          merchant_subscription_current_period_start: null,
+          merchant_subscription_current_period_end: null,
+          is_active: false,
+        };
+      }
       throw new Error(error.message || 'Abonelik durumu alınamadı');
     }
   },
 
   getPayments: async (userId: string, limit: number = 20) => {
     try {
-      const { data, error } = await supabase
-        .from('merchant_subscription_payments')
-        .select('*')
-        .eq('user_id', userId)
-        .order('created_at', { ascending: false })
-        .limit(limit);
+      const { data, error } = await withHardTimeout(
+        supabase
+          .from('merchant_subscription_payments')
+          .select('*')
+          .eq('user_id', userId)
+          .order('created_at', { ascending: false })
+          .limit(limit),
+        20000,
+        'Ödeme geçmişi sorgusu zaman aşımına uğradı'
+      );
 
       if (error) throw error;
       return data || [];
     } catch (error: any) {
       console.error('❌ Get merchant subscription payments error:', error);
+      const msg = String(error?.message || '').toLowerCase();
+      if (msg.includes('zaman aşım') || msg.includes('timeout') || msg.includes('failed to fetch') || msg.includes('network')) {
+        return [];
+      }
       throw new Error(error.message || 'Ödeme geçmişi alınamadı');
     }
   },
@@ -3562,7 +4182,7 @@ export const merchantSubscriptionAPI = {
     metadata?: Record<string, any>;
   }) => {
     try {
-      const amountTl = data.amountTl || 1000;
+      const amountTl = data.amountTl || 500;
       const billingPeriodMonths = data.billingPeriodMonths || 1;
 
       const { data: payment, error } = await supabase
@@ -3588,79 +4208,694 @@ export const merchantSubscriptionAPI = {
     }
   },
 
+  startStripeNativeSubscription: async (data: {
+    userId: string;
+    billingPeriodMonths?: number;
+    priceId?: string;
+    amountTl?: number;
+  }) => {
+    try {
+      const sbUrl = String(import.meta.env.VITE_SUPABASE_URL || '');
+      const sbAnon = String(import.meta.env.VITE_SUPABASE_ANON_KEY || '');
+      if (!sbUrl || !sbAnon) {
+        throw new Error('Supabase yapılandırması eksik');
+      }
+
+      const resolveStrictFreshToken = async (): Promise<string> => {
+        // Fast path first: on mobile, storage token is usually available even when auth SDK hangs.
+        const storageToken = String(getAccessTokenFromStorageFallback() || '').trim();
+        if (storageToken) return storageToken;
+
+        // Fallback to SDK paths with shorter timeout to avoid "no-op" perception.
+        try {
+          const sessionResult: any = await withHardTimeout(
+            supabase.auth.getSession(),
+            8000,
+            'Oturum kontrolü zaman aşımına uğradı'
+          );
+          const sessionToken = String(sessionResult?.data?.session?.access_token || '').trim();
+          if (sessionToken) return sessionToken;
+        } catch {
+          // continue
+        }
+
+        try {
+          const refreshed: any = await withHardTimeout(
+            supabase.auth.refreshSession(),
+            12000,
+            'Oturum yenileme zaman aşımına uğradı'
+          );
+          const refreshedToken = String(refreshed?.data?.session?.access_token || '').trim();
+          if (refreshedToken) return refreshedToken;
+        } catch {
+          // continue
+        }
+
+        return '';
+      };
+
+      let accessToken = await resolveStrictFreshToken();
+      if (!accessToken) throw new Error('Oturum bulunamadı. Lütfen tekrar giriş yapın.');
+
+      const payload = {
+        billingPeriodMonths: data.billingPeriodMonths || 1,
+        amountTl: Math.max(1, Number(data.amountTl || 500)),
+        ...(data.priceId ? { priceId: data.priceId } : {}),
+      };
+
+      let status = 0;
+      let responseData: any = null;
+
+      const callCreate = async (token: string) => {
+        // Prefer Supabase SDK invoke first to keep auth handling consistent.
+        try {
+          const invokeResult: any = await withHardTimeout(
+            supabase.functions.invoke('merchant-subscription-create', {
+              body: payload,
+              headers: {
+                Authorization: `Bearer ${token}`,
+              },
+            }),
+            45000,
+            'Abonelik ödeme hazırlığı zaman aşımına uğradı'
+          );
+          if (invokeResult?.data) {
+            return { status: 200, data: invokeResult.data };
+          }
+          if (invokeResult?.error) {
+            return {
+              status: Number(invokeResult?.error?.status || 500),
+              data: invokeResult?.error,
+            };
+          }
+        } catch {
+          // fallback paths below
+        }
+
+        const canUseNativeHttp = (() => {
+          try {
+            return Capacitor.isNativePlatform() && typeof CapacitorHttp?.request === 'function';
+          } catch {
+            return false;
+          }
+        })();
+
+        if (canUseNativeHttp) {
+          const nativeRes: any = await withHardTimeout(
+            CapacitorHttp.request({
+              url: `${sbUrl}/functions/v1/merchant-subscription-create`,
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                apikey: sbAnon,
+                Authorization: `Bearer ${token}`,
+              },
+              data: payload,
+              connectTimeout: 30000,
+              readTimeout: 30000,
+            }),
+            32000,
+            'Abonelik ödeme hazırlığı zaman aşımına uğradı'
+          );
+          return {
+            status: Number(nativeRes?.status || 0),
+            data: nativeRes?.data ?? null,
+          };
+        }
+
+        const res = await withHardTimeout(
+          fetch(`${sbUrl}/functions/v1/merchant-subscription-create`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              apikey: sbAnon,
+              Authorization: `Bearer ${token}`,
+            },
+            body: JSON.stringify(payload),
+          }),
+          32000,
+          'Abonelik ödeme hazırlığı zaman aşımına uğradı'
+        );
+        return {
+          status: res.status,
+          data: await res.json().catch(() => null),
+        };
+      };
+
+      let callResult = await callCreate(accessToken);
+      status = callResult.status;
+      responseData = callResult.data;
+
+      if (status === 401) {
+        try {
+          let refreshedToken = '';
+          try {
+            const refreshed: any = await withHardTimeout(
+              supabase.auth.refreshSession(),
+              15000,
+              'Oturum yenileme zaman aşımına uğradı'
+            );
+            refreshedToken = String(refreshed?.data?.session?.access_token || '').trim();
+          } catch {
+            refreshedToken = '';
+          }
+          if (!refreshedToken) {
+            const sessionResult: any = await withHardTimeout(
+              supabase.auth.getSession(),
+              10000,
+              'Oturum kontrolü zaman aşımına uğradı'
+            );
+            refreshedToken = String(sessionResult?.data?.session?.access_token || '').trim();
+          }
+          if (refreshedToken) {
+            accessToken = refreshedToken;
+            callResult = await callCreate(accessToken);
+            status = callResult.status;
+            responseData = callResult.data;
+          }
+        } catch {
+          // keep original response
+        }
+      }
+
+      if (typeof responseData === 'string') {
+        try {
+          responseData = JSON.parse(responseData);
+        } catch {
+          // keep raw
+        }
+      }
+
+      if (status === 401) {
+        throw new Error('Oturum süresi doldu veya geçersiz. Lütfen tekrar giriş yapın.');
+      }
+
+      if (!(status >= 200 && status < 300)) {
+        throw new Error(String(responseData?.error || `HTTP ${status}`));
+      }
+
+      const result = responseData || {};
+      const hostedUrl = String(result?.invoiceHostedUrl || '').trim();
+      const hasPaymentSheetPayload =
+        !!result?.customerId &&
+        !!result?.ephemeralKey &&
+        !!result?.subscriptionId;
+      if (!hostedUrl && !hasPaymentSheetPayload) {
+        throw new Error('Ödeme hazırlığı eksik yanıt döndürdü');
+      }
+
+      return {
+        publishableKey: String(result?.publishableKey || ''),
+        customerId: String(result?.customerId || ''),
+        ephemeralKey: String(result?.ephemeralKey || ''),
+        paymentIntentClientSecret: String(result?.paymentIntentClientSecret || ''),
+        invoiceHostedUrl: String(result?.invoiceHostedUrl || ''),
+        subscriptionId: String(result?.subscriptionId || ''),
+        stripePriceId: String(result?.stripePriceId || ''),
+        status: String(result?.status || ''),
+      };
+    } catch (error: any) {
+      console.error('❌ Start stripe native subscription error:', error);
+      throw new Error(error.message || 'Stripe abonelik başlatılamadı');
+    }
+  },
+
+  cancelStripeSubscription: async (cancelAtPeriodEnd: boolean = true) => {
+    try {
+      const sbUrl = String(import.meta.env.VITE_SUPABASE_URL || '');
+      const sbAnon = String(import.meta.env.VITE_SUPABASE_ANON_KEY || '');
+      if (!sbUrl || !sbAnon) throw new Error('Supabase yapılandırması eksik');
+
+      const { data: sessionResult } = await supabase.auth.getSession();
+      const accessToken = String(sessionResult?.session?.access_token || '').trim() || getAccessTokenFromStorageFallback() || '';
+      if (!accessToken) throw new Error('Oturum bulunamadı');
+
+      const res = await withHardTimeout(
+        fetch(`${sbUrl}/functions/v1/merchant-subscription-cancel`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            apikey: sbAnon,
+            Authorization: `Bearer ${accessToken}`,
+          },
+          body: JSON.stringify({ cancelAtPeriodEnd }),
+        }),
+        20000,
+        'Abonelik iptal çağrısı zaman aşımına uğradı'
+      );
+      const json = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(String(json?.error || `HTTP ${res.status}`));
+      return json;
+    } catch (error: any) {
+      console.error('❌ Cancel stripe subscription error:', error);
+      throw new Error(error.message || 'Abonelik iptal edilemedi');
+    }
+  },
+
   startProviderCheckout: async (data: {
     userId: string;
+    provider?: 'stripe' | 'iyzico';
     amountTl?: number;
     billingPeriodMonths?: number;
   }) => {
     try {
-      const amountTl = data.amountTl || 1000;
+      const selectedProvider: 'stripe' | 'iyzico' =
+        data.provider ||
+        (String(import.meta.env.VITE_PAYMENT_PROVIDER || 'iyzico').toLowerCase() === 'stripe'
+          ? 'stripe'
+          : 'iyzico');
+      const amountTl = data.amountTl || 500;
       const billingPeriodMonths = data.billingPeriodMonths || 1;
       const plan = billingPeriodMonths >= 12
         ? 'merchant_pro_annual_20_discount'
-        : 'merchant_basic_1000_tl_monthly';
+        : 'merchant_basic_500_tl_monthly';
 
       // Create a pending payment row first so webhook handlers can finalize it.
-      const { data: payment, error: paymentError } = await supabase
-        .from('merchant_subscription_payments')
-        .insert({
-          user_id: data.userId,
-          provider: 'stripe',
-          status: 'pending',
-          amount_tl: amountTl,
-          billing_period_months: billingPeriodMonths,
-          metadata: {
-            source: 'app_checkout_init',
-          },
-        })
-        .select()
-        .single();
+      let payment: any = null;
+      const insertPayload = {
+        user_id: data.userId,
+        provider: selectedProvider,
+        status: 'pending',
+        amount_tl: amountTl,
+        billing_period_months: billingPeriodMonths,
+        metadata: {
+          source: 'app_checkout_init',
+        },
+      };
 
-      if (paymentError) throw paymentError;
+      const sbUrl = import.meta.env.VITE_SUPABASE_URL as string;
+      if (sbUrl) {
+        try {
+          const headers = await getRestAuthHeaders();
+          const controller = new AbortController();
+          const tid = setTimeout(() => controller.abort(), 12000);
+          const restRes = await fetch(`${sbUrl}/rest/v1/merchant_subscription_payments`, {
+            method: 'POST',
+            headers: {
+              ...headers,
+              Prefer: 'return=representation',
+            },
+            body: JSON.stringify(insertPayload),
+            signal: controller.signal,
+          });
+          clearTimeout(tid);
+          if (restRes.ok) {
+            const rows = await restRes.json().catch(() => []);
+            payment = Array.isArray(rows) ? rows[0] || null : null;
+          }
+        } catch {
+          // fallback below
+        }
+      }
+
+      if (!payment) {
+        const { data: paymentData, error: paymentError } = await withHardTimeout(
+          supabase
+            .from('merchant_subscription_payments')
+            .insert(insertPayload)
+            .select()
+            .single(),
+          12000,
+          'Ödeme kaydı oluşturma zaman aşımına uğradı'
+        );
+        if (paymentError) throw paymentError;
+        payment = paymentData;
+      }
 
       // Provider checkout session should be created in a secure Edge Function.
       // The function must return checkoutUrl + providerPaymentId and
       // update this payment row's provider_payment_id.
-      const { data: sessionData } = await supabase.auth.getSession();
-      const accessToken = sessionData?.session?.access_token;
+      const resolveFreshAccessToken = async (): Promise<string> => {
+        const candidates: string[] = [];
+        const pushCandidate = (token: string | null | undefined) => {
+          const t = String(token || '').trim();
+          if (!t) return;
+          if (!candidates.includes(t)) candidates.push(t);
+        };
+
+        let session: any = null;
+        try {
+          const sessionResult: any = await withHardTimeout(
+            supabase.auth.getSession(),
+            15000,
+            'Oturum kontrolü zaman aşımına uğradı'
+          );
+          session = sessionResult?.data?.session || null;
+          pushCandidate(session?.access_token);
+        } catch {
+          // Non-blocking: continue with refresh/storage fallbacks below.
+        }
+
+        const nowSec = Math.floor(Date.now() / 1000);
+        const isExpiredOrNearExpiry = !session?.access_token || ((session?.expires_at || 0) - nowSec) < 60;
+        if (isExpiredOrNearExpiry) {
+          try {
+            const refreshResult: any = await withHardTimeout(
+              supabase.auth.refreshSession(),
+              15000,
+              'Oturum yenileme zaman aşımına uğradı'
+            );
+            pushCandidate(refreshResult?.data?.session?.access_token);
+          } catch {
+            // keep other candidates
+          }
+        }
+
+        pushCandidate(getAccessTokenFromStorageFallback());
+
+        for (const token of candidates) {
+          try {
+            const userResult: any = await withHardTimeout(
+              supabase.auth.getUser(token),
+              12000,
+              'Token doğrulama zaman aşımına uğradı'
+            );
+            const tokenUserId = String(userResult?.data?.user?.id || '');
+            // Trust first token that Auth validates; caller userId can be stale
+            // right after OAuth/account switching on mobile.
+            if (tokenUserId) {
+              return token;
+            }
+          } catch {
+            // try next candidate
+          }
+        }
+
+        // Last resort: preserve previous behavior if validation endpoint is flaky.
+        return candidates[0] || '';
+      };
+
+      const accessToken = await resolveFreshAccessToken();
       if (!accessToken) {
         throw new Error('Oturum bulunamadı. Lütfen tekrar giriş yapın.');
       }
 
-      const { data: fnData, error: fnError } = await supabase.functions.invoke('merchant-subscription-checkout', {
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-        },
-        body: {
-          paymentId: payment.id,
-          provider: 'stripe',
-          amountTl,
-          billingPeriodMonths,
-          currency: 'TRY',
-          plan,
-        },
-      });
+      let tokenUserId = '';
+      try {
+        const userResult: any = await withHardTimeout(
+          supabase.auth.getUser(accessToken),
+          12000,
+          'Token kullanıcı doğrulama zaman aşımına uğradı'
+        );
+        tokenUserId = String(userResult?.data?.user?.id || '');
+      } catch {
+        tokenUserId = '';
+      }
 
-      if (fnError) {
-        console.error('❌ Checkout function error:', fnError);
-        let detailedMessage = '';
+      if (!tokenUserId) {
+        throw new Error('Oturum doğrulanamadı. Lütfen çıkış yapıp tekrar giriş yapın.');
+      }
+
+      // Safety: if caller user id and token user id diverge, re-issue payment row
+      // with authoritative token user id to prevent edge-function 401.
+      if (payment?.user_id && String(payment.user_id) !== tokenUserId) {
+        console.warn('⚠️ Checkout user mismatch detected, re-creating payment row', {
+          requestedUserId: data.userId,
+          paymentUserId: payment.user_id,
+          tokenUserId,
+        });
+        const replacementPayload = {
+          ...insertPayload,
+          user_id: tokenUserId,
+          metadata: {
+            ...(insertPayload.metadata || {}),
+            source: 'app_checkout_reissue_after_user_mismatch',
+            requestedUserId: data.userId,
+          },
+        };
+        const { data: replacementPayment, error: replacementError } = await withHardTimeout(
+          supabase
+            .from('merchant_subscription_payments')
+            .insert(replacementPayload)
+            .select()
+            .single(),
+          12000,
+          'Ödeme kaydı yeniden oluşturma zaman aşımına uğradı'
+        );
+        if (replacementError) throw replacementError;
+        payment = replacementPayment;
+      }
+
+      let fnData: any = null;
+      let fnError: any = null;
+      const CHECKOUT_TIMEOUT_MS = 35000;
+      const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+      const isTransientNetworkError = (error: any) => {
+        const text = String(error?.message || error || '').toLowerCase();
+        return (
+          text.includes('abort') ||
+          text.includes('timeout') ||
+          text.includes('network') ||
+          text.includes('failed to fetch') ||
+          text.includes('name_not_resolved') ||
+          text.includes('err_name_not_resolved')
+        );
+      };
+      // Direct fetch path (more reliable than SDK invoke on mobile WebView).
+      if (sbUrl) {
         try {
-          const contextResponse = (fnError as any)?.context;
-          if (contextResponse) {
-            const errorPayload = await contextResponse.clone().json().catch(() => null);
-            detailedMessage =
-              errorPayload?.error ||
-              errorPayload?.details ||
-              '';
+          const requestBody = {
+            paymentId: payment.id,
+            userId: tokenUserId,
+            provider: selectedProvider,
+            amountTl,
+            billingPeriodMonths,
+            currency: 'TRY',
+            plan,
+          };
+
+          const callCheckoutFunction = async (token: string) => {
+            const canUseNativeHttp = (() => {
+              try {
+                return Capacitor.isNativePlatform() && typeof CapacitorHttp?.request === 'function';
+              } catch {
+                return false;
+              }
+            })();
+
+            if (canUseNativeHttp) {
+              const nativeResult: any = await Promise.race([
+                CapacitorHttp.request({
+                  url: `${sbUrl}/functions/v1/merchant-subscription-checkout`,
+                  method: 'POST',
+                  headers: {
+                    'Content-Type': 'application/json',
+                    apikey: import.meta.env.VITE_SUPABASE_ANON_KEY as string,
+                    Authorization: `Bearer ${token}`,
+                  },
+                  data: requestBody,
+                  connectTimeout: CHECKOUT_TIMEOUT_MS,
+                  readTimeout: CHECKOUT_TIMEOUT_MS,
+                }),
+                new Promise((_, reject) =>
+                  setTimeout(() => reject(new Error('checkout_native_timeout')), CHECKOUT_TIMEOUT_MS)
+                ),
+              ]);
+              const status = Number(nativeResult?.status || 0);
+              let json = nativeResult?.data ?? null;
+              if (typeof json === 'string') {
+                try {
+                  json = JSON.parse(json);
+                } catch {
+                  // keep raw string
+                }
+              }
+              return {
+                response: { ok: status >= 200 && status < 300, status } as any,
+                json,
+              };
+            }
+
+            const controller = new AbortController();
+            const tid = setTimeout(() => controller.abort(), CHECKOUT_TIMEOUT_MS);
+            try {
+              const response = await fetch(`${sbUrl}/functions/v1/merchant-subscription-checkout`, {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  apikey: import.meta.env.VITE_SUPABASE_ANON_KEY as string,
+                  Authorization: `Bearer ${token}`,
+                },
+                body: JSON.stringify(requestBody),
+                signal: controller.signal,
+              });
+              const json = await response.json().catch(() => null);
+              return { response, json };
+            } finally {
+              clearTimeout(tid);
+            }
+          };
+
+          let directRes: Response | null = null;
+          let json: any = null;
+          let directError: any = null;
+          for (let attempt = 0; attempt < 3; attempt += 1) {
+            try {
+              const result = await callCheckoutFunction(accessToken);
+              directRes = result.response;
+              json = result.json;
+              directError = null;
+              break;
+            } catch (error: any) {
+              directError = error;
+              if (attempt < 2 && isTransientNetworkError(error)) {
+                await sleep(1200 * (attempt + 1));
+                continue;
+              }
+              throw error;
+            }
           }
-        } catch (parseError) {
-          console.warn('⚠️ Could not parse checkout function error payload:', parseError);
+          if (!directRes && directError) {
+            throw directError;
+          }
+          if (!directRes) {
+            throw new Error('Checkout isteği tamamlanamadı');
+          }
+
+          // Retry once with refreshed token on unauthorized response.
+          if (directRes.status === 401) {
+            try {
+              const refreshResult: any = await withHardTimeout(
+                supabase.auth.refreshSession(),
+                10000,
+                'Oturum yenileme zaman aşımına uğradı'
+              );
+              const refreshedToken = String(refreshResult?.data?.session?.access_token || '').trim();
+              if (refreshedToken) {
+                const retried = await callCheckoutFunction(refreshedToken);
+                directRes = retried.response;
+                json = retried.json;
+              }
+            } catch {
+              // Keep original 401 error details.
+            }
+          }
+
+          if (directRes.ok) {
+            fnData = json;
+          } else {
+            fnError = {
+              message: json?.error || `HTTP ${directRes.status}`,
+              status: directRes.status,
+              context: json,
+            };
+          }
+        } catch (error: any) {
+          fnError = error;
+        }
+      }
+
+      // Fallback path: SDK invoke can be more reliable on some Android WebView/network stacks.
+      if (!fnData) {
+        try {
+          let invokeResult: any = null;
+          let invokeError: any = null;
+          for (let attempt = 0; attempt < 2; attempt += 1) {
+            try {
+              invokeResult = await withHardTimeout(
+                supabase.functions.invoke('merchant-subscription-checkout', {
+                  body: {
+                    paymentId: payment.id,
+                    userId: tokenUserId,
+                    provider: selectedProvider,
+                    amountTl,
+                    billingPeriodMonths,
+                    currency: 'TRY',
+                    plan,
+                  },
+                  headers: {
+                    Authorization: `Bearer ${accessToken}`,
+                  },
+                }),
+                CHECKOUT_TIMEOUT_MS,
+                'Checkout fonksiyonu çağrısı zaman aşımına uğradı'
+              );
+              invokeError = null;
+              break;
+            } catch (error: any) {
+              invokeError = error;
+              if (attempt < 1 && isTransientNetworkError(error)) {
+                await sleep(1500);
+                continue;
+              }
+              throw error;
+            }
+          }
+          if (!invokeResult && invokeError) {
+            throw invokeError;
+          }
+          if (invokeResult?.data?.checkoutUrl) {
+            fnData = invokeResult.data;
+            fnError = null;
+          } else if (invokeResult?.error) {
+            fnError = {
+              message: String(invokeResult.error?.message || 'Function invoke failed'),
+              status: Number(invokeResult.error?.status || 0) || undefined,
+              context: invokeResult.error,
+            };
+          }
+        } catch (invokeError: any) {
+          fnError = invokeError || fnError;
+        }
+      }
+
+      if (!fnData) {
+        const errText = String(fnError?.message || fnError?.error || fnError || '').toLowerCase();
+
+        // Recovery path: if function response timed out but backend eventually created
+        // Provider session and persisted checkout URL into payment metadata, use it.
+        if (errText.includes('abort') || errText.includes('timeout') || errText.includes('zaman aşım') || errText.includes('network')) {
+          try {
+            const { data: recoveredPayment, error: recoverError } = await withHardTimeout(
+              supabase
+                .from('merchant_subscription_payments')
+                .select('id, provider_payment_id, metadata')
+                .eq('id', payment.id)
+                .single(),
+              10000,
+              'Ödeme bağlantısı kurtarma zaman aşımına uğradı'
+            );
+            if (!recoverError && recoveredPayment) {
+              const recoveredUrl = String(
+                recoveredPayment?.metadata?.checkout_url ||
+                recoveredPayment?.metadata?.checkoutUrl ||
+                ''
+              ).trim();
+              if (recoveredUrl.startsWith('http')) {
+                return {
+                  payment: recoveredPayment,
+                  checkoutUrl: recoveredUrl,
+                  providerPaymentId: recoveredPayment?.provider_payment_id || null,
+                };
+              }
+            }
+          } catch {
+            // keep original error flow below
+          }
         }
 
+        if (Number(fnError?.status) === 401) {
+          const reason = String(fnError?.context?.error || fnError?.message || '').trim();
+          throw new Error(
+            reason
+              ? `Oturum süresi doldu veya geçersiz: ${reason}`
+              : 'Oturum süresi doldu veya geçersiz. Lütfen çıkış yapıp tekrar giriş yapın.'
+          );
+        }
+        if (errText.includes('abort') || errText.includes('timeout') || errText.includes('zaman aşım')) {
+          const reason = String(
+            fnError?.context?.details || fnError?.context?.error || fnError?.message || ''
+          ).toLowerCase();
+          if (reason.includes('stripe request timeout') || reason.includes('iyzico request timeout')) {
+            throw new Error('Ödeme sağlayıcısı yanıt vermedi (zaman aşımı). Lütfen interneti değiştirip tekrar deneyin.');
+          }
+          throw new Error('Ödeme sağlayıcısına bağlanırken zaman aşımı oldu. Lütfen tekrar deneyin.');
+        }
+        if (errText.includes('name_not_resolved') || errText.includes('failed to fetch') || errText.includes('network')) {
+          throw new Error('Ödeme servisine ulaşılamadı (ağ/DNS). İnternet bağlantınızı kontrol edip tekrar deneyin.');
+        }
         throw new Error(
-          detailedMessage
-            ? `Ödeme oturumu oluşturulamadı: ${detailedMessage}`
-            : (fnError.message || 'Ödeme oturumu oluşturulamadı.')
+          String(fnError?.message || fnError?.error || 'Ödeme bağlantısı oluşturulamadı.')
         );
       }
 
@@ -3669,7 +4904,7 @@ export const merchantSubscriptionAPI = {
         throw new Error(
           typeof fnData?.error === 'string'
             ? `Ödeme bağlantısı oluşturulamadı: ${fnData.error}`
-            : 'Ödeme bağlantısı oluşturulamadı. Lütfen Stripe yapılandırmasını kontrol edin.'
+            : 'Ödeme bağlantısı oluşturulamadı. Lütfen ödeme sağlayıcısı yapılandırmasını kontrol edin.'
         );
       }
 
@@ -3681,6 +4916,32 @@ export const merchantSubscriptionAPI = {
     } catch (error: any) {
       console.error('❌ Start provider checkout error:', error);
       throw new Error(error.message || 'Ödeme başlatılamadı');
+    }
+  },
+
+  startTrial: async (userId: string, trialDays: number = 10) => {
+    try {
+      const now = new Date();
+      const periodEnd = new Date(now.getTime() + trialDays * 24 * 60 * 60 * 1000);
+      const { data, error } = await supabase
+        .from('users')
+        .update({
+          is_merchant: true,
+          merchant_subscription_status: 'active',
+          merchant_subscription_plan: `merchant_trial_${trialDays}_days_then_500_tl_monthly`,
+          merchant_subscription_fee_tl: 500,
+          merchant_subscription_current_period_start: now.toISOString(),
+          merchant_subscription_current_period_end: periodEnd.toISOString(),
+        })
+        .eq('id', userId)
+        .select('*')
+        .single();
+
+      if (error) throw error;
+      return data;
+    } catch (error: any) {
+      console.error('❌ Start merchant trial error:', error);
+      throw new Error(error.message || 'Deneme aboneliği başlatılamadı');
     }
   },
 };

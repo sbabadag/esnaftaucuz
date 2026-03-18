@@ -93,6 +93,20 @@ export default function AboutScreen() {
               >
                 Kullanım Koşulları
               </Button>
+              <Button
+                variant="outline"
+                className="w-full justify-start"
+                onClick={() => navigate('/app/distance-sales-agreement')}
+              >
+                Mesafeli Satış Sözleşmesi
+              </Button>
+              <Button
+                variant="outline"
+                className="w-full justify-start"
+                onClick={() => navigate('/app/delivery-return-policy')}
+              >
+                Teslimat ve İade Şartları
+              </Button>
             </div>
           </div>
 

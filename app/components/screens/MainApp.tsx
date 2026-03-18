@@ -1,5 +1,5 @@
 import { Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom';
-import { Compass, Map, Plus, User, ShoppingBag, X, Store } from 'lucide-react';
+import { Compass, Map, Plus, User, ShoppingBag, X, Store, BarChart3 } from 'lucide-react';
 import ExploreScreen from './tabs/ExploreScreen';
 import MapScreen from './tabs/MapScreen';
 import AddPriceScreen from './tabs/AddPriceScreen';
@@ -11,12 +11,22 @@ import NotificationsScreen from './NotificationsScreen';
 import SettingsScreen from './SettingsScreen';
 import ContributionsScreen from './ContributionsScreen';
 import MerchantShopScreen from './MerchantShopScreen';
+import MerchantReportsScreen from './MerchantReportsScreen';
+import MerchantSubscriptionScreen from './MerchantSubscriptionScreen';
 import BadgesScreen from './BadgesScreen';
+import PrivacyPolicyScreen from './PrivacyPolicyScreen';
+import TermsOfServiceScreen from './TermsOfServiceScreen';
+import AboutScreen from './AboutScreen';
+import DeliveryReturnPolicyScreen from './DeliveryReturnPolicyScreen';
+import DistanceSalesAgreementScreen from './DistanceSalesAgreementScreen';
 import { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
 import { supabase } from '../../lib/supabase';
 import { addLocalNotification } from '../../lib/notification-store';
 import { asUuidOrNull, isLikelyJwt, isUuid, normalizePushEvent } from '../../lib/push-notification-utils';
+import { Capacitor } from '@capacitor/core';
+import { FirebaseMessaging, Importance } from '@capacitor-firebase/messaging';
+import { pushTokensAPI } from '../../services/supabase-api';
 import {
   usePendingPushDrain,
   usePendingPushRetry,
@@ -36,17 +46,39 @@ const regularTabs = [
 const merchantTabs = [
   { path: 'explore', label: 'Keşfet', icon: Compass },
   { path: 'map', label: 'Harita', icon: Map },
-  { path: 'add', label: 'Ekle', icon: Plus },
   { path: 'merchant-shop', label: 'Dükkanım', icon: Store },
+  { path: 'merchant-reports', label: 'Raporlar', icon: BarChart3 },
   { path: 'profile', label: 'Profil', icon: User },
 ];
+
+const resolveMerchantRole = (profile: any): boolean => {
+  const explicit = profile?.is_merchant === true;
+  const status = String(profile?.merchant_subscription_status || '').toLowerCase();
+  const hasActiveSubscription = status === 'active' || status === 'past_due';
+  const hasMerchantPlan = String(profile?.merchant_subscription_plan || '').trim().length > 0;
+  return explicit || hasActiveSubscription || hasMerchantPlan;
+};
 
 export default function MainApp() {
   const location = useLocation();
   const navigate = useNavigate();
   const { user } = useAuth();
+  const isNativePlatform = Capacitor.isNativePlatform();
+  const nativeBottomLiftPx = isNativePlatform ? 10 : 0;
   const [bannerVisible, setBannerVisible] = useState(true);
   const [resolvedMerchantRole, setResolvedMerchantRole] = useState<boolean | null>(null);
+  const getCachedMerchantHint = useCallback((): boolean => {
+    try {
+      const raw = localStorage.getItem('user');
+      const cached = raw ? JSON.parse(raw) : null;
+      if (cached?.id === user?.id) {
+        return resolveMerchantRole(cached);
+      }
+    } catch {
+      // ignore cache parse errors
+    }
+    return false;
+  }, [user?.id]);
   
   useEffect(() => {
     let cancelled = false;
@@ -56,19 +88,84 @@ export default function MainApp() {
         return;
       }
 
-      // Start with auth context value immediately.
-      setResolvedMerchantRole((user as any)?.is_merchant === true);
+      // Start with the fastest local hint.
+      const localHint = (user as any)?.is_merchant === true || getCachedMerchantHint();
+      setResolvedMerchantRole(localHint);
+
       try {
-        const { data, error } = await supabase
-          .from('users')
-          .select('is_merchant, merchant_subscription_status')
-          .eq('id', user.id)
-          .maybeSingle();
-        if (cancelled || error || !data) return;
-        const status = String((data as any)?.merchant_subscription_status || '').toLowerCase();
-        setResolvedMerchantRole((data as any)?.is_merchant === true || status === 'active' || status === 'past_due');
+        // Retry a couple of times because session/profile can be briefly stale
+        // right after OAuth return on mobile.
+        for (let attempt = 0; attempt < 3; attempt++) {
+          const [{ data: profile, error: profileError }, { data: merchantProducts, error: productsError }] = await Promise.all([
+            supabase
+              .from('users')
+              .select('is_merchant, merchant_subscription_status, merchant_subscription_plan')
+              .eq('id', user.id)
+              .maybeSingle(),
+            supabase
+              .from('merchant_products')
+              .select('id')
+              .eq('merchant_id', user.id)
+              .limit(1),
+          ]);
+
+          if (cancelled) return;
+
+          const hasProducts = Array.isArray(merchantProducts) && merchantProducts.length > 0;
+          const fromProfile = profile && !profileError ? resolveMerchantRole(profile) : false;
+          const resolved = fromProfile || hasProducts;
+
+          if (resolved) {
+            setResolvedMerchantRole(true);
+            return;
+          }
+
+          // Persist false only when we have an explicit non-merchant profile response.
+          // If profile lookup fails/transiently times out, never downgrade to false.
+          const hasExplicitNonMerchantProfile =
+            !!profile &&
+            !profileError &&
+            !resolveMerchantRole(profile);
+          if (attempt === 2 && hasExplicitNonMerchantProfile && !productsError) {
+            setResolvedMerchantRole(false);
+            return;
+          }
+
+          await new Promise((resolve) => setTimeout(resolve, 700));
+        }
+
+        // Final fallback path: direct REST read from users table with bearer token.
+        try {
+          const sbUrl = String(import.meta.env.VITE_SUPABASE_URL || '');
+          const sbKey = String(import.meta.env.VITE_SUPABASE_ANON_KEY || '');
+          if (sbUrl && sbKey) {
+            const { data: sessionData } = await supabase.auth.getSession();
+            const token = String(sessionData?.session?.access_token || '').trim();
+            if (token) {
+              const restRes = await fetch(
+                `${sbUrl}/rest/v1/users?id=eq.${user.id}&select=is_merchant,merchant_subscription_status,merchant_subscription_plan`,
+                {
+                  headers: {
+                    apikey: sbKey,
+                    Authorization: `Bearer ${token}`,
+                  },
+                }
+              );
+              if (restRes.ok) {
+                const rows = await restRes.json().catch(() => []);
+                const row = Array.isArray(rows) ? rows[0] : null;
+                if (row && resolveMerchantRole(row)) {
+                  setResolvedMerchantRole(true);
+                  return;
+                }
+              }
+            }
+          }
+        } catch {
+          // Ignore REST fallback errors.
+        }
       } catch {
-        // Keep fallback value from context.
+        // Keep fallback/local hint from context.
       }
     };
 
@@ -78,7 +175,82 @@ export default function MainApp() {
     };
   }, [user?.id, (user as any)?.is_merchant]);
 
-  const isMerchant = resolvedMerchantRole ?? ((user as any)?.is_merchant === true);
+  // Safety net for token registration on native.
+  // If hook-driven registration is skipped by lifecycle timing, this effect
+  // still registers a valid FCM token for the logged-in user.
+  useEffect(() => {
+    if (!user?.id) return;
+    if (!Capacitor.isNativePlatform()) return;
+    let cancelled = false;
+    let inFlight = false;
+    let registered = false;
+    let retryTimer: ReturnType<typeof setInterval> | null = null;
+
+    const ensurePushToken = async () => {
+      if (cancelled || inFlight || registered) return;
+      inFlight = true;
+      try {
+        const platform = Capacitor.getPlatform();
+        await FirebaseMessaging.createChannel({
+          id: 'price_alerts',
+          name: 'Fiyat Bildirimleri',
+          description: 'Fiyat dususleri ve onemli bildirimler',
+          importance: Importance.High,
+          vibration: true,
+        }).catch(() => undefined);
+
+        await Promise.race([
+          FirebaseMessaging.requestPermissions(),
+          new Promise<any>((resolve) => setTimeout(() => resolve(null), 8000)),
+        ]).catch(() => null);
+
+        let token: string | null = null;
+        for (let i = 0; i < 4 && !token && !cancelled; i++) {
+          const tokenResult = await Promise.race([
+            FirebaseMessaging.getToken(),
+            new Promise<any>((resolve) => setTimeout(() => resolve(null), 10000)),
+          ]).catch(() => null);
+          token = tokenResult?.token || null;
+          if (!token) await new Promise((resolve) => setTimeout(resolve, 1000 * (i + 1)));
+        }
+
+        if (!token || cancelled) return;
+
+        const saved = await pushTokensAPI.upsert(
+          user.id,
+          token,
+          platform === 'ios' ? 'ios' : 'android',
+        );
+        if (saved) {
+          registered = true;
+          if (retryTimer) {
+            clearInterval(retryTimer);
+            retryTimer = null;
+          }
+        }
+      } catch (error) {
+        console.warn('MainApp push token safety net failed:', error);
+      } finally {
+        inFlight = false;
+      }
+    };
+
+    ensurePushToken();
+    // Keep trying while app is active for flaky networks/session timing.
+    retryTimer = setInterval(() => {
+      ensurePushToken();
+    }, 45000);
+
+    return () => {
+      cancelled = true;
+      if (retryTimer) clearInterval(retryTimer);
+    };
+  }, [user?.id]);
+
+  const isMerchant =
+    resolvedMerchantRole === true ||
+    (resolvedMerchantRole == null &&
+      ((user as any)?.is_merchant === true || getCachedMerchantHint()));
   const themeColor = isMerchant ? 'blue' : 'green';
   const themeColorClass = isMerchant ? 'blue-600' : 'green-600';
   const themeGradientFrom = isMerchant ? 'from-blue-600' : 'from-green-600';
@@ -248,10 +420,11 @@ export default function MainApp() {
   }, [user?.id, extractPushPayload]);
 
   useEffect(() => {
-    if (isMerchant && location.pathname.includes('/app/add')) {
-      navigate('/app/explore', { replace: true });
-    }
-  }, [isMerchant, location.pathname, navigate]);
+    if (!isMerchant) return;
+    if (!location.pathname.includes('/app/add')) return;
+    if (!user?.id) return;
+    navigate(`/app/merchant-shop/${user.id}`, { replace: true });
+  }, [isMerchant, location.pathname, navigate, user?.id]);
 
   usePendingPushDrain({
     userId: user?.id,
@@ -296,8 +469,12 @@ export default function MainApp() {
                      location.pathname.includes('/settings') ||
                      location.pathname.includes('/badges') ||
                      location.pathname.includes('/contributions') ||
+                     location.pathname.includes('/merchant-subscription') ||
                      location.pathname.includes('/add') ||
                      (isMerchant && location.pathname.includes('/merchant-shop/') && location.pathname !== `/app/merchant-shop/${user?.id}`);
+  const lockMainViewport = location.pathname.includes('/merchant-subscription');
+  // Keep global banner out of in-app windows; Explore has its own top band.
+  const showGlobalAppBanner = false;
 
   const handleTabClick = (path: string) => {
     console.log('🔘 Tab click handler:', { path, currentPath: location.pathname });
@@ -324,8 +501,11 @@ export default function MainApp() {
   return (
     <div className="min-h-screen bg-gray-50 pb-safe">
       {/* App Banner */}
-      {bannerVisible && (
-        <div className={`bg-gradient-to-r ${themeGradientFrom} ${themeGradientTo} text-white px-4 py-3 flex items-center justify-between shadow-md z-30 relative`}>
+      {bannerVisible && showGlobalAppBanner && (
+        <div
+          className={`bg-gradient-to-r ${themeGradientFrom} ${themeGradientTo} text-white px-4 pb-3 flex items-center justify-between shadow-md z-30 relative`}
+          style={{ paddingTop: 'calc(0.75rem + env(safe-area-inset-top, 0px))' }}
+        >
           <div className="flex items-center gap-3 flex-1">
             <div className="bg-white/20 rounded-full p-2">
               <ShoppingBag className="w-5 h-5" />
@@ -348,7 +528,16 @@ export default function MainApp() {
         </div>
       )}
 
-      <main className={hideTabBar ? '' : 'pb-20'}>
+      <main
+        className={lockMainViewport ? 'h-[100dvh] overflow-hidden' : ''}
+        style={
+          lockMainViewport || hideTabBar
+            ? undefined
+            : {
+                paddingBottom: `calc(5rem + env(safe-area-inset-bottom, 0px) + ${nativeBottomLiftPx}px)`,
+              }
+        }
+      >
         <Routes>
           <Route path="/" element={<Navigate to="/app/explore" replace />} />
           <Route path="explore" element={<ExploreScreen />} />
@@ -360,14 +549,24 @@ export default function MainApp() {
           <Route path="favorites" element={<FavoritesScreen />} />
           <Route path="notifications" element={<NotificationsScreen />} />
           <Route path="settings" element={<SettingsScreen />} />
+          <Route path="privacy-policy" element={<PrivacyPolicyScreen />} />
+          <Route path="terms-of-service" element={<TermsOfServiceScreen />} />
+          <Route path="about" element={<AboutScreen />} />
+          <Route path="delivery-return-policy" element={<DeliveryReturnPolicyScreen />} />
+          <Route path="distance-sales-agreement" element={<DistanceSalesAgreementScreen />} />
           <Route path="badges" element={<BadgesScreen />} />
           <Route path="contributions" element={<ContributionsScreen />} />
+          <Route path="merchant-subscription" element={<MerchantSubscriptionScreen />} />
           <Route path="merchant-shop/:merchantId" element={<MerchantShopScreen />} />
+          <Route path="merchant-reports" element={<MerchantReportsScreen />} />
         </Routes>
       </main>
 
       {!hideTabBar && (
-        <nav className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 safe-area-inset-bottom z-40 shadow-lg">
+        <nav
+          className="fixed left-0 right-0 bg-white border-t border-gray-200 safe-area-inset-bottom z-40 shadow-lg"
+          style={{ bottom: `calc(env(safe-area-inset-bottom, 0px) + ${nativeBottomLiftPx}px)` }}
+        >
           <div className="flex items-center h-16">
             {tabs.map((tab, index) => {
               const Icon = tab.icon;

@@ -114,17 +114,52 @@ Deno.serve(async (req) => {
       form.set('metadata[plan]', body.plan);
       form.set('metadata[billingPeriodMonths]', String(body.billingPeriodMonths));
 
-      const stripeRes = await fetch('https://api.stripe.com/v1/checkout/sessions', {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${STRIPE_SECRET_KEY}`,
-          'Content-Type': 'application/x-www-form-urlencoded',
-          'Idempotency-Key': `merchant-subscription-checkout-${body.paymentId}`,
-        },
-        body: form.toString(),
-      });
+      const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+      let stripeRes: Response | null = null;
+      let lastNetworkError = '';
 
-      const stripeJson = await stripeRes.json();
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        const stripeController = new AbortController();
+        const stripeTimeout = setTimeout(() => stripeController.abort(), 20000);
+        try {
+          stripeRes = await fetch('https://api.stripe.com/v1/checkout/sessions', {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${STRIPE_SECRET_KEY}`,
+              'Content-Type': 'application/x-www-form-urlencoded',
+              'Idempotency-Key': `merchant-subscription-checkout-${body.paymentId}`,
+            },
+            body: form.toString(),
+            signal: stripeController.signal,
+          });
+          break;
+        } catch (error) {
+          const msg = String((error as Error)?.message || error || '').toLowerCase();
+          lastNetworkError = msg || 'unknown_network_error';
+          if (attempt < 2) {
+            await sleep(1200 * (attempt + 1));
+            continue;
+          }
+          if (msg.includes('abort') || msg.includes('timeout')) {
+            return jsonResponse(504, { error: 'Stripe request timeout' });
+          }
+          return jsonResponse(502, {
+            error: 'Stripe network error',
+            details: lastNetworkError,
+          });
+        } finally {
+          clearTimeout(stripeTimeout);
+        }
+      }
+
+      if (!stripeRes) {
+        return jsonResponse(504, {
+          error: 'Stripe request timeout',
+          details: lastNetworkError || 'stripe_response_missing',
+        });
+      }
+
+      const stripeJson = await stripeRes.json().catch(() => ({}));
       if (!stripeRes.ok) {
         return jsonResponse(502, {
           error: 'Stripe session creation failed',
@@ -142,6 +177,7 @@ Deno.serve(async (req) => {
           metadata: {
             ...(payment.metadata || {}),
             stripe_session_id: providerPaymentId,
+            checkout_url: checkoutUrl,
             plan: body.plan,
           },
         })
@@ -168,6 +204,7 @@ Deno.serve(async (req) => {
           metadata: {
             ...(payment.metadata || {}),
             iyzico_reference: providerPaymentId,
+            checkout_url: checkoutUrl,
             plan: body.plan,
           },
         })
