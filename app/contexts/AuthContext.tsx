@@ -441,6 +441,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         clearTimeout(profileTimeout);
         
         if (profile) {
+          // Role fallback: some legacy accounts may have stale is_merchant=false
+          // even though merchant records exist.
+          let hasMerchantProducts = false;
+          try {
+            const { data: merchantRows, error: merchantErr } = await supabase
+              .from('merchant_products')
+              .select('id')
+              .eq('merchant_id', session.user.id)
+              .limit(1);
+            if (!merchantErr && Array.isArray(merchantRows) && merchantRows.length > 0) {
+              hasMerchantProducts = true;
+            }
+          } catch {
+            hasMerchantProducts = false;
+          }
+
           // If user explicitly started "merchant sign-up" from login screen (including Google OAuth),
           // elevate account to merchant and force subscription onboarding.
           if (merchantSignupIntent) {
@@ -483,7 +499,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           
           const userData = {
             ...profile,
-            is_merchant: resolveMerchantStatus(profile),
+            is_merchant: resolveMerchantStatus(profile) || hasMerchantProducts,
             preferences: {
               ...(profile.preferences || {}),
               searchRadius: finalSearchRadius, // Ensure preferences.searchRadius is always set
@@ -758,6 +774,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           const userForReload = userRef.current;
           const isCurrentUserMerchant = userForReload ? (userForReload as any)?.is_merchant === true : false;
           const shouldReload = !userForReload ||
+                              event === 'INITIAL_SESSION' ||
                               event === 'SIGNED_IN' ||
                               event === 'USER_UPDATED' ||
                               userForReload.id !== session.user.id ||
