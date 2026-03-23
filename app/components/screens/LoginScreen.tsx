@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion } from 'motion/react';
 import { ShoppingBag, Mail, Lock, Eye, EyeOff } from 'lucide-react';
@@ -22,11 +22,53 @@ export default function LoginScreen({ onLogin }: { onLogin?: () => void }) {
     name: '',
   });
   const [isMerchant, setIsMerchant] = useState(false);
+  const MERCHANT_SIGNUP_INTENT_KEY = 'merchant-signup-intent';
+  const MERCHANT_SUBSCRIPTION_ONBOARDING_KEY = 'merchant-subscription-onboarding-user';
+  const oauthDebug = useMemo(() => {
+    try {
+      const pendingRaw = localStorage.getItem('oauth-pending-ts') || '0';
+      const pendingTs = Number(pendingRaw || '0');
+      const ageMs = pendingTs > 0 ? Math.max(0, Date.now() - pendingTs) : -1;
+      const hashParams = new URLSearchParams(window.location.hash.substring(1));
+      const searchParams = new URLSearchParams(window.location.search);
+      return {
+        pendingTs,
+        pendingAgeSec: ageMs >= 0 ? Math.floor(ageMs / 1000) : -1,
+        hasAccessToken: hashParams.has('access_token'),
+        hasCode: hashParams.has('code'),
+        hasError: hashParams.has('error') || searchParams.has('error'),
+        merchantIntentUrl: searchParams.get('merchant_intent') || hashParams.get('merchant_intent') || '',
+      };
+    } catch {
+      return {
+        pendingTs: 0,
+        pendingAgeSec: -1,
+        hasAccessToken: false,
+        hasCode: false,
+        hasError: false,
+        merchantIntentUrl: '',
+      };
+    }
+  }, [mode, isLoading]);
 
-  const handleGoogleLogin = async () => {
+  const handleGoogleLogin = async (forceMerchantIntent: boolean = false) => {
     try {
       setIsLoading(true);
-      await googleLogin();
+      try {
+        localStorage.setItem('oauth-pending-ts', String(Date.now()));
+      } catch {
+        // best effort
+      }
+      if (forceMerchantIntent || (mode === 'register' && isMerchant)) {
+        localStorage.setItem(MERCHANT_SIGNUP_INTENT_KEY, '1');
+      } else {
+        localStorage.removeItem(MERCHANT_SIGNUP_INTENT_KEY);
+      }
+      const loginHint = formData.email.trim();
+      await googleLogin({
+        merchantSignupIntent: forceMerchantIntent || (mode === 'register' && isMerchant),
+        loginHint: loginHint.includes('@') ? loginHint : undefined,
+      });
       // OAuth flow continues in external browser/deep link callback.
       // Final navigation is handled after session is created.
       toast.info('Google giriş sayfası açılıyor...');
@@ -70,21 +112,40 @@ export default function LoginScreen({ onLogin }: { onLogin?: () => void }) {
 
       if (mode === 'register') {
         await register(formData.email, formData.password, formData.name, isMerchant);
-        toast.success(isMerchant ? 'Esnaf kaydı başarılı! Hoş geldiniz' : 'Kayıt başarılı! Hoş geldiniz');
+        toast.success(
+          isMerchant
+            ? 'Esnaf kaydı başarılı! Deneme veya abonelik seçimi gerekiyor.'
+            : 'Kayıt başarılı! Hoş geldiniz'
+        );
       } else {
         await login(formData.email, formData.password);
         toast.success('Giriş başarılı');
       }
 
       onLogin?.();
+      if (mode === 'register' && isMerchant) {
+        try {
+          const uid = JSON.parse(localStorage.getItem('user') || '{}')?.id;
+          if (uid) localStorage.setItem(MERCHANT_SUBSCRIPTION_ONBOARDING_KEY, uid);
+        } catch {
+          // best effort
+        }
+        navigate('/app/merchant-subscription');
+      }
     } catch (error: any) {
       console.error('Auth error:', error);
       const errorMessage = error.message || (mode === 'register' ? 'Kayıt başarısız' : 'Giriş başarısız');
       
       // Check if it's a network error
-      if (errorMessage.includes('bağlanılamıyor') || errorMessage.includes('fetch')) {
-        toast.error('Backend\'e bağlanılamıyor. Lütfen backend\'in çalıştığından emin olun.', {
+      const normalizedErrorMessage = String(errorMessage || '').toLowerCase();
+      if (
+        normalizedErrorMessage.includes('bağlanılamıyor') ||
+        normalizedErrorMessage.includes('failed to fetch') ||
+        normalizedErrorMessage.includes('fetch')
+      ) {
+        toast.error('Sunucuya ulaşılamıyor. İnternet bağlantınızı kontrol edip tekrar deneyin.', {
           duration: 5000,
+          description: 'Wi-Fi bağlı olsa bile internet erişimi kapalı olabilir.',
         });
       } else {
         toast.error(errorMessage);
@@ -146,6 +207,10 @@ export default function LoginScreen({ onLogin }: { onLogin?: () => void }) {
           transition={{ delay: 0.4 }}
           className="w-full space-y-4"
         >
+          <div className="w-full text-xs rounded-md border border-amber-200 bg-amber-50 text-amber-900 px-3 py-2">
+            OAuth Debug: pendingTs={String(oauthDebug.pendingTs)} | ageSec={String(oauthDebug.pendingAgeSec)} | accessToken={String(oauthDebug.hasAccessToken)} | code={String(oauthDebug.hasCode)} | error={String(oauthDebug.hasError)} | merchantIntent={oauthDebug.merchantIntentUrl || '-'}
+          </div>
+
           {/* Email/Password Form */}
           <form onSubmit={handleEmailAuth} className="space-y-4">
             {mode === 'register' && (
@@ -217,6 +282,11 @@ export default function LoginScreen({ onLogin }: { onLogin?: () => void }) {
                 </label>
               </div>
             )}
+            {mode === 'register' && isMerchant && (
+              <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">
+                Esnaf kaydında aylık abonelik ücreti 500 TL'dir. Şimdi ödeme yapmazsan 10 günlük deneme başlar; deneme bitiminde kredi kartı ile abonelik başlatabilirsin.
+              </p>
+            )}
 
             <Button
               type="submit"
@@ -241,7 +311,8 @@ export default function LoginScreen({ onLogin }: { onLogin?: () => void }) {
 
           {/* Google Login */}
           <Button
-            onClick={handleGoogleLogin}
+            type="button"
+            onClick={() => handleGoogleLogin(mode === 'register' && isMerchant)}
             disabled={isLoading}
             className="w-full bg-white hover:bg-gray-50 text-gray-900 border border-gray-300 py-6 text-lg shadow-sm flex items-center justify-center gap-3 disabled:opacity-50"
           >

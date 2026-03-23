@@ -173,7 +173,13 @@ export const usePushRegistration = ({
             new Promise<any>((resolve) => setTimeout(() => resolve(null), 8000)),
           ]);
           const receive = String(permissions?.receive || '').toLowerCase();
-          if (receive === 'denied' || cancelled) return;
+          if (cancelled) return;
+          if (receive === 'denied') {
+            // Android may still provide an FCM token even when notification
+            // runtime permission is denied. Keep registering token so server-side
+            // pipeline is ready once user enables notifications later.
+            console.warn('Push receive permission denied; proceeding with token registration attempt.');
+          }
 
           let token: string | null = null;
           for (let i = 0; i < 3 && !token && !cancelled; i++) {
@@ -184,7 +190,10 @@ export const usePushRegistration = ({
             token = tokenResult?.token || null;
             if (!token) await new Promise((resolve) => setTimeout(resolve, 1000 * (i + 1)));
           }
-          if (!token || cancelled) return;
+          if (!token || cancelled) {
+            console.warn('Push token could not be obtained after retries.');
+            return;
+          }
 
           await upsertTokenWithRetry(token);
 

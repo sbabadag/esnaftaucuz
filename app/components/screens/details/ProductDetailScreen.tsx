@@ -46,6 +46,14 @@ interface Price {
   lng?: number;
 }
 
+const resolveMerchantRole = (profile: any): boolean => {
+  const explicit = profile?.is_merchant === true;
+  const status = String(profile?.merchant_subscription_status || '').toLowerCase();
+  const hasActiveSubscription = status === 'active' || status === 'past_due';
+  const hasMerchantPlan = String(profile?.merchant_subscription_plan || '').trim().length > 0;
+  return explicit || hasActiveSubscription || hasMerchantPlan;
+};
+
 export default function ProductDetailScreen() {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -408,7 +416,7 @@ export default function ProductDetailScreen() {
     }
   };
 
-  const isMerchant = (user as any)?.is_merchant === true;
+  const isMerchant = resolveMerchantRole(user);
   const isMerchantOnboardingPending = (() => {
     try {
       return !!user?.id && localStorage.getItem('merchant-subscription-onboarding-user') === user.id;

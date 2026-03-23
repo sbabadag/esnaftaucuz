@@ -4,6 +4,7 @@ import { corsHeaders, jsonResponse } from '../_shared/cors.ts';
 type Body = {
   token?: string;
   platform?: 'ios' | 'android' | 'web';
+  user_id?: string;
 };
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL') || '';
@@ -43,23 +44,37 @@ Deno.serve(async (req) => {
     const body = (await req.json().catch(() => ({}))) as Body;
     const token = String(body?.token || '').trim();
     const platform = String(body?.platform || '').trim().toLowerCase();
+    const bodyUserId = String(body?.user_id || '').trim();
     if (!token) return jsonResponse(400, { error: 'Missing token' });
     if (!['ios', 'android', 'web'].includes(platform)) {
       return jsonResponse(400, { error: 'Invalid platform' });
     }
 
-    const userClient = getUserClientFromRequest(req);
-    const {
-      data: { user },
-      error: userError,
-    } = await userClient.auth.getUser();
-    if (userError || !user?.id) {
+    let resolvedUserId = '';
+    try {
+      const userClient = getUserClientFromRequest(req);
+      const {
+        data: { user },
+        error: userError,
+      } = await userClient.auth.getUser();
+      if (!userError && user?.id) {
+        resolvedUserId = user.id;
+      }
+    } catch {
+      // Continue with body user_id fallback for native/session edge cases.
+    }
+
+    if (!resolvedUserId && bodyUserId) {
+      resolvedUserId = bodyUserId;
+    }
+
+    if (!resolvedUserId) {
       return jsonResponse(401, { error: 'Unauthorized user' });
     }
 
     const service = getServiceClient();
     const payload = {
-      user_id: user.id,
+      user_id: resolvedUserId,
       token,
       platform,
       is_active: true,

@@ -61,11 +61,17 @@ export default function ProfileScreen() {
     return levels[user.level] || t('LEVEL_NEW');
   };
 
-  const isMerchant = (user as any)?.is_merchant === true;
+  const merchantStatus = String((user as any)?.merchant_subscription_status || '').toLowerCase();
+  const merchantPlan = String((user as any)?.merchant_subscription_plan || '').trim();
+  const isMerchant =
+    (user as any)?.is_merchant === true ||
+    merchantStatus === 'active' ||
+    merchantStatus === 'past_due' ||
+    merchantPlan.length > 0;
   const themeColor = isMerchant ? 'blue' : 'green';
   const themeColorClass = isMerchant ? 'blue-600' : 'green-600';
   const merchantSubscriptionStatus = (user as any)?.merchant_subscription_status || 'inactive';
-  const merchantSubscriptionFee = (user as any)?.merchant_subscription_fee_tl || 1000;
+  const merchantSubscriptionFee = (user as any)?.merchant_subscription_fee_tl || 500;
   const merchantSubscriptionPeriodEnd = (user as any)?.merchant_subscription_current_period_end;
 
   const getMerchantSubscriptionLabel = () => {
@@ -121,7 +127,7 @@ export default function ProfileScreen() {
           <div className="flex-1">
             <div className="flex items-center gap-2">
               <h2 className={`text-2xl ${isMerchant ? 'text-white' : ''}`}>{user?.name || 'Kullanıcı'}</h2>
-              {(user as any)?.is_merchant && (
+              {isMerchant && (
                 <Badge className="bg-white text-blue-600">Esnaf</Badge>
               )}
             </div>

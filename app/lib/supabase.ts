@@ -20,7 +20,7 @@ export const supabase = createClient(
       autoRefreshToken: true,
       detectSessionInUrl: true,
       storage: typeof window !== 'undefined' ? window.localStorage : undefined,
-      flowType: isMobile ? 'pkce' : 'implicit',
+      flowType: 'implicit',
     },
     db: {
       schema: 'public',

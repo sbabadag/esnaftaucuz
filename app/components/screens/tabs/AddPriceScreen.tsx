@@ -28,11 +28,19 @@ interface Location {
   type: string;
 }
 
+const resolveMerchantRole = (profile: any): boolean => {
+  const explicit = profile?.is_merchant === true;
+  const status = String(profile?.merchant_subscription_status || '').toLowerCase();
+  const hasActiveSubscription = status === 'active' || status === 'past_due';
+  const hasMerchantPlan = String(profile?.merchant_subscription_plan || '').trim().length > 0;
+  return explicit || hasActiveSubscription || hasMerchantPlan;
+};
+
 export default function AddPriceScreen() {
   const navigate = useNavigate();
   const { user } = useAuth();
   const { getCurrentPosition } = useGeolocation();
-  const isMerchant = (user as any)?.is_merchant === true;
+  const isMerchant = resolveMerchantRole(user);
 
   const [currentStep, setCurrentStep] = useState(0);
   const [products, setProducts] = useState<Product[]>([]);

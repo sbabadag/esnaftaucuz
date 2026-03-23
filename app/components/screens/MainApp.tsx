@@ -89,7 +89,7 @@ export default function MainApp() {
       }
 
       // Start with the fastest local hint.
-      const localHint = (user as any)?.is_merchant === true || getCachedMerchantHint();
+      const localHint = resolveMerchantRole(user) || getCachedMerchantHint();
       setResolvedMerchantRole(localHint);
 
       try {
@@ -116,6 +116,18 @@ export default function MainApp() {
           const resolved = fromProfile || hasProducts;
 
           if (resolved) {
+            // Auto-repair: merchant_products prove merchant role but DB flag is stale
+            if (hasProducts && profile && !profileError && !resolveMerchantRole(profile)) {
+              console.log('🔧 MainApp: Auto-repairing is_merchant in DB');
+              supabase
+                .from('users')
+                .update({ is_merchant: true })
+                .eq('id', user.id)
+                .then(({ error: repairErr }) => {
+                  if (repairErr) console.warn('⚠️ MainApp repair failed:', repairErr);
+                  else console.log('✅ MainApp: is_merchant repaired');
+                });
+            }
             setResolvedMerchantRole(true);
             return;
           }
@@ -155,6 +167,9 @@ export default function MainApp() {
                 const rows = await restRes.json().catch(() => []);
                 const row = Array.isArray(rows) ? rows[0] : null;
                 if (row && resolveMerchantRole(row)) {
+                  if (!row.is_merchant) {
+                    supabase.from('users').update({ is_merchant: true }).eq('id', user.id).then(() => {});
+                  }
                   setResolvedMerchantRole(true);
                   return;
                 }
@@ -173,7 +188,12 @@ export default function MainApp() {
     return () => {
       cancelled = true;
     };
-  }, [user?.id, (user as any)?.is_merchant]);
+  }, [
+    user?.id,
+    (user as any)?.is_merchant,
+    (user as any)?.merchant_subscription_status,
+    (user as any)?.merchant_subscription_plan,
+  ]);
 
   // Safety net for token registration on native.
   // If hook-driven registration is skipped by lifecycle timing, this effect
@@ -250,7 +270,7 @@ export default function MainApp() {
   const isMerchant =
     resolvedMerchantRole === true ||
     (resolvedMerchantRole == null &&
-      ((user as any)?.is_merchant === true || getCachedMerchantHint()));
+      (resolveMerchantRole(user) || getCachedMerchantHint()));
   const themeColor = isMerchant ? 'blue' : 'green';
   const themeColorClass = isMerchant ? 'blue-600' : 'green-600';
   const themeGradientFrom = isMerchant ? 'from-blue-600' : 'from-green-600';

@@ -11,6 +11,19 @@ import 'leaflet/dist/leaflet.css';
 
 // Initialize Capacitor plugins for native
 if (Capacitor.isNativePlatform()) {
+  if (import.meta.env.PROD) {
+    // Reduce JS<->native bridge noise on production builds.
+    console.log = () => {};
+    console.info = () => {};
+    console.debug = () => {};
+  }
+
+  // Keep WebView below status bar to prevent content bleed into
+  // the top dead zone during aggressive overscroll.
+  StatusBar.setOverlaysWebView({ overlay: false }).catch((err) => {
+    console.warn('StatusBar.setOverlaysWebView failed:', err);
+  });
+
   // Set status bar style
   StatusBar.setStyle({ style: Style.Light }).catch((err) => {
     console.warn('StatusBar.setStyle failed:', err);
@@ -20,6 +33,7 @@ if (Capacitor.isNativePlatform()) {
   Keyboard.setAccessoryBarVisible({ isVisible: true }).catch((err) => {
     console.warn('Keyboard.setAccessoryBarVisible failed:', err);
   });
+
 }
 
 // Add global error handler

@@ -31,12 +31,20 @@ const settingsItems = [
 // Predefined radius values (km)
 const RADIUS_OPTIONS = [1, 5, 10, 15, 20, 50, 100, 1000];
 
+const resolveMerchantRole = (profile: any): boolean => {
+  const explicit = profile?.is_merchant === true;
+  const status = String(profile?.merchant_subscription_status || '').toLowerCase();
+  const hasActiveSubscription = status === 'active' || status === 'past_due';
+  const hasMerchantPlan = String(profile?.merchant_subscription_plan || '').trim().length > 0;
+  return explicit || hasActiveSubscription || hasMerchantPlan;
+};
+
 export default function SettingsScreen() {
   const navigate = useNavigate();
   const { user, refreshUser, logout } = useAuth();
   const isGuest = (user as any)?.is_guest === true;
   const { getCurrentPosition } = useGeolocation();
-  const isMerchant = (user as any)?.is_merchant === true;
+  const isMerchant = resolveMerchantRole(user);
   const [searchRadius, setSearchRadius] = useState<number>(15);
   const [isSaving, setIsSaving] = useState(false);
   const { themeOption, setThemeOption } = useTheme();
@@ -768,7 +776,7 @@ export default function SettingsScreen() {
                 <li>Favorileriniz</li>
                 <li>Bildirimleriniz</li>
                 <li>Profil bilgileriniz</li>
-                {user && (user as any).is_merchant && (
+                {resolveMerchantRole(user) && (
                   <li>Esnaf dükkanınız ve ürünleriniz</li>
                 )}
               </ul>

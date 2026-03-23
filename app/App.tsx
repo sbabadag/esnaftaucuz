@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { BrowserRouter, Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom';
 import { MotionConfig } from 'motion/react';
 import { Toaster } from './components/ui/sonner';
@@ -52,9 +52,6 @@ function AppRoutes() {
   });
   const [showLoggedInLaunchIntro, setShowLoggedInLaunchIntro] = useState(false);
   const [loggedInIntroShown, setLoggedInIntroShown] = useState(false);
-  const checkoutParams = new URLSearchParams(location.search);
-  const checkoutStatus = checkoutParams.get('checkout');
-  const hasCheckoutRedirect = checkoutStatus === 'success' || checkoutStatus === 'cancel';
 
   useEffect(() => {
     if (!user || isLoading || loggedInIntroShown) return;
@@ -90,11 +87,6 @@ function AppRoutes() {
     }
     
     if (user && !isLoading) {
-      if (hasCheckoutRedirect) {
-        console.log('💳 Checkout redirect detected, routing to merchant subscription');
-        navigate(`/app/merchant-subscription${location.search}`, { replace: true });
-        return;
-      }
       // If user is logged in and on root or login page, redirect to explore
       if (location.pathname === '/' || location.pathname === '/login') {
         console.log('✅ User logged in, redirecting to /app/explore');
@@ -106,7 +98,7 @@ function AppRoutes() {
     if (!user && !isLoading && location.pathname.startsWith('/app') && !hasExplicitOAuthCallback) {
       navigate('/login', { replace: true });
     }
-  }, [user, isLoading, location.pathname, location.search, hasCheckoutRedirect, hasRecentOAuthPending, navigate]);
+  }, [user, isLoading, location.pathname, hasRecentOAuthPending, navigate]);
 
   // Check if this is an OAuth callback - if so, keep loading until user is ready
   const hashParams = new URLSearchParams(window.location.hash.substring(1));
@@ -129,10 +121,6 @@ function AppRoutes() {
     console.log('✅ AppRoutes: User is logged in, rendering main app routes');
     // If we're on root path and user is logged in, redirect to explore
     if (location.pathname === '/' || location.pathname === '/login') {
-      if (hasCheckoutRedirect) {
-        console.log('💳 AppRoutes: Redirecting checkout callback to /app/merchant-subscription');
-        return <Navigate to={`/app/merchant-subscription${location.search}`} replace />;
-      }
       console.log('✅ AppRoutes: Redirecting from root/login to /app/explore');
       return <Navigate to="/app/explore" replace />;
     }
@@ -189,6 +177,10 @@ function AppRoutes() {
 }
 
 function App() {
+  const oauthExchangeInFlightRef = useRef(false);
+  const lastHandledOAuthCodeRef = useRef<string>('');
+  const lastHandledOAuthAtRef = useRef<number>(0);
+
   useEffect(() => {
     const OAUTH_PENDING_KEY = 'oauth-pending-ts';
     const MERCHANT_SIGNUP_INTENT_KEY = 'merchant-signup-intent';
@@ -307,8 +299,24 @@ function App() {
     
     // Function to handle OAuth code exchange
     const handleOAuthCode = async (code: string, source: string, merchantIntentHint: boolean = false) => {
+      const normalizedCode = String(code || '').trim();
+      if (!normalizedCode) return;
+      const now = Date.now();
+      const isRecentDuplicate =
+        lastHandledOAuthCodeRef.current === normalizedCode &&
+        now - lastHandledOAuthAtRef.current < 90_000;
+
+      if (oauthExchangeInFlightRef.current || isRecentDuplicate) {
+        console.log(`⏭️ Ignoring duplicate OAuth callback (${source})`);
+        return;
+      }
+
+      oauthExchangeInFlightRef.current = true;
+      lastHandledOAuthCodeRef.current = normalizedCode;
+      lastHandledOAuthAtRef.current = now;
+
       console.log(`🔐 OAuth PKCE callback detected (${source})`);
-      console.log('🔐 Code:', code.substring(0, 20) + '...');
+      console.log('🔐 Code:', normalizedCode.substring(0, 20) + '...');
       if (merchantIntentHint) {
         try {
           localStorage.setItem(MERCHANT_SIGNUP_INTENT_KEY, '1');
@@ -322,21 +330,100 @@ function App() {
       try {
         let exchangeResult: any = null;
         let lastError: any = null;
-        for (let attempt = 1; attempt <= 2; attempt++) {
+
+        const isMobileNative = typeof window !== 'undefined' &&
+          (window as any).Capacitor?.isNativePlatform() &&
+          (window as any).Capacitor?.getPlatform() === 'android';
+
+        if (isMobileNative) {
+          // Use native Android HTTP for code exchange (bypasses WebView fetch issues)
+          console.log('🔄 OAuth code exchange via native HTTP...');
           try {
-            exchangeResult = await Promise.race([
-              supabase.auth.exchangeCodeForSession(code),
-              new Promise<any>((_, reject) =>
-                setTimeout(() => reject(new Error('oauth_exchange_timeout')), 30000)
-              ),
-            ]);
-            lastError = null;
-            break;
-          } catch (attemptError) {
-            lastError = attemptError;
-            console.warn(`⚠️ OAuth code exchange attempt ${attempt} failed:`, attemptError);
-            if (attempt < 2) {
-              await new Promise((resolve) => setTimeout(resolve, 1200));
+            const { GooglePlayBilling } = await import('./lib/google-play-billing');
+            const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || '';
+            const apiKey = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
+
+            // Read the PKCE code_verifier from localStorage (stored by Supabase client)
+            let codeVerifier = '';
+            for (let i = 0; i < localStorage.length; i++) {
+              const key = localStorage.key(i);
+              if (key && (key.includes('code-verifier') || key.includes('code_verifier'))) {
+                let raw = localStorage.getItem(key) || '';
+                // Supabase stores the verifier as a JSON string (with surrounding quotes)
+                if (raw.startsWith('"') && raw.endsWith('"')) {
+                  try { raw = JSON.parse(raw); } catch { /* use as-is */ }
+                }
+                codeVerifier = raw;
+                console.log('🔑 Found code_verifier in key:', key, 'length:', codeVerifier.length);
+                break;
+              }
+            }
+            if (!codeVerifier) {
+              console.warn('⚠️ No code_verifier found in localStorage, scanning all keys...');
+              const allKeys: string[] = [];
+              for (let i = 0; i < localStorage.length; i++) {
+                const k = localStorage.key(i);
+                if (k) allKeys.push(k);
+              }
+              console.log('📋 localStorage keys:', allKeys.join(', '));
+            }
+
+            const result = await GooglePlayBilling.exchangeOAuthCode({
+              supabaseUrl,
+              code: normalizedCode,
+              codeVerifier,
+              redirectUri: 'com.esnaftaucuz.app://auth/callback',
+              apiKey,
+            });
+
+            console.log('✅ Native code exchange response status:', result.status);
+            const tokenData = JSON.parse(result.body);
+
+            if (tokenData.access_token && tokenData.refresh_token) {
+              const { error: setErr } = await supabase.auth.setSession({
+                access_token: tokenData.access_token,
+                refresh_token: tokenData.refresh_token,
+              });
+              if (setErr) {
+                throw setErr;
+              }
+              exchangeResult = { data: { session: tokenData }, error: null };
+            } else {
+              throw new Error(tokenData.error_description || tokenData.error || 'No tokens in response');
+            }
+          } catch (nativeErr: any) {
+            console.error('❌ Native code exchange failed:', nativeErr);
+            lastError = nativeErr;
+            // Fallback to Supabase client
+            console.log('🔄 Falling back to Supabase client exchange...');
+            try {
+              exchangeResult = await Promise.race([
+                supabase.auth.exchangeCodeForSession(normalizedCode),
+                new Promise<any>((_, reject) =>
+                  setTimeout(() => reject(new Error('oauth_exchange_timeout')), 60000)
+                ),
+              ]);
+              lastError = null;
+            } catch (fallbackErr) {
+              lastError = fallbackErr;
+            }
+          }
+        } else {
+          // Web: use Supabase client directly
+          for (let attempt = 1; attempt <= 2; attempt++) {
+            try {
+              exchangeResult = await Promise.race([
+                supabase.auth.exchangeCodeForSession(normalizedCode),
+                new Promise<any>((_, reject) =>
+                  setTimeout(() => reject(new Error('oauth_exchange_timeout')), 30000)
+                ),
+              ]);
+              lastError = null;
+              break;
+            } catch (attemptError) {
+              lastError = attemptError;
+              console.warn(`⚠️ OAuth code exchange attempt ${attempt} failed:`, attemptError);
+              if (attempt < 2) await new Promise((r) => setTimeout(r, 1200));
             }
           }
         }
@@ -387,6 +474,8 @@ function App() {
             : rawMessage;
         clearOAuthPending();
         window.location.hash = `error=${encodeURIComponent(normalizedMessage)}`;
+      } finally {
+        oauthExchangeInFlightRef.current = false;
       }
     };
     
@@ -429,11 +518,16 @@ function App() {
       if (hash) {
         const hashParams = new URLSearchParams(hash);
         const accessToken = hashParams.get('access_token');
+        const hashCode = hashParams.get('code');
         const hashError = hashParams.get('error');
         
         if (accessToken) {
           console.log('🔐 OAuth implicit callback detected in hash');
           // Let Supabase handle it via normal flow
+          return true;
+        } else if (hashCode) {
+          console.log('🔐 OAuth PKCE callback detected in hash');
+          handleOAuthCode(hashCode, 'current URL hash');
           return true;
         } else if (hashError) {
           console.error('❌ OAuth error in hash:', hashError);
@@ -450,7 +544,7 @@ function App() {
     }
     
     if (isMobile) {
-      const handleIncomingDeepLink = (incomingUrl: string, source: string) => {
+      const handleIncomingDeepLink = async (incomingUrl: string, source: string) => {
         console.log(`🔗 App opened with URL (${source}):`, incomingUrl);
         const normalizedIncoming = String(incomingUrl || '').toLowerCase();
         const isKnownOAuthCallback =
@@ -486,21 +580,19 @@ function App() {
 
           const code = url.searchParams.get('code');
           const error = url.searchParams.get('error') || url.searchParams.get('error_description');
-          const checkout = url.searchParams.get('checkout');
-          const paymentId = url.searchParams.get('paymentId');
           const merchantIntent = url.searchParams.get('merchant_intent') === '1';
 
           const hash = url.hash.substring(1);
           const hashParams = new URLSearchParams(hash);
           const accessToken = hashParams.get('access_token');
-          const hashError = hashParams.get('error');
+          const hashCode = hashParams.get('code');
+          const hashError = hashParams.get('error') || hashParams.get('error_description');
           const hasActionableParams =
             !!code ||
+            !!hashCode ||
             !!accessToken ||
             !!error ||
-            !!hashError ||
-            checkout === 'success' ||
-            checkout === 'cancel';
+            !!hashError;
 
           // Close in-app browser only when callback payload is actionable.
           // Some devices can emit stale callback URLs without query params.
@@ -508,20 +600,103 @@ function App() {
             Browser.close().catch(() => {});
           }
 
-          if (code) {
-            handleOAuthCode(code, `${source} deep link`, merchantIntent);
-          } else if (checkout === 'success' || checkout === 'cancel') {
-            const qs = new URLSearchParams();
-            qs.set('checkout', checkout);
-            if (paymentId) qs.set('paymentId', paymentId);
-            const appRootPath = getAppRootPath();
-            const target = `${appRootPath}?${qs.toString()}`;
-            window.history.replaceState({}, document.title, target);
-            window.location.replace(target);
-          } else if (accessToken) {
-            console.log('🔐 OAuth implicit callback detected in deep link (access_token)');
+          if (accessToken) {
+            const refreshToken = hashParams.get('refresh_token') || '';
             markOAuthPending();
-            window.location.hash = hash;
+            Browser.close().catch(() => {});
+
+            // Decode JWT payload to extract user info (no network needed)
+            let jwtPayload: any = null;
+            try {
+              const parts = accessToken.split('.');
+              if (parts.length >= 2) {
+                jwtPayload = JSON.parse(atob(parts[1].replace(/-/g, '+').replace(/_/g, '/')));
+              }
+            } catch { /* ignore decode errors */ }
+
+            // Store tokens in localStorage immediately so AuthContext can use them
+            try {
+              localStorage.setItem('authToken', accessToken);
+              const supabaseStorageKey = `sb-${(import.meta.env.VITE_SUPABASE_URL || '').replace(/https?:\/\//, '').split('.')[0]}-auth-token`;
+              localStorage.setItem(supabaseStorageKey, JSON.stringify({
+                access_token: accessToken,
+                refresh_token: refreshToken,
+                token_type: 'bearer',
+                expires_at: Number(hashParams.get('expires_at') || 0),
+                expires_in: Number(hashParams.get('expires_in') || 3600),
+                user: jwtPayload ? {
+                  id: jwtPayload.sub,
+                  email: jwtPayload.email,
+                  user_metadata: jwtPayload.user_metadata || {},
+                  app_metadata: jwtPayload.app_metadata || {},
+                  aud: jwtPayload.aud,
+                  role: jwtPayload.role,
+                } : undefined,
+              }));
+            } catch { /* best effort */ }
+
+            // Try setSession but don't block on it
+            let sessionSet = false;
+            try {
+              const setPromise = supabase.auth.setSession({
+                access_token: accessToken,
+                refresh_token: refreshToken,
+              });
+              const result = await Promise.race([
+                setPromise,
+                new Promise<{ error: { message: string } }>((resolve) =>
+                  setTimeout(() => resolve({ error: { message: 'setSession timeout' } }), 5000)
+                ),
+              ]);
+              if (!(result as any).error) {
+                sessionSet = true;
+              }
+            } catch { /* ignore */ }
+
+            // If setSession didn't work, manually inject user from JWT
+            if (!sessionSet && jwtPayload) {
+              const meta = jwtPayload.user_metadata || {};
+              // Preserve merchant status from cached profile or merchant hint
+              let cachedIsMerchant = false;
+              try {
+                const cachedRaw = localStorage.getItem('user');
+                if (cachedRaw) {
+                  const cached = JSON.parse(cachedRaw);
+                  if (cached?.id === jwtPayload.sub) {
+                    cachedIsMerchant = !!(cached.is_merchant || cached.isMerchant);
+                  }
+                }
+                if (!cachedIsMerchant && jwtPayload.email) {
+                  cachedIsMerchant = localStorage.getItem('merchant-hint-' + jwtPayload.email) === '1';
+                }
+              } catch { /* ignore */ }
+              const fallbackUser = {
+                id: jwtPayload.sub,
+                email: jwtPayload.email || '',
+                name: meta.full_name || meta.name || jwtPayload.email?.split('@')[0] || 'Kullanıcı',
+                avatar: meta.avatar_url || meta.picture,
+                level: 1,
+                points: 0,
+                contributions: { shares: 0, verifications: 0 },
+                isGuest: false,
+                is_merchant: cachedIsMerchant,
+                preferences: { notifications: true, searchRadius: 15 },
+                search_radius: 15,
+              };
+              try {
+                localStorage.setItem('user', JSON.stringify(fallbackUser));
+              } catch { /* best effort */ }
+              // Dispatch custom event for AuthContext to pick up
+              window.dispatchEvent(new CustomEvent('oauth-fallback-login', { detail: { user: fallbackUser, token: accessToken } }));
+            }
+
+            clearOAuthPending();
+            window.history.replaceState({}, document.title, getAppRootPath());
+            window.dispatchEvent(new PopStateEvent('popstate'));
+          } else if (code) {
+            handleOAuthCode(code, `${source} deep link`, merchantIntent);
+          } else if (hashCode) {
+            handleOAuthCode(hashCode, `${source} deep link hash`, merchantIntent);
           } else if (error || hashError) {
             console.error('❌ OAuth error in deep link:', error || hashError);
             clearOAuthPending();

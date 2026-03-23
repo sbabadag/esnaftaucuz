@@ -56,6 +56,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [isOAuthCallback, setIsOAuthCallback] = useState(false);
   const userRef = useRef<User | null>(null);
   const isOAuthCallbackRef = useRef(false);
+  const lastAuthoritativeProfileSyncAtRef = useRef(0);
+  const bgProfilePollerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const isLoggingOutRef = useRef(false);
   const OAUTH_PENDING_MAX_AGE_MS = 2 * 60 * 1000;
   const MERCHANT_SIGNUP_INTENT_KEY = 'merchant-signup-intent';
   const MERCHANT_SUBSCRIPTION_ONBOARDING_KEY = 'merchant-subscription-onboarding-user';
@@ -75,8 +78,140 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const explicit = normalizeMerchantFlag(profile?.is_merchant);
     const subscriptionStatus = String(profile?.merchant_subscription_status || '').toLowerCase();
     const hasMerchantSubscription = subscriptionStatus === 'active' || subscriptionStatus === 'past_due';
-  const hasMerchantPlan = String(profile?.merchant_subscription_plan || '').trim().length > 0;
-  return explicit || hasMerchantSubscription || hasMerchantPlan;
+    const hasMerchantPlan = String(profile?.merchant_subscription_plan || '').trim().length > 0;
+    return explicit || hasMerchantSubscription || hasMerchantPlan;
+  };
+  const getMerchantHint = (email?: string | null): boolean => {
+    if (!email) return false;
+    try {
+      return localStorage.getItem('merchant-hint-' + email) === '1';
+    } catch { return false; }
+  };
+  const startBackgroundProfilePoller = (userId: string) => {
+    if (bgProfilePollerRef.current) return;
+    let attempts = 0;
+    const maxAttempts = 30;
+    const poll = async () => {
+      attempts++;
+      if (attempts > maxAttempts) {
+        if (bgProfilePollerRef.current) {
+          clearInterval(bgProfilePollerRef.current);
+          bgProfilePollerRef.current = null;
+        }
+        return;
+      }
+      if (lastAuthoritativeProfileSyncAtRef.current > 0) {
+        console.log('✅ BG poller: authoritative profile already synced, stopping');
+        if (bgProfilePollerRef.current) {
+          clearInterval(bgProfilePollerRef.current);
+          bgProfilePollerRef.current = null;
+        }
+        return;
+      }
+      try {
+        const sbUrl = String(import.meta.env.VITE_SUPABASE_URL || '');
+        const sbKey = String(import.meta.env.VITE_SUPABASE_ANON_KEY || '');
+        const authToken = localStorage.getItem('authToken') || '';
+        if (!sbUrl || !sbKey || !authToken) return;
+
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 15000);
+        const res = await fetch(
+          `${sbUrl}/rest/v1/users?id=eq.${userId}&select=*`,
+          {
+            headers: { apikey: sbKey, Authorization: `Bearer ${authToken}` },
+            signal: controller.signal,
+          }
+        );
+        clearTimeout(timer);
+
+        if (!res.ok) return;
+        const rows = await res.json().catch(() => []);
+        const profile = Array.isArray(rows) ? rows[0] : null;
+        if (!profile?.id) return;
+
+        const isMerchant = resolveMerchantStatus(profile);
+        const currentUser = userRef.current;
+        const currentMerchant = currentUser ? resolveMerchantStatus(currentUser) : false;
+
+        const preferencesRadius = profile.preferences?.searchRadius;
+        const legacyRadius = profile.search_radius;
+        const finalSearchRadius = preferencesRadius !== undefined
+          ? preferencesRadius
+          : (legacyRadius !== undefined ? legacyRadius : 15);
+
+        const userData = {
+          ...profile,
+          is_merchant: isMerchant,
+          preferences: { ...(profile.preferences || {}), searchRadius: finalSearchRadius },
+          search_radius: finalSearchRadius,
+        };
+
+        updateUser(userData);
+        localStorage.setItem('user', JSON.stringify(userData));
+        lastAuthoritativeProfileSyncAtRef.current = Date.now();
+        if (isMerchant && profile.email) {
+          try { localStorage.setItem('merchant-hint-' + profile.email, '1'); } catch {}
+        } else if (!isMerchant && profile.email) {
+          try { localStorage.removeItem('merchant-hint-' + profile.email); } catch {}
+        }
+        console.log('✅ BG poller: profile loaded (attempt', attempts, '), is_merchant:', isMerchant);
+
+        if (bgProfilePollerRef.current) {
+          clearInterval(bgProfilePollerRef.current);
+          bgProfilePollerRef.current = null;
+        }
+      } catch (err) {
+        console.warn('⚠️ BG poller attempt', attempts, 'failed:', err);
+      }
+    };
+    console.log('🔄 BG poller: starting for user', userId);
+    bgProfilePollerRef.current = setInterval(poll, 3000);
+    setTimeout(poll, 500);
+  };
+
+  const createSessionFallbackUser = (session: any, preserved?: any) => {
+    if (!session?.user) return null;
+    if (preserved?.id === session.user.id) return preserved;
+    let cachedSameUser: any = null;
+    try {
+      const raw = localStorage.getItem('user');
+      const parsed = raw ? JSON.parse(raw) : null;
+      if (parsed?.id === session.user.id) {
+        cachedSameUser = parsed;
+      }
+    } catch {
+      cachedSameUser = null;
+    }
+    if (cachedSameUser) return cachedSameUser;
+    const userMetadata = session.user.user_metadata || {};
+    // Check merchant hint saved during logout
+    let merchantHint = false;
+    try {
+      const email = session.user.email || '';
+      if (email && localStorage.getItem('merchant-hint-' + email) === '1') {
+        merchantHint = true;
+      }
+    } catch { /* ignore */ }
+    return {
+      id: session.user.id,
+      email: session.user.email || '',
+      name: userMetadata.name || userMetadata.full_name || session.user.email?.split('@')[0] || 'Kullanıcı',
+      avatar: userMetadata.avatar_url || userMetadata.picture,
+      level: 1,
+      points: 0,
+      contributions: {
+        shares: 0,
+        verifications: 0,
+      },
+      isGuest: false,
+      is_merchant: merchantHint || normalizeMerchantFlag(userMetadata.is_merchant),
+      preferences: {
+        notifications: true,
+        searchRadius: 15,
+      },
+      search_radius: 15,
+    };
   };
 
   const getAppRootPath = (): string => {
@@ -99,26 +234,39 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       localStorage.removeItem('authToken');
       localStorage.removeItem('user');
+      localStorage.removeItem('oauth-pending-ts');
       localStorage.removeItem(MERCHANT_SIGNUP_INTENT_KEY);
       localStorage.removeItem(MERCHANT_SUBSCRIPTION_ONBOARDING_KEY);
-      // Supabase session keys are stored under sb-...-auth-token on web.
       const keysToDelete: string[] = [];
       for (let i = 0; i < localStorage.length; i++) {
         const key = localStorage.key(i);
         if (!key) continue;
         if (
           (key.startsWith('sb-') && key.includes('auth-token')) ||
-          key.startsWith('supabase.auth.')
+          key.startsWith('supabase.auth.') ||
+          key.includes('code-verifier') ||
+          key.includes('code_verifier')
         ) {
           keysToDelete.push(key);
         }
       }
       keysToDelete.forEach((key) => localStorage.removeItem(key));
     } catch {
-      // Ignore storage errors; best effort cleanup.
+      // best effort
     }
   };
 
+  const updateUser = (newUser: User | null) => {
+    // If new value would downgrade merchant to non-merchant, check hint first
+    if (newUser && userRef.current?.id === newUser.id && userRef.current?.is_merchant && !newUser.is_merchant) {
+      const hint = getMerchantHint(newUser.email);
+      if (hint) {
+        newUser = { ...newUser, is_merchant: true };
+      }
+    }
+    userRef.current = newUser;
+    setUser(newUser);
+  };
   useEffect(() => {
     userRef.current = user;
   }, [user]);
@@ -199,14 +347,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         cachedUser = null;
       }
 
-      // Create fallback user helper
       const createFallbackUser = (cachedUser?: any) => {
         if (cachedUser?.id === session?.user?.id) {
-          // Prefer cached profile shape for role/theme stability during transient timeouts.
           return cachedUser;
         }
         if (!session?.user) return null;
         const userMetadata = session.user.user_metadata || {};
+        const hint = getMerchantHint(session.user.email);
         return {
           id: session.user.id,
           email: session.user.email || '',
@@ -219,26 +366,30 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             verifications: 0,
           },
           isGuest: false,
-          is_merchant: normalizeMerchantFlag(userMetadata.is_merchant),
+          is_merchant: hint || normalizeMerchantFlag(userMetadata.is_merchant),
           preferences: {
             notifications: true,
-            searchRadius: 15, // Default search radius
+            searchRadius: 15,
           },
-          search_radius: 15, // Legacy column for backward compatibility
+          search_radius: 15,
         };
       };
 
-      // Safety timeout - force loading to false after 8 seconds (reduced from 15)
       const profileTimeout = setTimeout(() => {
         console.warn('⚠️ Profile load safety timeout - forcing loading to false');
-        const fallbackUser = createFallbackUser(cachedUser);
-        if (fallbackUser) {
-          setUser(fallbackUser);
-          localStorage.setItem('user', JSON.stringify(fallbackUser));
-          console.log('⚠️ Using fallback user due to safety timeout');
+        if (lastAuthoritativeProfileSyncAtRef.current > 0) {
+          console.log('✅ Safety timeout: BG poller already synced - keeping current user');
+        } else {
+          const fallbackUser = createFallbackUser(cachedUser);
+          if (fallbackUser) {
+            updateUser(fallbackUser);
+            localStorage.setItem('user', JSON.stringify(fallbackUser));
+            console.log('⚠️ Using fallback user due to safety timeout');
+          }
+          if (session?.user?.id) startBackgroundProfilePoller(session.user.id);
         }
         setIsLoading(false);
-      }, 20000); // Network-tolerant safety timeout
+      }, 45000);
 
       const merchantSignupIntent = (() => {
         try {
@@ -267,8 +418,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           .eq('id', session.user.id)
           .single();
         
-        const timeoutPromise = new Promise((_, reject) => {
-          setTimeout(() => reject(new Error('Profile fetch timeout after 20 seconds')), 20000);
+          const timeoutPromise = new Promise((_, reject) => {
+          setTimeout(() => reject(new Error('Profile fetch timeout after 35 seconds')), 35000);
         });
         
         let profile: any = null;
@@ -319,7 +470,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
         // Web/native session edge-case: when profile fetch times out we can end up
         // with a valid auth session but missing/undetected public users row.
-        // Ensure the profile row exists using direct REST upsert with current token.
+        // Try to READ profile via direct REST first; only INSERT (never update) if truly missing.
         if (!profile && (event === 'SIGNED_IN' || event === 'INITIAL_SESSION')) {
           try {
             const sbUrl = String(import.meta.env.VITE_SUPABASE_URL || '');
@@ -328,48 +479,101 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             const userMetadata = session.user.user_metadata || {};
 
             if (sbUrl && sbKey && authToken) {
-              const ensurePayload = {
-                id: session.user.id,
-                email: session.user.email || '',
-                name: userMetadata.name || userMetadata.full_name || session.user.email?.split('@')[0] || 'Kullanıcı',
-                avatar: userMetadata.avatar_url || userMetadata.picture || null,
-                google_id: userMetadata.provider === 'google' ? session.user.id : null,
-                is_guest: false,
-                is_merchant: merchantSignupIntent || normalizeMerchantFlag(userMetadata.is_merchant),
-                search_radius: 15,
-                ...(merchantSignupIntent ? {
-                  merchant_subscription_status: 'inactive',
-                  merchant_subscription_plan: 'merchant_basic_500_tl_monthly',
-                  merchant_subscription_fee_tl: 500,
-                } : {}),
-              };
-
-              const controller = new AbortController();
-              const timer = setTimeout(() => controller.abort(), 15000);
-              const ensureResponse = await fetch(`${sbUrl}/rest/v1/users?on_conflict=id`, {
-                method: 'POST',
-                headers: {
-                  apikey: sbKey,
-                  Authorization: `Bearer ${authToken}`,
-                  'Content-Type': 'application/json',
-                  Prefer: 'resolution=merge-duplicates,return=representation',
-                },
-                body: JSON.stringify(ensurePayload),
-                signal: controller.signal,
-              });
-              clearTimeout(timer);
-
-              if (ensureResponse.ok) {
-                const ensuredRows = await ensureResponse.json().catch(() => []);
-                const ensuredProfile = Array.isArray(ensuredRows) ? ensuredRows[0] : null;
-                if (ensuredProfile?.id) {
-                  profile = ensuredProfile;
-                  profileError = null;
-                  console.log('✅ Profile ensured via REST upsert');
+              // Step 1: Try a direct REST read first (bypasses PostgREST client issues)
+              const readController = new AbortController();
+              const readTimer = setTimeout(() => readController.abort(), 10000);
+              try {
+                const readRes = await fetch(
+                  `${sbUrl}/rest/v1/users?id=eq.${session.user.id}&select=*`,
+                  {
+                    headers: {
+                      apikey: sbKey,
+                      Authorization: `Bearer ${authToken}`,
+                    },
+                    signal: readController.signal,
+                  }
+                );
+                clearTimeout(readTimer);
+                if (readRes.ok) {
+                  const rows = await readRes.json().catch(() => []);
+                  const row = Array.isArray(rows) ? rows[0] : null;
+                  if (row?.id) {
+                    profile = row;
+                    profileError = null;
+                    console.log('✅ Profile read via direct REST (bypass)');
+                  }
                 }
-              } else {
-                const ensureErr = await ensureResponse.text().catch(() => '');
-                console.warn('⚠️ Profile ensure REST upsert failed:', ensureResponse.status, ensureErr);
+              } catch (readErr) {
+                clearTimeout(readTimer);
+                console.warn('⚠️ Direct REST profile read failed:', readErr);
+              }
+
+              // Step 2: If still no profile, INSERT only (ignore-duplicates = never overwrite existing)
+              if (!profile) {
+                const insertPayload = {
+                  id: session.user.id,
+                  email: session.user.email || '',
+                  name: userMetadata.name || userMetadata.full_name || session.user.email?.split('@')[0] || 'Kullanıcı',
+                  avatar: userMetadata.avatar_url || userMetadata.picture || null,
+                  google_id: userMetadata.provider === 'google' ? session.user.id : null,
+                  is_guest: false,
+                  is_merchant: merchantSignupIntent ? true : normalizeMerchantFlag(userMetadata.is_merchant),
+                  search_radius: 15,
+                  ...(merchantSignupIntent ? {
+                    merchant_subscription_status: 'inactive',
+                    merchant_subscription_plan: 'merchant_basic_500_tl_monthly',
+                    merchant_subscription_fee_tl: 500,
+                  } : {}),
+                };
+
+                const insertController = new AbortController();
+                const insertTimer = setTimeout(() => insertController.abort(), 15000);
+                const insertRes = await fetch(`${sbUrl}/rest/v1/users?on_conflict=id`, {
+                  method: 'POST',
+                  headers: {
+                    apikey: sbKey,
+                    Authorization: `Bearer ${authToken}`,
+                    'Content-Type': 'application/json',
+                    Prefer: 'resolution=ignore-duplicates,return=representation',
+                  },
+                  body: JSON.stringify(insertPayload),
+                  signal: insertController.signal,
+                });
+                clearTimeout(insertTimer);
+
+                if (insertRes.ok) {
+                  const insertedRows = await insertRes.json().catch(() => []);
+                  const insertedProfile = Array.isArray(insertedRows) ? insertedRows[0] : null;
+                  if (insertedProfile?.id) {
+                    profile = insertedProfile;
+                    profileError = null;
+                    console.log('✅ New profile created via REST insert');
+                  } else {
+                    // ignore-duplicates returns empty array for existing rows; re-read
+                    try {
+                      const reReadRes = await fetch(
+                        `${sbUrl}/rest/v1/users?id=eq.${session.user.id}&select=*`,
+                        {
+                          headers: { apikey: sbKey, Authorization: `Bearer ${authToken}` },
+                        }
+                      );
+                      if (reReadRes.ok) {
+                        const reRows = await reReadRes.json().catch(() => []);
+                        const reRow = Array.isArray(reRows) ? reRows[0] : null;
+                        if (reRow?.id) {
+                          profile = reRow;
+                          profileError = null;
+                          console.log('✅ Existing profile re-read after ignore-duplicates');
+                        }
+                      }
+                    } catch {
+                      // best effort
+                    }
+                  }
+                } else {
+                  const insertErr = await insertRes.text().catch(() => '');
+                  console.warn('⚠️ Profile REST insert failed:', insertRes.status, insertErr);
+                }
               }
             }
           } catch (ensureError) {
@@ -425,8 +629,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               const result = createResult as { data: any; error: any };
               if (!result.error && result.data) {
                 console.log('✅ Profile created for OAuth user');
-                // Update user with fresh profile data
-                setUser(result.data);
+                updateUser(result.data);
                 localStorage.setItem('user', JSON.stringify(result.data));
               } else {
                 console.error('❌ Failed to create profile:', result.error);
@@ -441,8 +644,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         clearTimeout(profileTimeout);
         
         if (profile) {
-          // Role fallback: some legacy accounts may have stale is_merchant=false
-          // even though merchant records exist.
+          // Check merchant_products for definitive merchant role evidence
           let hasMerchantProducts = false;
           try {
             const { data: merchantRows, error: merchantErr } = await supabase
@@ -457,8 +659,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             hasMerchantProducts = false;
           }
 
-          // If user explicitly started "merchant sign-up" from login screen (including Google OAuth),
-          // elevate account to merchant and force subscription onboarding.
+          // Merchant sign-up intent: elevate account to merchant
           if (merchantSignupIntent) {
             try {
               const merchantSetupUpdate = {
@@ -489,8 +690,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             }
           }
 
-          // Ensure preferences and search_radius are properly set
-          // Priority: preferences.searchRadius (newer) > search_radius (legacy) > default
+          const isMerchantFromProfile = resolveMerchantStatus(profile);
+          const isMerchantFinal = isMerchantFromProfile || hasMerchantProducts;
+
+          // AUTO-REPAIR: If merchant_products prove merchant role but DB flag is wrong, fix it
+          if (hasMerchantProducts && !isMerchantFromProfile) {
+            console.log('🔧 Auto-repairing is_merchant flag (merchant_products exist but is_merchant=false)');
+            try {
+              const { data: repairedProfile } = await supabase
+                .from('users')
+                .update({ is_merchant: true })
+                .eq('id', session.user.id)
+                .select('*')
+                .single();
+              if (repairedProfile) {
+                profile = repairedProfile;
+                console.log('✅ is_merchant auto-repaired to true');
+              }
+            } catch (repairErr) {
+              console.warn('⚠️ is_merchant auto-repair failed:', repairErr);
+            }
+          }
+
           const preferencesRadius = profile.preferences?.searchRadius;
           const legacyRadius = profile.search_radius;
           const finalSearchRadius = preferencesRadius !== undefined 
@@ -499,73 +720,69 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           
           const userData = {
             ...profile,
-            is_merchant: resolveMerchantStatus(profile) || hasMerchantProducts,
+            is_merchant: isMerchantFinal,
             preferences: {
               ...(profile.preferences || {}),
-              searchRadius: finalSearchRadius, // Ensure preferences.searchRadius is always set
+              searchRadius: finalSearchRadius,
             },
-            search_radius: finalSearchRadius, // Keep legacy column for backward compatibility
+            search_radius: finalSearchRadius,
           };
           
-          // Always update user if profile is loaded - ensure is_merchant is always fresh
-          // This is critical for merchant users to maintain blue theme
-              const shouldUpdate = !cachedUser || 
-                              profile.id !== cachedUser.id || 
-                              (cachedUser.is_merchant !== userData.is_merchant) ||
-                              (userData.preferences && Object.keys(userData.preferences).length > 0);
-          
-          if (shouldUpdate) {
-            setUser(userData);
-            localStorage.setItem('user', JSON.stringify(userData));
-            console.log('✅ User profile loaded/updated with settings:', {
-              email: userData.email,
-              is_merchant: userData.is_merchant,
-              was_cached: !!cachedUser,
-              cached_is_merchant: cachedUser?.is_merchant,
-              preferences: userData.preferences,
-              search_radius: userData.search_radius,
-            });
-          } else {
-            console.log('✅ User profile already cached and up-to-date');
+          updateUser(userData);
+          localStorage.setItem('user', JSON.stringify(userData));
+          if (isMerchantFinal && userData.email) {
+            try { localStorage.setItem('merchant-hint-' + userData.email, '1'); } catch {}
+          } else if (!isMerchantFinal && userData.email) {
+            try { localStorage.removeItem('merchant-hint-' + userData.email); } catch {}
           }
-          setIsLoading(false); // Always set loading false when profile is loaded
+          console.log('✅ User profile loaded (authoritative):', {
+            email: userData.email,
+            is_merchant: userData.is_merchant,
+            merchant_subscription_status: profile.merchant_subscription_status,
+            merchant_subscription_plan: profile.merchant_subscription_plan,
+            hasMerchantProducts,
+          });
+          setIsLoading(false);
         } else {
-          console.warn('⚠️ Profile still unavailable after fetch/retry; using conservative fallback');
-          // Even if profile creation failed, create a fallback user
-          const userMetadata = session.user.user_metadata || {};
-          const preservedMerchant = cachedUser?.id === session.user.id
-            ? normalizeMerchantFlag(cachedUser?.is_merchant)
-            : normalizeMerchantFlag(userMetadata?.is_merchant);
-          const fallbackUser = {
-            id: session.user.id,
-            email: session.user.email || '',
-            name: userMetadata.name || userMetadata.full_name || session.user.email?.split('@')[0] || 'Kullanıcı',
-            avatar: userMetadata.avatar_url || userMetadata.picture,
-            level: 1,
-            points: 0,
-            contributions: {
-              shares: 0,
-              verifications: 0,
-            },
-            isGuest: false,
-            is_merchant: merchantSignupIntent || preservedMerchant,
-            preferences: {
-              notifications: true,
-              searchRadius: 15,
-            },
-            search_radius: 15,
-          };
-          if (merchantSignupIntent) {
-            try {
-              localStorage.setItem(MERCHANT_SUBSCRIPTION_ONBOARDING_KEY, session.user.id);
-              localStorage.removeItem(MERCHANT_SIGNUP_INTENT_KEY);
-            } catch {
-              // best effort
+          // If BG poller already loaded authoritative profile, don't overwrite with stale fallback
+          if (lastAuthoritativeProfileSyncAtRef.current > 0) {
+            console.log('✅ Profile unavailable in main flow, but BG poller already synced - skipping fallback');
+          } else {
+            console.warn('⚠️ Profile still unavailable; using conservative fallback');
+            const userMetadata = session.user.user_metadata || {};
+            const currentUser = userRef.current;
+            const hint = getMerchantHint(session.user.email);
+            const preservedMerchant = currentUser?.id === session.user.id
+              ? resolveMerchantStatus(currentUser)
+              : (cachedUser?.id === session.user.id
+                ? resolveMerchantStatus(cachedUser)
+                : (hint || normalizeMerchantFlag(userMetadata?.is_merchant)));
+            const fallbackUser = {
+              id: session.user.id,
+              email: session.user.email || '',
+              name: currentUser?.name || userMetadata.name || userMetadata.full_name || session.user.email?.split('@')[0] || 'Kullanıcı',
+              avatar: currentUser?.avatar || userMetadata.avatar_url || userMetadata.picture,
+              level: currentUser?.level || 1,
+              points: currentUser?.points || 0,
+              contributions: currentUser?.contributions || { shares: 0, verifications: 0 },
+              isGuest: false,
+              is_merchant: merchantSignupIntent || preservedMerchant,
+              merchant_subscription_status: currentUser?.merchant_subscription_status,
+              merchant_subscription_plan: currentUser?.merchant_subscription_plan,
+              preferences: currentUser?.preferences || { notifications: true, searchRadius: 15 },
+              search_radius: currentUser?.search_radius || 15,
+            };
+            if (merchantSignupIntent) {
+              try {
+                localStorage.setItem(MERCHANT_SUBSCRIPTION_ONBOARDING_KEY, session.user.id);
+                localStorage.removeItem(MERCHANT_SIGNUP_INTENT_KEY);
+              } catch {}
             }
+            updateUser(fallbackUser);
+            localStorage.setItem('user', JSON.stringify(fallbackUser));
+            console.log('⚠️ Using fallback user - profile not available, is_merchant:', fallbackUser.is_merchant);
+            startBackgroundProfilePoller(session.user.id);
           }
-          setUser(fallbackUser);
-          localStorage.setItem('user', JSON.stringify(fallbackUser));
-          console.log('⚠️ Using fallback user - profile not available');
         }
         
         setIsLoading(false);
@@ -588,42 +805,42 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       } catch (error) {
         clearTimeout(profileTimeout);
         console.error('❌ Load user profile error:', error);
-        // Even on error, try to set user from session
         if (session?.user) {
-          const userMetadata = session.user.user_metadata || {};
-          const preservedMerchant = cachedUser?.id === session.user.id
-            ? normalizeMerchantFlag(cachedUser?.is_merchant)
-            : normalizeMerchantFlag(userMetadata?.is_merchant);
-          const fallbackUser = {
-            id: session.user.id,
-            email: session.user.email || '',
-            name: userMetadata.name || userMetadata.full_name || session.user.email?.split('@')[0] || 'Kullanıcı',
-            avatar: userMetadata.avatar_url || userMetadata.picture,
-            level: 1,
-            points: 0,
-            contributions: {
-              shares: 0,
-              verifications: 0,
-            },
-            isGuest: false,
-            is_merchant: merchantSignupIntent || preservedMerchant,
-            preferences: {
-              notifications: true,
-              searchRadius: 15, // Default search radius
-            },
-            search_radius: 15, // Legacy column for backward compatibility
-          };
-          if (merchantSignupIntent) {
-            try {
-              localStorage.setItem(MERCHANT_SUBSCRIPTION_ONBOARDING_KEY, session.user.id);
-              localStorage.removeItem(MERCHANT_SIGNUP_INTENT_KEY);
-            } catch {
-              // best effort
+          if (lastAuthoritativeProfileSyncAtRef.current > 0) {
+            console.log('✅ Error in main flow, but BG poller already synced - keeping current user');
+          } else {
+            const userMetadata = session.user.user_metadata || {};
+            const currentUser = userRef.current;
+            const hint = getMerchantHint(session.user.email);
+            const preservedMerchant = currentUser?.id === session.user.id
+              ? resolveMerchantStatus(currentUser)
+              : (hint || normalizeMerchantFlag(userMetadata?.is_merchant));
+            const fallbackUser = {
+              id: session.user.id,
+              email: session.user.email || '',
+              name: currentUser?.name || userMetadata.name || userMetadata.full_name || session.user.email?.split('@')[0] || 'Kullanıcı',
+              avatar: currentUser?.avatar || userMetadata.avatar_url || userMetadata.picture,
+              level: currentUser?.level || 1,
+              points: currentUser?.points || 0,
+              contributions: currentUser?.contributions || { shares: 0, verifications: 0 },
+              isGuest: false,
+              is_merchant: merchantSignupIntent || preservedMerchant,
+              merchant_subscription_status: currentUser?.merchant_subscription_status,
+              merchant_subscription_plan: currentUser?.merchant_subscription_plan,
+              preferences: currentUser?.preferences || { notifications: true, searchRadius: 15 },
+              search_radius: currentUser?.search_radius || 15,
+            };
+            if (merchantSignupIntent) {
+              try {
+                localStorage.setItem(MERCHANT_SUBSCRIPTION_ONBOARDING_KEY, session.user.id);
+                localStorage.removeItem(MERCHANT_SIGNUP_INTENT_KEY);
+              } catch {}
             }
+            updateUser(fallbackUser);
+            localStorage.setItem('user', JSON.stringify(fallbackUser));
+            console.log('⚠️ Using fallback user due to error, is_merchant:', fallbackUser.is_merchant);
+            startBackgroundProfilePoller(session.user.id);
           }
-          setUser(fallbackUser);
-          localStorage.setItem('user', JSON.stringify(fallbackUser));
-          console.log('⚠️ Using fallback user due to error');
         }
         setIsLoading(false);
       }
@@ -702,7 +919,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                 .single();
               
               if (guestUser) {
-                setUser(guestUser);
+                updateUser(guestUser);
                 setIsLoading(false);
                 return;
               }
@@ -726,6 +943,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // Supabase session listener with timeout protection
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
       console.log('🔄 Auth state changed:', event, session?.user?.email);
+
+      // Block all events during active logout to prevent auto re-login
+      if (isLoggingOutRef.current) {
+        console.log('🚫 Ignoring auth event during logout:', event);
+        return;
+      }
+
       const currentUser = userRef.current;
       const oauthInProgress = isOAuthCallbackRef.current;
       
@@ -733,15 +957,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // BUT: For merchant users, always reload to ensure is_merchant is correct
       // TOKEN_REFRESHED is normal and doesn't need profile reload if user already exists AND is not merchant
       if (event === 'TOKEN_REFRESHED' && currentUser && session) {
-        // For merchant users, always reload profile to ensure is_merchant is correct
-        const isCurrentUserMerchant = (currentUser as any)?.is_merchant === true;
-        if (!isCurrentUserMerchant) {
-          console.log('✅ Token refreshed, user already loaded (non-merchant) - skipping profile reload');
-          return; // Early return, no processing needed
-        } else {
-          console.log('🔄 Token refreshed, merchant user detected - reloading profile to ensure is_merchant is correct');
-          // Continue to reload profile for merchant users
+        const isCurrentUserMerchant = resolveMerchantStatus(currentUser);
+        const shouldPeriodicRefreshOnToken =
+          Date.now() - lastAuthoritativeProfileSyncAtRef.current > 3 * 60 * 1000;
+        if (!isCurrentUserMerchant && !shouldPeriodicRefreshOnToken) {
+          console.log('✅ Token refreshed, recent non-merchant profile - skipping reload');
+          return;
         }
+        console.log('🔄 Token refreshed - reloading profile for authoritative merchant status');
       }
       
       // Skip timeout for certain events that don't require profile loading
@@ -756,12 +979,47 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (needsProcessing) {
         stateChangeTimeout = setTimeout(() => {
           console.warn('⚠️ Auth state change timeout - forcing loading to false');
+          const isSignInLike = (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') && session?.user;
+          if (isSignInLike) {
+            if (!userRef.current) {
+              const fallbackUser = createSessionFallbackUser(session, userRef.current);
+              if (fallbackUser) {
+                updateUser(fallbackUser as any);
+                try {
+                  localStorage.setItem('user', JSON.stringify(fallbackUser));
+                } catch {
+                  // best effort
+                }
+              }
+            }
+            if (lastAuthoritativeProfileSyncAtRef.current === 0) {
+              startBackgroundProfilePoller(session.user.id);
+            }
+          }
           setIsLoading(false);
         }, 25000);
       }
       
       try {
         if (session) {
+          // Store token IMMEDIATELY so BG poller and REST calls can authenticate
+          if (session.access_token) {
+            setToken(session.access_token);
+            try { localStorage.setItem('authToken', session.access_token); } catch {}
+          }
+
+          if ((event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') && !userRef.current) {
+            const fallbackUser = createSessionFallbackUser(session, userRef.current);
+            if (fallbackUser) {
+              updateUser(fallbackUser as any);
+              try {
+                localStorage.setItem('user', JSON.stringify(fallbackUser));
+              } catch {
+                // best effort
+              }
+            }
+            startBackgroundProfilePoller(session.user.id);
+          }
           try {
             localStorage.removeItem('oauth-pending-ts');
           } catch {
@@ -772,28 +1030,32 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           // 2. It's a SIGNED_IN event
           // 3. It's TOKEN_REFRESHED and user is a merchant (to ensure is_merchant is correct)
           const userForReload = userRef.current;
-          const isCurrentUserMerchant = userForReload ? (userForReload as any)?.is_merchant === true : false;
+          const isCurrentUserMerchant = userForReload ? resolveMerchantStatus(userForReload) : false;
+          const shouldPeriodicRefreshOnToken = event === 'TOKEN_REFRESHED' &&
+            (Date.now() - lastAuthoritativeProfileSyncAtRef.current > 3 * 60 * 1000);
           const shouldReload = !userForReload ||
                               event === 'INITIAL_SESSION' ||
                               event === 'SIGNED_IN' ||
                               event === 'USER_UPDATED' ||
                               userForReload.id !== session.user.id ||
-                              (event === 'TOKEN_REFRESHED' && isCurrentUserMerchant);
+                              (event === 'TOKEN_REFRESHED' && (isCurrentUserMerchant || shouldPeriodicRefreshOnToken));
           
           if (shouldReload) {
             setIsLoading(true); // Set loading during profile load
             const shouldCleanUrl = event === 'SIGNED_IN' || (event === 'TOKEN_REFRESHED' && oauthInProgress);
             await loadUserProfile(session, event, shouldCleanUrl);
+            lastAuthoritativeProfileSyncAtRef.current = Date.now();
             // Authoritative second-pass refresh: prevents merchant users from
             // being stuck as normal users when first profile load falls back.
-            if (event === 'SIGNED_IN' || event === 'INITIAL_SESSION' || event === 'USER_UPDATED') {
+            if (event === 'SIGNED_IN' || event === 'INITIAL_SESSION' || event === 'USER_UPDATED' || (event === 'TOKEN_REFRESHED' && !currentUser)) {
               setTimeout(() => {
                 void refreshUser();
               }, 300);
             }
             
             // Profile loaded successfully - ensure URL is clean and trigger navigation
-            if (event === 'SIGNED_IN') {
+            const isLoginEvent = event === 'SIGNED_IN' || (event === 'TOKEN_REFRESHED' && !currentUser);
+            if (isLoginEvent) {
               console.log('✅ OAuth login successful, profile loaded');
               // Clear OAuth callback flag
               setIsOAuthCallback(false);
@@ -829,7 +1091,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               clearTimeout(stateChangeTimeout);
             }
             setToken(null);
-            setUser(null);
+            updateUser(null);
             localStorage.removeItem('authToken');
             localStorage.removeItem('user');
             setIsLoading(false);
@@ -864,7 +1126,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                 if (stateChangeTimeout) {
                   clearTimeout(stateChangeTimeout);
                 }
-                setUser(guestUser);
+                updateUser(guestUser);
                 setIsLoading(false);
                 return;
               }
@@ -880,7 +1142,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             clearTimeout(stateChangeTimeout);
           }
           setToken(null);
-          setUser(null);
+          updateUser(null);
           localStorage.removeItem('authToken');
           localStorage.removeItem('user');
           setIsLoading(false);
@@ -894,7 +1156,31 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
     });
 
-    return () => subscription.unsubscribe();
+    // Fallback: when setSession fails, App.tsx dispatches this event with JWT-derived user
+    const handleFallbackLogin = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (detail?.user && detail?.token) {
+        console.log('🔑 OAuth fallback login received');
+        updateUser(detail.user);
+        setToken(detail.token);
+        try {
+          localStorage.setItem('authToken', detail.token);
+          localStorage.setItem('user', JSON.stringify(detail.user));
+        } catch { /* best effort */ }
+        setIsLoading(false);
+        setIsOAuthCallback(false);
+        isOAuthCallbackRef.current = false;
+        if (detail.user.id) {
+          startBackgroundProfilePoller(detail.user.id);
+        }
+      }
+    };
+    window.addEventListener('oauth-fallback-login', handleFallbackLogin);
+
+    return () => {
+      subscription.unsubscribe();
+      window.removeEventListener('oauth-fallback-login', handleFallbackLogin);
+    };
   }, []);
 
   const register = async (email: string, password: string, name: string, isMerchant: boolean = false) => {
@@ -911,7 +1197,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
       
       if (data.user) {
-        setUser(data.user);
+        updateUser(data.user);
         localStorage.setItem('user', JSON.stringify(data.user));
         console.log('✅ User state updated in AuthContext');
       } else {
@@ -945,7 +1231,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // Always set user immediately from auth API response.
       // This prevents stale non-merchant UI when refreshUser is delayed/fails.
       if (data.user) {
-        setUser(data.user as any);
+        updateUser(data.user as any);
         localStorage.setItem('user', JSON.stringify(data.user));
       }
 
@@ -981,7 +1267,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       const data = await authAPI.guestLogin();
       setToken(data.token);
-      setUser(data.user);
+      updateUser(data.user);
     } catch (error) {
       console.error('Guest login error:', error);
       throw error;
@@ -989,39 +1275,51 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const logout = async () => {
-    const safeSignOut = async (scope: 'local' | 'global') => {
-      await Promise.race([
-        supabase.auth.signOut({ scope }),
-        new Promise<void>((resolve) => setTimeout(resolve, 2500)),
-      ]).catch(() => undefined);
-    };
+    console.log('🚪 Logging out...');
+    // Save merchant hint before clearing state so next login preserves role
+    try {
+      const currentUser = userRef.current;
+      if (currentUser?.email && (currentUser.is_merchant || (currentUser as any).isMerchant)) {
+        localStorage.setItem('merchant-hint-' + currentUser.email, '1');
+      }
+    } catch { /* best effort */ }
+
+    isLoggingOutRef.current = true;
+
+    if (bgProfilePollerRef.current) {
+      clearInterval(bgProfilePollerRef.current);
+      bgProfilePollerRef.current = null;
+    }
+
+    lastAuthoritativeProfileSyncAtRef.current = 0;
+    setToken(null);
+    updateUser(null);
+    clearAuthStorage();
+    setIsOAuthCallback(false);
+    isOAuthCallbackRef.current = false;
 
     try {
-      console.log('🚪 Logging out...');
-      // Sign out from Supabase, but never block logout UX indefinitely.
+      // Backend logout (best effort, short timeout)
       await Promise.race([
         authAPI.logout(),
-        new Promise<void>((resolve) => setTimeout(resolve, 4500)),
-      ]);
-      // Ensure both local and remote sessions are requested to sign out, without hanging UI.
-      await safeSignOut('local');
-      await safeSignOut('global');
-      // Clear local state/storage no matter what.
-      setToken(null);
-      setUser(null);
-      clearAuthStorage();
-      setIsOAuthCallback(false);
-      isOAuthCallbackRef.current = false;
-      console.log('✅ Logout successful');
+        new Promise<void>((resolve) => setTimeout(resolve, 3000)),
+      ]).catch(() => {});
+
+      // Supabase signOut (best effort, short timeout)
+      await Promise.race([
+        supabase.auth.signOut({ scope: 'local' }),
+        new Promise<void>((resolve) => setTimeout(resolve, 2000)),
+      ]).catch(() => {});
     } catch (error) {
-      console.error('❌ Logout error:', error);
-      // Even if logout fails, force local state cleanup.
-      await safeSignOut('local');
-      setToken(null);
-      setUser(null);
+      console.error('❌ Logout error (non-critical):', error);
+    } finally {
+      // Re-clear storage in case signOut stored something
       clearAuthStorage();
-      setIsOAuthCallback(false);
-      isOAuthCallbackRef.current = false;
+      // Release the logout lock after a brief delay so any trailing events are blocked
+      setTimeout(() => {
+        isLoggingOutRef.current = false;
+        console.log('✅ Logout complete, auth events unblocked');
+      }, 1000);
     }
   };
 
@@ -1071,8 +1369,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
       
       if (profile) {
-        // Ensure preferences and search_radius are properly set
-        // Priority: preferences.searchRadius (newer) > search_radius (legacy) > default
+        const isMerchantFromProfile = resolveMerchantStatus(profile);
+        const isMerchantFinal = isMerchantFromProfile || hasMerchantProducts;
+
+        // AUTO-REPAIR in refreshUser path too
+        if (hasMerchantProducts && !isMerchantFromProfile) {
+          console.log('🔧 refreshUser: Auto-repairing is_merchant flag');
+          try {
+            const { data: repairedProfile } = await supabase
+              .from('users')
+              .update({ is_merchant: true })
+              .eq('id', session.user.id)
+              .select('*')
+              .single();
+            if (repairedProfile) {
+              profile = repairedProfile;
+              console.log('✅ refreshUser: is_merchant auto-repaired');
+            }
+          } catch {
+            // best effort repair
+          }
+        }
+
         const preferencesRadius = profile.preferences?.searchRadius;
         const legacyRadius = profile.search_radius;
         const finalSearchRadius = preferencesRadius !== undefined 
@@ -1081,20 +1399,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         
         const userData = {
           ...profile,
-          is_merchant: resolveMerchantStatus(profile) || hasMerchantProducts,
+          is_merchant: isMerchantFinal,
           preferences: {
             ...(profile.preferences || {}),
-            searchRadius: finalSearchRadius, // Ensure preferences.searchRadius is always set
+            searchRadius: finalSearchRadius,
           },
-          search_radius: finalSearchRadius, // Keep legacy column for backward compatibility
+          search_radius: finalSearchRadius,
         };
-        setUser(userData);
+        updateUser(userData);
         localStorage.setItem('user', JSON.stringify(userData));
-        console.log('✅ User refreshed with settings:', {
+        lastAuthoritativeProfileSyncAtRef.current = Date.now();
+        if (isMerchantFinal && userData.email) {
+          try { localStorage.setItem('merchant-hint-' + userData.email, '1'); } catch {}
+        } else if (!isMerchantFinal && userData.email) {
+          try { localStorage.removeItem('merchant-hint-' + userData.email); } catch {}
+        }
+        console.log('✅ User refreshed (authoritative):', {
           email: userData.email,
           is_merchant: userData.is_merchant,
-          preferences: userData.preferences,
-          search_radius: userData.search_radius,
+          merchant_subscription_status: profile.merchant_subscription_status,
+          hasMerchantProducts,
         });
       }
     } catch (error) {

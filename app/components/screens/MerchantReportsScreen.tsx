@@ -28,7 +28,13 @@ export default function MerchantReportsScreen() {
   const [dailyRows, setDailyRows] = useState<DailyRow[]>([]);
   const [productRows, setProductRows] = useState<ProductRow[]>([]);
 
-  const isMerchant = (user as any)?.is_merchant === true;
+  const merchantStatus = String((user as any)?.merchant_subscription_status || '').toLowerCase();
+  const merchantPlan = String((user as any)?.merchant_subscription_plan || '').trim();
+  const isMerchant =
+    (user as any)?.is_merchant === true ||
+    merchantStatus === 'active' ||
+    merchantStatus === 'past_due' ||
+    merchantPlan.length > 0;
 
   const loadReport = async () => {
       if (!user?.id) {

@@ -14,13 +14,9 @@ VITE_GOOGLE_MAPS_API_KEY=your-google-maps-api-key-here
 VITE_SUPABASE_URL=https://your-project.supabase.co
 VITE_SUPABASE_ANON_KEY=your-supabase-anon-key-here
 
-# Stripe (Client - sadece publishable key)
-# Native PaymentSheet initialize için kullanılır.
-VITE_STRIPE_PUBLISHABLE_KEY=pk_test_or_live_...
-
-# Aktif odeme saglayicisi (stripe veya iyzico)
-# Turkiye yayini icin varsayilan iyzico olmalidir.
-VITE_PAYMENT_PROVIDER=iyzico
+# Android Google Play Subscription Product ID'leri
+VITE_GOOGLE_PLAY_SUBS_PRODUCT_ID_MONTHLY=merchant_basic_monthly
+VITE_GOOGLE_PLAY_SUBS_PRODUCT_ID_YEARLY=merchant_basic_yearly
 ```
 
 ## Opsiyonel Değişkenler
@@ -62,8 +58,8 @@ Production build için `.env.production` dosyası oluşturun:
 VITE_GOOGLE_MAPS_API_KEY=your-production-api-key
 VITE_SUPABASE_URL=https://your-project.supabase.co
 VITE_SUPABASE_ANON_KEY=your-production-anon-key
-VITE_STRIPE_PUBLISHABLE_KEY=pk_live_...
-VITE_PAYMENT_PROVIDER=iyzico
+VITE_GOOGLE_PLAY_SUBS_PRODUCT_ID_MONTHLY=merchant_basic_monthly
+VITE_GOOGLE_PLAY_SUBS_PRODUCT_ID_YEARLY=merchant_basic_yearly
 VITE_API_URL=https://api.esnaftaucuz.com/api
 ```
 

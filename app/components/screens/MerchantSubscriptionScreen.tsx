@@ -1,39 +1,44 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useLocation, useNavigate } from 'react-router-dom';
-import { ArrowLeft, CreditCard, RefreshCw, ExternalLink } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { ArrowLeft, CreditCard, RefreshCw } from 'lucide-react';
 import { Button } from '../ui/button';
 import { useAuth } from '../../contexts/AuthContext';
 import { merchantSubscriptionAPI } from '../../services/supabase-api';
 import { toast } from 'sonner';
-import { Browser } from '@capacitor/browser';
 import { Capacitor } from '@capacitor/core';
+import { GooglePlayBilling } from '../../lib/google-play-billing';
 
 type MerchantSubscriptionStatus = 'inactive' | 'active' | 'past_due' | 'canceled';
 
-const MONTHLY_FEE_TL = 500;
+const MONTHLY_FEE_TL = 900;
+const YEARLY_FEE_TL = 9000;
 const TRIAL_DAYS = 10;
 const MERCHANT_SUBSCRIPTION_ONBOARDING_KEY = 'merchant-subscription-onboarding-user';
 const MERCHANT_SIGNUP_INTENT_KEY = 'merchant-signup-intent';
-const CHECKOUT_UI_TIMEOUT_MS = 40000;
+
+const resolveMerchantRole = (profile: any): boolean => {
+  const explicit = profile?.is_merchant === true;
+  const status = String(profile?.merchant_subscription_status || '').toLowerCase();
+  const hasActiveSubscription = status === 'active' || status === 'past_due';
+  const hasMerchantPlan = String(profile?.merchant_subscription_plan || '').trim().length > 0;
+  return explicit || hasActiveSubscription || hasMerchantPlan;
+};
 
 export default function MerchantSubscriptionScreen() {
   const navigate = useNavigate();
-  const location = useLocation();
   const { user, refreshUser } = useAuth();
-  const isMerchant = (user as any)?.is_merchant === true;
+  const isMerchant = resolveMerchantRole(user);
 
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isPaying, setIsPaying] = useState(false);
-  const [isAwaitingConfirmation, setIsAwaitingConfirmation] = useState(false);
   const [statusData, setStatusData] = useState<any>(null);
   const [payments, setPayments] = useState<any[]>([]);
   const [isStartingTrial, setIsStartingTrial] = useState(false);
 
   const currentStatus: MerchantSubscriptionStatus = (statusData?.merchant_subscription_status || 'inactive') as MerchantSubscriptionStatus;
   const feeTl = statusData?.merchant_subscription_fee_tl || MONTHLY_FEE_TL;
-  const selectedBillingMonths = 1;
-  const selectedAmountTl = MONTHLY_FEE_TL;
+  const [selectedBillingMonths, setSelectedBillingMonths] = useState<1 | 12>(1);
   const periodEndDate = statusData?.merchant_subscription_current_period_end
     ? new Date(statusData.merchant_subscription_current_period_end)
     : null;
@@ -68,7 +73,7 @@ export default function MerchantSubscriptionScreen() {
   }, [currentStatus]);
 
   const loadData = async (showLoader: boolean = true) => {
-    if (!user?.id) return;
+    if (!user?.id) return null;
     try {
       if (showLoader) setIsLoading(true);
       const [status, paymentList] = await Promise.all([
@@ -77,6 +82,7 @@ export default function MerchantSubscriptionScreen() {
       ]);
       setStatusData(status);
       setPayments(paymentList);
+      return { status, paymentList };
     } catch (error: any) {
       console.error('Subscription screen load error:', error);
       const msg = String(error?.message || '').toLowerCase();
@@ -88,12 +94,14 @@ export default function MerchantSubscriptionScreen() {
       if (!isTransient) {
         toast.error(error.message || 'Abonelik verileri yüklenemedi');
       }
+      return null;
     } finally {
       if (showLoader) setIsLoading(false);
     }
   };
 
   useEffect(() => {
+    let cancelled = false;
     try {
       if (user?.id && localStorage.getItem(MERCHANT_SIGNUP_INTENT_KEY) === '1') {
         localStorage.setItem(MERCHANT_SUBSCRIPTION_ONBOARDING_KEY, user.id);
@@ -101,12 +109,28 @@ export default function MerchantSubscriptionScreen() {
     } catch {
       // best effort
     }
-    if (!isMerchant && !onboardingRequired) {
-      toast.error('Bu sayfa sadece esnaf hesapları içindir');
-      navigate('/app/profile', { replace: true });
-      return;
-    }
-    loadData(true);
+
+    const bootstrap = async () => {
+      const loaded = await loadData(true);
+      if (cancelled) return;
+
+      // Redirect only after we have an authoritative status snapshot.
+      if (!loaded) return;
+      const status = loaded.status || {};
+      const resolvedMerchantByStatus =
+        String(status?.merchant_subscription_status || '').toLowerCase() === 'active' ||
+        String(status?.merchant_subscription_status || '').toLowerCase() === 'past_due' ||
+        String(status?.merchant_subscription_plan || '').trim().length > 0;
+      if (!isMerchant && !resolvedMerchantByStatus && !onboardingRequired) {
+        toast.error('Bu sayfa sadece esnaf hesapları içindir');
+        navigate('/app/profile', { replace: true });
+      }
+    };
+
+    void bootstrap();
+    return () => {
+      cancelled = true;
+    };
   }, [isMerchant, onboardingRequired, user?.id]);
 
   useEffect(() => {
@@ -125,75 +149,6 @@ export default function MerchantSubscriptionScreen() {
     };
   }, []);
 
-  useEffect(() => {
-    const params = new URLSearchParams(location.search);
-    const checkout = params.get('checkout');
-    const paymentId = params.get('paymentId');
-
-    if (checkout === 'success') {
-      setIsAwaitingConfirmation(true);
-      toast.info('Odeme alindi, abonelik onayi bekleniyor...');
-      loadData(false);
-      if (refreshUser) refreshUser();
-      navigate('/app/merchant-subscription', { replace: true });
-      return;
-    }
-
-    if (checkout === 'cancel') {
-      toast.error('Ödeme iptal edildi');
-      navigate('/app/merchant-subscription', { replace: true });
-    }
-  }, [location.search]);
-
-  useEffect(() => {
-    if (!isAwaitingConfirmation || !user?.id) return;
-
-    let cancelled = false;
-    let attempts = 0;
-    const maxAttempts = 12;
-
-    const poll = async () => {
-      while (!cancelled && attempts < maxAttempts) {
-        attempts += 1;
-        try {
-          const [status, paymentList] = await Promise.all([
-            merchantSubscriptionAPI.getStatus(user.id),
-            merchantSubscriptionAPI.getPayments(user.id, 10),
-          ]);
-          if (cancelled) return;
-          setStatusData(status);
-          setPayments(paymentList);
-
-          const latestPendingOrConfirmed = (paymentList || []).find(
-            (p: any) => p?.provider === 'stripe' || p?.provider === 'iyzico'
-          );
-
-          if (status?.is_active || latestPendingOrConfirmed?.status === 'confirmed') {
-            toast.success('Odeme onaylandi, abonelik aktif edildi.');
-            if (refreshUser) await refreshUser();
-            setIsAwaitingConfirmation(false);
-            return;
-          }
-        } catch (error) {
-          console.warn('Subscription confirmation poll failed:', error);
-        }
-
-        await new Promise((resolve) => setTimeout(resolve, 2500));
-      }
-
-      if (!cancelled) {
-        toast.warning('Onay biraz gecikiyor olabilir. "Yenile" ile durumu kontrol edebilirsiniz.');
-        setIsAwaitingConfirmation(false);
-      }
-    };
-
-    poll();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [isAwaitingConfirmation, user?.id, refreshUser]);
-
   const handleRefresh = async () => {
     if (!user?.id) return;
     try {
@@ -208,122 +163,52 @@ export default function MerchantSubscriptionScreen() {
     }
   };
 
-  const handleCardPayment = async () => {
+  const handleGooglePlayPayment = async () => {
     if (!user?.id) {
       toast.error('Oturum bulunamadı. Lütfen tekrar giriş yapın.');
       return;
     }
+    if (!Capacitor.isNativePlatform() || Capacitor.getPlatform() !== 'android') {
+      toast.error('Abonelik ödemesi sadece Android Google Play üzerinden alınır.');
+      return;
+    }
 
-    const tryRecoverAndOpenCheckout = async (): Promise<boolean> => {
-      try {
-        const paymentList = await merchantSubscriptionAPI.getPayments(user.id, 10);
-        const recovered = (paymentList || []).find((p: any) => {
-          const url = String(
-            p?.metadata?.invoice_hosted_url ||
-            p?.metadata?.invoiceHostedUrl ||
-            p?.metadata?.checkout_url ||
-            p?.metadata?.checkoutUrl ||
-            ''
-          ).trim();
-          const status = String(p?.status || '').toLowerCase();
-          return p?.provider === 'iyzico' && url.startsWith('http') && (status === 'pending' || status === 'processing');
-        });
-
-        const recoveredUrl = String(
-          recovered?.metadata?.invoice_hosted_url ||
-          recovered?.metadata?.invoiceHostedUrl ||
-          recovered?.metadata?.checkout_url || recovered?.metadata?.checkoutUrl || ''
-        ).trim();
-        if (!recoveredUrl.startsWith('http')) return false;
-
-        if (Capacitor.isNativePlatform()) {
-          await Promise.race([
-            Browser.open({ url: recoveredUrl }),
-            new Promise((resolve) => setTimeout(resolve, 8000)),
-          ]);
-        } else {
-          window.open(recoveredUrl, '_blank');
-        }
-        toast.success('Ödeme bağlantısı kurtarıldı ve açıldı');
-        return true;
-      } catch {
-        return false;
-      }
-    };
-
-    const tryRecoverAndOpenCheckoutWithPolling = async (): Promise<boolean> => {
-      const startedAt = Date.now();
-      const maxWaitMs = 60000;
-      const intervalMs = 4000;
-      while ((Date.now() - startedAt) < maxWaitMs) {
-        const recovered = await tryRecoverAndOpenCheckout();
-        if (recovered) return true;
-        await new Promise((resolve) => setTimeout(resolve, intervalMs));
-      }
-      return false;
-    };
+    const productId = merchantSubscriptionAPI.getGooglePlayProductId(selectedBillingMonths);
+    if (!productId) {
+      toast.error('Google Play ürün ID yapılandırması eksik.');
+      return;
+    }
 
     try {
       setIsPaying(true);
-      toast.info('Ödeme sayfası hazırlanıyor...');
+      toast.info('Google Play ödeme ekranı açılıyor...');
 
-      const result = await Promise.race([
-        merchantSubscriptionAPI.startProviderCheckout({
-          userId: user.id,
-          provider: 'iyzico',
-          amountTl: selectedAmountTl,
-          billingPeriodMonths: selectedBillingMonths,
-        }),
-        new Promise((_, reject) =>
-          setTimeout(() => reject(new Error('checkout_ui_timeout')), CHECKOUT_UI_TIMEOUT_MS)
-        ),
-      ]) as Awaited<ReturnType<typeof merchantSubscriptionAPI.startProviderCheckout>>;
+      const purchase = await GooglePlayBilling.purchaseSubscription({ productId });
+      await merchantSubscriptionAPI.confirmGooglePlayPurchase({
+        purchaseToken: purchase.purchaseToken,
+        productId: purchase.productId || productId,
+        orderId: purchase.orderId,
+        packageName: purchase.packageName,
+        purchaseTime: purchase.purchaseTime,
+      });
 
-      if (result.checkoutUrl) {
-        try {
-          localStorage.removeItem(MERCHANT_SUBSCRIPTION_ONBOARDING_KEY);
-        } catch {
-          // ignore storage errors
-        }
-        if (Capacitor.isNativePlatform()) {
-          await Promise.race([
-            Browser.open({ url: result.checkoutUrl }),
-            new Promise((resolve) => setTimeout(resolve, 8000)),
-          ]);
-        } else {
-          window.open(result.checkoutUrl, '_blank');
-        }
-        toast.success('Ödeme sayfası açıldı');
-        void loadData(false);
-        return;
+      try {
+        localStorage.removeItem(MERCHANT_SUBSCRIPTION_ONBOARDING_KEY);
+      } catch {
+        // ignore storage errors
       }
 
-      throw new Error('Ödeme bağlantısı oluşturulamadı. Lütfen internetinizi değiştirip tekrar deneyin.');
+      await loadData(false);
+      if (refreshUser) await refreshUser();
+      toast.success('Abonelik Google Play ile aktif edildi.');
     } catch (error: any) {
-      console.error('Provider payment start error:', error);
+      console.error('Google Play payment error:', error);
       const errText = String(error?.message || '').toLowerCase();
-      if (errText.includes('oturum') || errText.includes('401') || errText.includes('geçersiz')) {
-        toast.error('Oturum süresi doldu. Lütfen çıkış yapıp tekrar giriş yapın.');
-        setIsAwaitingConfirmation(false);
+      if (errText.includes('iptal')) {
+        toast.error('Satın alma işlemi iptal edildi.');
         return;
       }
-      if (
-        errText.includes('checkout_ui_timeout') ||
-        errText.includes('subscription_create_timeout') ||
-        errText.includes('timeout') ||
-        errText.includes('zaman aşım')
-      ) {
-        toast.info('Ödeme bağlantısı aranıyor, lütfen bekleyin...');
-        const recovered = await tryRecoverAndOpenCheckoutWithPolling();
-        if (!recovered) {
-          toast.error('Ödeme hazırlığı uzadı. Lütfen tekrar deneyin.');
-        }
-      } else {
-        const recovered = await tryRecoverAndOpenCheckout();
-        if (!recovered) {
-          toast.error(error.message || 'Ödeme başlatılamadı');
-        }
-      }
+      toast.error(error.message || 'Google Play abonelik işlemi tamamlanamadı');
     } finally {
       setIsPaying(false);
     }
@@ -376,7 +261,7 @@ export default function MerchantSubscriptionScreen() {
             variant="outline"
             size="sm"
             onClick={handleRefresh}
-            disabled={isRefreshing || isAwaitingConfirmation}
+            disabled={isRefreshing}
             className={isMerchant ? 'bg-white text-blue-700 border-white' : ''}
           >
             <RefreshCw className={`w-4 h-4 mr-1 ${isRefreshing ? 'animate-spin' : ''}`} />
@@ -399,9 +284,11 @@ export default function MerchantSubscriptionScreen() {
             <span className={`font-semibold ${currentStatus === 'active' ? 'text-green-600' : 'text-amber-700'}`}>{statusLabel}</span>
           </div>
           <div className="text-sm text-gray-700">
-            Plan: {statusData?.merchant_subscription_plan || 'merchant_basic_500_tl_monthly'}
+            Plan: {statusData?.merchant_subscription_plan || 'merchant_basic_monthly'}
           </div>
-          <div className="text-sm text-gray-700">{feeTl} TL / ay</div>
+          <div className="text-sm text-gray-700">
+            {feeTl} TL / {String(statusData?.merchant_subscription_plan || '').includes('yearly') ? 'yıl' : 'ay'}
+          </div>
           <div className="text-sm text-gray-700">
             Dönem Sonu:{' '}
             {statusData?.merchant_subscription_current_period_end
@@ -411,19 +298,48 @@ export default function MerchantSubscriptionScreen() {
           {isTrialPlan && currentStatus === 'active' && (
             <div className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
               Deneme aboneliği aktif. Kalan süre: <span className="font-semibold">{daysRemaining} gün</span>.
-              Deneme sonunda kredi kartı ile aylık {MONTHLY_FEE_TL} TL abonelik başlatmanız gerekir.
+              Deneme sonunda Google Play ile abonelik başlatmanız gerekir.
             </div>
           )}
         </div>
 
         <div className="bg-white rounded-lg p-4 border border-gray-200">
           <h2 className="text-lg font-semibold mb-3">Esnaf Planı</h2>
-          <div className="rounded-md border border-gray-200 p-3 text-sm">
-            <div className="font-semibold text-gray-900">Aylık Abonelik</div>
-            <div className="text-gray-700 mt-1">{MONTHLY_FEE_TL} TL / ay</div>
-            <div className="text-xs text-gray-500 mt-1">
-              Kayıt sırasında ödeme yapmazsan {TRIAL_DAYS} gün deneme başlar. Deneme bitiminde kredi kartı ile abonelik başlatabilirsin.
-            </div>
+          <div className="space-y-2">
+            <button
+              type="button"
+              onClick={() => setSelectedBillingMonths(1)}
+              className={`w-full rounded-md border p-3 text-sm text-left transition-colors ${
+                selectedBillingMonths === 1
+                  ? 'border-blue-500 bg-blue-50 ring-1 ring-blue-500'
+                  : 'border-gray-200 hover:border-gray-300'
+              }`}
+            >
+              <div className="flex items-center justify-between">
+                <div className="font-semibold text-gray-900">Aylık Plan</div>
+                <div className="font-bold text-blue-700">{MONTHLY_FEE_TL} TL / ay</div>
+              </div>
+            </button>
+            <button
+              type="button"
+              onClick={() => setSelectedBillingMonths(12)}
+              className={`w-full rounded-md border p-3 text-sm text-left transition-colors ${
+                selectedBillingMonths === 12
+                  ? 'border-blue-500 bg-blue-50 ring-1 ring-blue-500'
+                  : 'border-gray-200 hover:border-gray-300'
+              }`}
+            >
+              <div className="flex items-center justify-between">
+                <div>
+                  <div className="font-semibold text-gray-900">Yıllık Plan</div>
+                  <div className="text-xs text-green-600 mt-0.5">Aylık {Math.round(YEARLY_FEE_TL / 12)} TL &mdash; %{Math.round((1 - YEARLY_FEE_TL / (MONTHLY_FEE_TL * 12)) * 100)} tasarruf</div>
+                </div>
+                <div className="font-bold text-blue-700">{YEARLY_FEE_TL} TL / yıl</div>
+              </div>
+            </button>
+          </div>
+          <div className="text-xs text-gray-500 mt-2">
+            Kayıt sırasında ödeme yapmazsan {TRIAL_DAYS} gün deneme başlar. Deneme bitiminde Google Play ile abonelik başlatabilirsin.
           </div>
         </div>
 
@@ -431,7 +347,7 @@ export default function MerchantSubscriptionScreen() {
           <div className="bg-white rounded-lg p-4 border border-amber-200">
             <h2 className="text-lg font-semibold mb-2">Devam etmek için seçim yap</h2>
             <p className="text-sm text-gray-700 mb-3">
-              Esnaf hesabına devam etmek için önce {TRIAL_DAYS} günlük deneme başlatmalı veya kredi kartı ile abone olmalısın.
+              Esnaf hesabına devam etmek için önce {TRIAL_DAYS} günlük deneme başlatmalı veya Google Play ile abone olmalısın.
             </p>
             <Button
               onClick={handleStartTrial}
@@ -445,37 +361,20 @@ export default function MerchantSubscriptionScreen() {
         )}
 
         <div className="bg-white rounded-lg p-4 border border-gray-200">
-          <h2 className="text-lg font-semibold mb-3">iyzico ile Güvenli Ödeme</h2>
-          <div className="space-y-2 mb-3">
-            <img
-              src="/iyzico-assets/logo-band-colored.png"
-              alt="VISA, Mastercard ve iyzico logolari"
-              className="w-full rounded-md border border-gray-200 bg-white p-2"
-              loading="lazy"
-            />
-            <img
-              src="/iyzico-assets/iyzico-ile-ode-horizontal.png"
-              alt="iyzico ile ode logosu"
-              className="w-full rounded-md border border-gray-200 bg-white p-2"
-              loading="lazy"
-            />
-          </div>
+          <h2 className="text-lg font-semibold mb-3">Google Play ile Abonelik</h2>
           <div className="grid grid-cols-1 gap-2">
-            <Button onClick={handleCardPayment} disabled={isPaying}>
+            <Button onClick={handleGooglePlayPayment} disabled={isPaying} className="h-12">
               <CreditCard className="w-4 h-4 mr-2" />
-              {isPaying ? 'Ödeme başlatılıyor...' : `iyzico ile Öde (${selectedAmountTl} TL / ay)`}
-              <ExternalLink className="w-4 h-4 ml-2" />
+              {isPaying
+                ? 'Google Play açılıyor...'
+                : selectedBillingMonths === 12
+                  ? `Google Play ile Öde (${YEARLY_FEE_TL} TL / yıl)`
+                  : `Google Play ile Öde (${MONTHLY_FEE_TL} TL / ay)`}
             </Button>
           </div>
           <p className="text-xs text-gray-500 mt-2">
-            Odeme iyzico guvenli odeme sayfasi uzerinden tamamlanir.
-            Basarili odeme sonrasi webhook ile abonelik otomatik aktif edilir.
+            Android uygulamada dijital abonelik ödemeleri yalnızca Google Play Billing üzerinden tamamlanır.
           </p>
-          {isAwaitingConfirmation && (
-            <p className="text-xs text-blue-700 mt-2">
-              Odeme alindi. Saglayici onayi bekleniyor, durum otomatik yenileniyor...
-            </p>
-          )}
           {isRenewalLocked && (
             <p className="text-xs text-amber-700 mt-2">
               Aboneliğiniz aktif ({daysRemaining} gün kaldı). Erken yenileme için ödeme yapabilirsiniz.

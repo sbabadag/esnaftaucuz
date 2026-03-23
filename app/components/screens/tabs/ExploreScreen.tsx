@@ -61,11 +61,19 @@ interface Product {
   _id?: string;
 }
 
+const resolveMerchantRole = (profile: any): boolean => {
+  const explicit = profile?.is_merchant === true;
+  const status = String(profile?.merchant_subscription_status || '').toLowerCase();
+  const hasActiveSubscription = status === 'active' || status === 'past_due';
+  const hasMerchantPlan = String(profile?.merchant_subscription_plan || '').trim().length > 0;
+  return explicit || hasActiveSubscription || hasMerchantPlan;
+};
+
 export default function ExploreScreen() {
   const navigate = useNavigate();
   const { getCurrentPosition } = useGeolocation();
   const { user } = useAuth();
-  const isMerchant = (user as any)?.is_merchant === true;
+  const isMerchant = resolveMerchantRole(user);
   const { t, lang, setLang } = useLanguage();
   const [searchParams, setSearchParams] = useSearchParams();
   const [searchQuery, setSearchQuery] = useState('');
@@ -93,8 +101,8 @@ export default function ExploreScreen() {
   const channelRef = useRef<any>(null);
   const [headerHeight, setHeaderHeight] = useState<number>(0);
   const [heroHeight, setHeroHeight] = useState<number>(0);
-  const HEADER_OVERLAP = 0; // pixels to pull content up so it starts immediately under the search box
-  const HEADER_GAP = 8; // small extra gap to avoid overlap
+  const HEADER_OVERLAP = 74; // pull first section even further up under search
+  const HEADER_GAP = 4; // keep search bar 4px lower
   const retryCountRef = useRef<number>(0);
   const lastSlowToastAtRef = useRef<number>(0);
   const restoredCacheRef = useRef<boolean>(false);
@@ -130,6 +138,13 @@ export default function ExploreScreen() {
     typeof window !== 'undefined' &&
     !!(window as any).Capacitor?.isNativePlatform &&
     (window as any).Capacitor.isNativePlatform();
+  const enablePullToRefresh = !isNativePlatform;
+  // Android'de env(safe-area-inset-top) çoğu cihazda 0 dönebiliyor.
+  // Bu nedenle native tarafta sabit bir üst inset ekleyerek bandı dead area altına iteriz.
+  const heroNativeTopOffset = isNativePlatform ? 34 : 0;
+  const bottomNativeOffset = isNativePlatform ? 10 : 0;
+  const bottomBandReserve = `calc(5rem + env(safe-area-inset-bottom, 0px) + ${bottomNativeOffset}px)`;
+  const contentTopOffset = heroHeight + HEADER_GAP + heroNativeTopOffset;
   const showSlowLoadingToast = () => {
     // Web'de veri sonunda geldigi icin bu toast gürültü üretiyor.
     if (!isNativePlatform) return;
@@ -919,7 +934,7 @@ export default function ExploreScreen() {
       clearTimeout(safetyTimeout);
       if (ro && headerRef.current) ro.disconnect();
     };
-  }, [loadData, trendProducts.length, recentPrices.length, nearbyCheapest.length, merchantShops.length]);
+  }, [loadData]);
 
   // Supabase Realtime subscription for price updates
   useEffect(() => {
@@ -1110,6 +1125,7 @@ export default function ExploreScreen() {
 
   // Pull-to-refresh handlers
   const handleTouchStart = (e: React.TouchEvent) => {
+    if (!enablePullToRefresh) return;
     const container = scrollContainerRef.current;
     if (!container) return;
     
@@ -1120,6 +1136,7 @@ export default function ExploreScreen() {
   };
 
   const handleTouchMove = (e: React.TouchEvent) => {
+    if (!enablePullToRefresh) return;
     if (touchStartY.current === null || isRefreshing) return;
     
     const container = scrollContainerRef.current;
@@ -1140,6 +1157,7 @@ export default function ExploreScreen() {
   };
 
   const handleTouchEnd = () => {
+    if (!enablePullToRefresh) return;
     if (touchStartY.current === null || isRefreshing) return;
     
     const container = scrollContainerRef.current;
@@ -1391,19 +1409,13 @@ export default function ExploreScreen() {
 
   return (
     <div 
-      className="min-h-screen bg-gray-50 relative"
+      className="h-[100dvh] overflow-hidden bg-gray-50 relative overscroll-none"
       onTouchStart={handleTouchStart}
       onTouchMove={handleTouchMove}
       onTouchEnd={handleTouchEnd}
     >
-      {/* Debug banner showing webview origin to confirm where assets are loaded from */}
-      <div className="fixed left-0 right-0 z-60 flex justify-center pointer-events-none" style={{ top: 'calc(env(safe-area-inset-top, 0px) + 4px)' }}>
-        <div className="bg-red-600 text-white text-xs px-3 py-1 rounded opacity-95 pointer-events-auto">
-          Origin: {typeof window !== 'undefined' ? window.location.protocol + '//' + window.location.host : 'n/a'} {typeof window !== 'undefined' && window.location.pathname}
-        </div>
-      </div>
       {/* Pull-to-refresh indicator */}
-      {pullDistance > 0 && (
+      {enablePullToRefresh && pullDistance > 0 && (
         <div 
           className="absolute left-0 right-0 flex items-center justify-center bg-white border-b border-gray-200 z-20 transition-transform duration-200"
           style={{ 
@@ -1431,7 +1443,7 @@ export default function ExploreScreen() {
 
       {/* Fixed Hero Section */}
       <div ref={heroRef} className={`fixed left-0 right-0 ${isMerchant ? 'bg-gradient-to-br from-blue-600 via-blue-500 to-blue-600 text-white' : 'bg-gradient-to-br from-green-600 via-green-500 to-emerald-600 text-white'}`} style={{ 
-        top: 'env(safe-area-inset-top, 0px)',
+        top: `calc(env(safe-area-inset-top, 0px) + ${heroNativeTopOffset}px)`,
         paddingTop: '0.5rem',
         paddingBottom: '0.5rem',
         height: 'auto',
@@ -1481,12 +1493,12 @@ export default function ExploreScreen() {
       {/* Header - positioned directly below hero with no gap */}
       <div ref={headerRef} className="bg-white border-b border-gray-200 sticky" style={{ 
         // place the search/header directly below the hero (measured heroHeight) with a small gap
-        top: `calc(${heroHeight + HEADER_GAP}px + env(safe-area-inset-top, 0px))`, 
+        top: `calc(${contentTopOffset}px + env(safe-area-inset-top, 0px))`, 
         margin: 0, 
         padding: 0,
         zIndex: 99
       }}>
-        <div className="px-4 py-1.5" style={{ marginTop: 0 }}>
+        <div className="px-4 py-0" style={{ marginTop: 0 }}>
           <div className="flex gap-2">
             <div className="flex-1 relative">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
@@ -1600,19 +1612,23 @@ export default function ExploreScreen() {
         className="px-3 sm:px-4 md:px-6 pb-3 sm:pb-4 md:pb-6 space-y-3 sm:space-y-4 overflow-y-auto max-w-7xl mx-auto"
           style={{ 
           paddingTop: pullDistance > 0 ? `${Math.min(pullDistance, 60)}px` : '0px',
-          // account for hero (measured) + measured header height so content starts immediately under search box
-          marginTop: `calc(${heroHeight + HEADER_GAP}px + env(safe-area-inset-top, 0px) + ${headerHeight}px - ${HEADER_OVERLAP}px)`,
-          minHeight: `calc(100vh - (${heroHeight + HEADER_GAP}px + ${headerHeight}px - ${HEADER_OVERLAP}px) - env(safe-area-inset-top, 0px))`,
-          maxHeight: `calc(100vh - (${heroHeight + HEADER_GAP}px + ${headerHeight}px - ${HEADER_OVERLAP}px) - env(safe-area-inset-top, 0px))`,
+          paddingBottom: bottomBandReserve,
+          // Scroll area should start right below the top "esnaftaucuz" band.
+          marginTop: `calc(${contentTopOffset}px)`,
+          minHeight: `calc(100dvh - (${contentTopOffset}px + 5rem + env(safe-area-inset-bottom, 0px) + ${bottomNativeOffset}px))`,
+          maxHeight: `calc(100dvh - (${contentTopOffset}px + 5rem + env(safe-area-inset-bottom, 0px) + ${bottomNativeOffset}px))`,
           transition: pullDistance === 0 ? 'padding-top 0.2s' : 'none',
+          overscrollBehaviorY: 'contain',
+          WebkitOverflowScrolling: 'touch',
+          touchAction: 'pan-y',
           position: 'relative',
           zIndex: 1
         }}
       >
         {/* Trend Products - En üste taşındı */}
         {!searchResults && (
-          <section>
-            <h2 className="text-base sm:text-lg mb-0 sm:mb-0 text-gray-900 font-semibold">Bugun En Cok Bakilanlar</h2>
+          <section className="mt-0 pt-0">
+            <h2 className="mt-0 pt-0 text-base sm:text-lg mb-0 sm:mb-0 text-gray-900 font-semibold">Bugun En Cok Bakilanlar</h2>
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-2 sm:gap-3">
               {trendProducts.length > 0 ? (
                 trendProducts.slice(0, 6).map((product) => (

@@ -241,14 +241,29 @@ Deno.serve(async (req) => {
             return String(pref).toLowerCase() === 'true' || String(pref) === '1';
           })
           .map((u: any) => u.id)
-          .filter((uid: any) => typeof uid === 'string' && uid.length > 0 && uid !== priceRow.user_id);
+          .filter((uid: any) => typeof uid === 'string' && uid.length > 0);
 
         // If profile rows are missing or preference rows are empty,
         // still dispatch to active-token users as a last resort.
         recipientIds = prefFiltered.length > 0
           ? prefFiltered
-          : tokenUserIds.filter((uid: string) => uid !== priceRow.user_id);
+          : tokenUserIds;
         tokenFallbackRecipientsCount = recipientIds.length;
+      }
+    }
+
+    // Final safety net: if still empty, notify the actor user when they have
+    // active push token(s). This helps single-user testing and web->mobile
+    // same-account scenarios without affecting normal multi-user flows.
+    if (recipientIds.length === 0) {
+      const { count: actorActiveTokenCount } = await client
+        .from('user_push_tokens')
+        .select('id', { count: 'exact', head: true })
+        .eq('user_id', priceRow.user_id)
+        .eq('is_active', true);
+
+      if ((actorActiveTokenCount || 0) > 0) {
+        recipientIds = [priceRow.user_id];
       }
     }
 
