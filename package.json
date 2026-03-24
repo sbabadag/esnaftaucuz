@@ -1,7 +1,7 @@
 {
   "name": "esnaftaucuz",
   "private": true,
-  "version": "1.0.6",
+  "version": "1.0.23",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -16,6 +16,7 @@
     "mobile:android": "npx cap open android",
     "mobile:build": "npm run build && npx cap sync",
     "mobile:build-sync": "npm run build && npx cap sync",
+    "mobile:publish:play:internal": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/publish-play-internal.ps1",
     "watch:sync": "npm run build && npx cap sync && echo 'Watching for changes...' && npm run build -- --watch",
     "dev:android": "node scripts/dev-android.js",
     "dev:ios": "concurrently -k \"vite\" \"wait-on http://localhost:5173 && npx cap run ios --livereload --external\"",
@@ -107,6 +108,7 @@
     "@vitejs/plugin-react": "4.7.0",
     "concurrently": "^8.2.2",
     "gh-pages": "^6.3.0",
+    "supabase": "^2.84.0",
     "tailwindcss": "4.1.12",
     "typescript": "^5.9.3",
     "vite": "6.3.5",

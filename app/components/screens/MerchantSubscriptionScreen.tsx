@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ArrowLeft, CreditCard, RefreshCw } from 'lucide-react';
 import { Button } from '../ui/button';
+import { BuildVersionBadge } from '../BuildVersionBadge';
 import { useAuth } from '../../contexts/AuthContext';
 import { merchantSubscriptionAPI } from '../../services/supabase-api';
 import { toast } from 'sonner';
@@ -24,6 +25,21 @@ const resolveMerchantRole = (profile: any): boolean => {
   return explicit || hasActiveSubscription || hasMerchantPlan;
 };
 
+/** Align UI plan selection with DB / Play plan id (monthly vs yearly). */
+const billingMonthsFromPlan = (plan: string | undefined | null): 1 | 12 => {
+  const p = String(plan || '').toLowerCase();
+  if (
+    p.includes('year') ||
+    p.includes('yillik') ||
+    p.includes('yıllık') ||
+    p.includes('annual') ||
+    p.includes('12')
+  ) {
+    return 12;
+  }
+  return 1;
+};
+
 export default function MerchantSubscriptionScreen() {
   const navigate = useNavigate();
   const { user, refreshUser } = useAuth();
@@ -35,6 +51,10 @@ export default function MerchantSubscriptionScreen() {
   const [statusData, setStatusData] = useState<any>(null);
   const [payments, setPayments] = useState<any[]>([]);
   const [isStartingTrial, setIsStartingTrial] = useState(false);
+
+  // Prevents stale DB reads from overwriting a confirmed-active optimistic state.
+  const purchaseConfirmedAtRef = useRef<number>(0);
+  const PROTECTION_WINDOW_MS = 120_000;
 
   const currentStatus: MerchantSubscriptionStatus = (statusData?.merchant_subscription_status || 'inactive') as MerchantSubscriptionStatus;
   const feeTl = statusData?.merchant_subscription_fee_tl || MONTHLY_FEE_TL;
@@ -72,6 +92,10 @@ export default function MerchantSubscriptionScreen() {
     }
   }, [currentStatus]);
 
+  const isStatusActive = (s: any) =>
+    !!s?.is_active ||
+    ['active', 'past_due'].includes(String(s?.merchant_subscription_status || '').toLowerCase());
+
   const loadData = async (showLoader: boolean = true) => {
     if (!user?.id) return null;
     try {
@@ -80,7 +104,21 @@ export default function MerchantSubscriptionScreen() {
         merchantSubscriptionAPI.getStatus(user.id),
         merchantSubscriptionAPI.getPayments(user.id, 10),
       ]);
-      setStatusData(status);
+
+      if (status !== null) {
+        const inProtectionWindow =
+          Date.now() - purchaseConfirmedAtRef.current < PROTECTION_WINDOW_MS;
+
+        // During the protection window after a confirmed purchase, never
+        // let a stale DB read regress from active → inactive.
+        setStatusData((prev: any) => {
+          if (inProtectionWindow && isStatusActive(prev) && !isStatusActive(status)) {
+            console.log('🛡️ Protecting confirmed-active state from stale DB read');
+            return prev;
+          }
+          return status;
+        });
+      }
       setPayments(paymentList);
       return { status, paymentList };
     } catch (error: any) {
@@ -99,6 +137,21 @@ export default function MerchantSubscriptionScreen() {
       if (showLoader) setIsLoading(false);
     }
   };
+
+  // When subscription is active, highlight the actual plan from the server (not last click).
+  useEffect(() => {
+    if (!statusData) return;
+    const st = String(statusData.merchant_subscription_status || '').toLowerCase();
+    const active =
+      !!statusData.is_active || st === 'active' || st === 'past_due';
+    if (active && statusData.merchant_subscription_plan) {
+      setSelectedBillingMonths(billingMonthsFromPlan(statusData.merchant_subscription_plan));
+    }
+  }, [
+    statusData?.merchant_subscription_plan,
+    statusData?.merchant_subscription_status,
+    statusData?.is_active,
+  ]);
 
   useEffect(() => {
     let cancelled = false;
@@ -153,8 +206,8 @@ export default function MerchantSubscriptionScreen() {
     if (!user?.id) return;
     try {
       setIsRefreshing(true);
-      await loadData(false);
       if (refreshUser) await refreshUser();
+      await loadData(false);
       toast.success('Abonelik durumu güncellendi');
     } catch {
       // handled in loadData
@@ -184,13 +237,24 @@ export default function MerchantSubscriptionScreen() {
       toast.info('Google Play ödeme ekranı açılıyor...');
 
       const purchase = await GooglePlayBilling.purchaseSubscription({ productId });
-      await merchantSubscriptionAPI.confirmGooglePlayPurchase({
-        purchaseToken: purchase.purchaseToken,
-        productId: purchase.productId || productId,
-        orderId: purchase.orderId,
-        packageName: purchase.packageName,
-        purchaseTime: purchase.purchaseTime,
-      });
+      const purchasedMonths = selectedBillingMonths;
+
+      let confirmResult: any = null;
+      try {
+        confirmResult = await merchantSubscriptionAPI.confirmGooglePlayPurchase({
+          purchaseToken: purchase.purchaseToken,
+          productId: purchase.productId || productId,
+          orderId: purchase.orderId,
+          purchaseTime: purchase.purchaseTime,
+        });
+      } catch (confirmErr: any) {
+        console.error('confirmGooglePlayPurchase error:', confirmErr);
+        toast.error(
+          confirmErr?.message ||
+            'Sunucu ödemeyi doğrulayamadı. İnternet veya Play yapılandırmasını kontrol edin.',
+        );
+        throw confirmErr;
+      }
 
       try {
         localStorage.removeItem(MERCHANT_SUBSCRIPTION_ONBOARDING_KEY);
@@ -198,9 +262,69 @@ export default function MerchantSubscriptionScreen() {
         // ignore storage errors
       }
 
-      await loadData(false);
-      if (refreshUser) await refreshUser();
-      toast.success('Abonelik Google Play ile aktif edildi.');
+      purchaseConfirmedAtRef.current = Date.now();
+      setSelectedBillingMonths(purchasedMonths);
+
+      let activated = false;
+
+      if (confirmResult?.ok && confirmResult?.active) {
+        activated = true;
+        const planCode =
+          confirmResult.billingPeriodMonths >= 12
+            ? 'merchant_google_play_yearly'
+            : 'merchant_google_play_monthly';
+        setStatusData((prev: any) => ({
+          ...(prev || {}),
+          id: user.id,
+          is_merchant: true,
+          merchant_subscription_status: confirmResult.status || 'active',
+          merchant_subscription_plan: planCode,
+          merchant_subscription_fee_tl: confirmResult.amountTl || (purchasedMonths >= 12 ? YEARLY_FEE_TL : MONTHLY_FEE_TL),
+          merchant_subscription_current_period_start: new Date().toISOString(),
+          merchant_subscription_current_period_end: confirmResult.periodEnd || null,
+          is_active: true,
+        }));
+        const months = (confirmResult.billingPeriodMonths ?? purchasedMonths) >= 12 ? 12 : 1;
+        setSelectedBillingMonths(months as 1 | 12);
+      } else if (confirmResult?.ok && !confirmResult?.active) {
+        toast.warning(
+          `Google Play durumu: ${confirmResult?.googleSubscriptionState || 'bilinmiyor'}. Bir süre sonra Yenile deneyin.`,
+        );
+      }
+
+      if (activated) {
+        toast.success('Abonelik Google Play ile aktif edildi!');
+
+        await new Promise((r) => setTimeout(r, 3000));
+        try { await loadData(false); } catch { /* best effort */ }
+        try { if (refreshUser) await refreshUser(); } catch { /* best effort */ }
+      } else {
+        await new Promise((r) => setTimeout(r, 2500));
+        for (let attempt = 0; attempt < 12; attempt++) {
+          const loaded = await loadData(false);
+          const s = loaded?.status as any;
+          if (isStatusActive(s)) {
+            activated = true;
+            if (s.merchant_subscription_plan) {
+              setSelectedBillingMonths(billingMonthsFromPlan(s.merchant_subscription_plan));
+            }
+            break;
+          }
+          await new Promise((r) => setTimeout(r, 2000));
+        }
+
+        await new Promise((r) => setTimeout(r, 1000));
+        try { if (refreshUser) await refreshUser(); } catch { /* best effort */ }
+        try { await loadData(false); } catch { /* best effort */ }
+
+        if (activated) {
+          toast.success('Abonelik Google Play ile aktif edildi!');
+        } else {
+          toast.error(
+            'Abonelik sunucuda görünmüyor. Yenile’ye basın; düzelmezse Supabase edge function ve Play API ayarlarını kontrol edin.',
+          );
+        }
+      }
     } catch (error: any) {
       console.error('Google Play payment error:', error);
       const errText = String(error?.message || '').toLowerCase();
@@ -218,15 +342,28 @@ export default function MerchantSubscriptionScreen() {
     if (!user?.id) return;
     try {
       setIsStartingTrial(true);
-      await merchantSubscriptionAPI.startTrial(user.id, TRIAL_DAYS);
+      const trialResult = await merchantSubscriptionAPI.startTrial(user.id, TRIAL_DAYS);
+
+      purchaseConfirmedAtRef.current = Date.now();
+
+      if (trialResult) {
+        setStatusData({
+          ...trialResult,
+          is_active: true,
+        });
+      }
+
       try {
         localStorage.removeItem(MERCHANT_SUBSCRIPTION_ONBOARDING_KEY);
       } catch {
         // ignore storage errors
       }
-      await loadData(false);
-      if (refreshUser) await refreshUser();
+
       toast.success(`${TRIAL_DAYS} günlük deneme aboneliği başlatıldı.`);
+
+      await new Promise((r) => setTimeout(r, 2000));
+      try { if (refreshUser) await refreshUser(); } catch { /* best effort */ }
+      try { await loadData(false); } catch { /* best effort */ }
     } catch (error: any) {
       console.error('Start trial error:', error);
       toast.error(error.message || 'Deneme aboneliği başlatılamadı');
@@ -278,10 +415,24 @@ export default function MerchantSubscriptionScreen() {
           paddingBottom: 'calc(1rem + env(safe-area-inset-bottom, 0px))',
         }}
       >
+        <div className="rounded-lg border border-blue-100 bg-blue-50/90 p-3 text-xs text-blue-900 leading-relaxed">
+          <p className="font-semibold text-blue-950">Bu ekran neden “değişmiyor” olabilir?</p>
+          <p className="mt-1.5">
+            <strong>Durum</strong> ve <strong>ödeme geçmişi</strong> telefondaki uygulama sürümünden değil,{' '}
+            <strong>Supabase veritabanından</strong> gelir. Google Play’de ödeme tamamlansa bile, sunucudaki{' '}
+            <strong>doğrulama (edge function)</strong> kayıt oluşturmadıysa burada hâlâ “Pasif” ve boş geçmiş
+            görürsün. Uygulama güncellemesi tek başına sunucuya satır eklemez.
+          </p>
+          <p className="mt-2 text-blue-800/90">
+            Çözüm: Supabase’de <code className="rounded bg-white/80 px-1">merchant-subscription-google-confirm</code>{' '}
+            fonksiyonunun deploy edildiğinden ve Google Play API / paket adı secret’larının doğru olduğundan emin olun.
+          </p>
+        </div>
+
         <div className="bg-white rounded-lg p-4 border border-gray-200">
           <div className="flex items-center justify-between mb-2">
             <span className="text-sm text-gray-600">Durum</span>
-            <span className={`font-semibold ${currentStatus === 'active' ? 'text-green-600' : 'text-amber-700'}`}>{statusLabel}</span>
+            <span className={`font-semibold ${currentStatus === 'active' || currentStatus === 'past_due' ? 'text-green-600' : 'text-amber-700'}`}>{statusLabel}</span>
           </div>
           <div className="text-sm text-gray-700">
             Plan: {statusData?.merchant_subscription_plan || 'merchant_basic_monthly'}
@@ -363,13 +514,15 @@ export default function MerchantSubscriptionScreen() {
         <div className="bg-white rounded-lg p-4 border border-gray-200">
           <h2 className="text-lg font-semibold mb-3">Google Play ile Abonelik</h2>
           <div className="grid grid-cols-1 gap-2">
-            <Button onClick={handleGooglePlayPayment} disabled={isPaying} className="h-12">
+            <Button onClick={handleGooglePlayPayment} disabled={isPaying || (isSubscriptionActive && !isRenewalLocked)} className="h-12">
               <CreditCard className="w-4 h-4 mr-2" />
               {isPaying
                 ? 'Google Play açılıyor...'
-                : selectedBillingMonths === 12
-                  ? `Google Play ile Öde (${YEARLY_FEE_TL} TL / yıl)`
-                  : `Google Play ile Öde (${MONTHLY_FEE_TL} TL / ay)`}
+                : isSubscriptionActive && !isRenewalLocked
+                  ? 'Abonelik Aktif ✓'
+                  : selectedBillingMonths === 12
+                    ? `Google Play ile Öde (${YEARLY_FEE_TL} TL / yıl)`
+                    : `Google Play ile Öde (${MONTHLY_FEE_TL} TL / ay)`}
             </Button>
           </div>
           <p className="text-xs text-gray-500 mt-2">
@@ -387,7 +540,13 @@ export default function MerchantSubscriptionScreen() {
           {isLoading ? (
             <p className="text-sm text-gray-500">Yükleniyor...</p>
           ) : payments.length === 0 ? (
-            <p className="text-sm text-gray-500">Henüz ödeme kaydı yok.</p>
+            <div className="space-y-1">
+              <p className="text-sm text-gray-500">Henüz ödeme kaydı yok.</p>
+              <p className="text-xs text-amber-800/90">
+                Kayıt yoksa sunucu tarafında ödeme satırı oluşmamış demektir; Play’de harcama görünse bile buraya
+                yansımaz.
+              </p>
+            </div>
           ) : (
             <div className="space-y-2">
               {payments.map((payment) => (
@@ -405,6 +564,10 @@ export default function MerchantSubscriptionScreen() {
               ))}
             </div>
           )}
+        </div>
+
+        <div className="pt-1 pb-2">
+          <BuildVersionBadge variant="onLight" className="px-1" />
         </div>
       </div>
     </div>

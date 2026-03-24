@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { AnimatePresence, motion } from 'motion/react';
 import { CheckCircle2, MapPin, Search, ShoppingBag, Tag, Camera, Send, PlusCircle } from 'lucide-react';
+import { BuildVersionBadge } from '../BuildVersionBadge';
 
 const STEP_DURATION_MS = 1800;
 
@@ -107,7 +108,7 @@ export default function SplashScreen({ autoNavigateToOnboarding = true }: Splash
   const ActiveStepIcon = tutorialSteps[activeStep].icon;
 
   return (
-    <div className="min-h-screen bg-gradient-to-b from-green-700 via-emerald-600 to-emerald-500 px-4 py-6 text-white">
+    <div className="flex min-h-screen flex-col bg-gradient-to-b from-green-700 via-emerald-600 to-emerald-500 px-4 py-6 text-white">
       <motion.div
         initial={{ opacity: 0, y: 12 }}
         animate={{ opacity: 1, y: 0 }}
@@ -307,6 +308,10 @@ export default function SplashScreen({ autoNavigateToOnboarding = true }: Splash
             </motion.div>
           </AnimatePresence>
         </motion.div>
+      </div>
+
+      <div className="mt-auto shrink-0 pt-4 pb-2">
+        <BuildVersionBadge variant="onDark" />
       </div>
     </div>
   );

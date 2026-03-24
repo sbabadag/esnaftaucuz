@@ -101,8 +101,7 @@ export default function ExploreScreen() {
   const channelRef = useRef<any>(null);
   const [headerHeight, setHeaderHeight] = useState<number>(0);
   const [heroHeight, setHeroHeight] = useState<number>(0);
-  const HEADER_OVERLAP = 74; // pull first section even further up under search
-  const HEADER_GAP = 4; // keep search bar 4px lower
+  const HEADER_GAP = 4; // gap below fixed hero before search row
   const retryCountRef = useRef<number>(0);
   const lastSlowToastAtRef = useRef<number>(0);
   const restoredCacheRef = useRef<boolean>(false);
@@ -144,7 +143,10 @@ export default function ExploreScreen() {
   const heroNativeTopOffset = isNativePlatform ? 34 : 0;
   const bottomNativeOffset = isNativePlatform ? 10 : 0;
   const bottomBandReserve = `calc(5rem + env(safe-area-inset-bottom, 0px) + ${bottomNativeOffset}px)`;
-  const contentTopOffset = heroHeight + HEADER_GAP + heroNativeTopOffset;
+  /** Fixed hero does not reserve layout space; spacer uses this height so search sits below the blue band. */
+  const heroBodyPx = Math.max(heroHeight || 0, 64);
+  const heroSpacerHeight = `calc(env(safe-area-inset-top, 0px) + ${heroNativeTopOffset + heroBodyPx + HEADER_GAP}px)`;
+  const pullIndicatorTop = `calc(env(safe-area-inset-top, 0px) + ${heroNativeTopOffset + heroBodyPx + HEADER_GAP + Math.max(headerHeight || 0, 52)}px)`;
   const showSlowLoadingToast = () => {
     // Web'de veri sonunda geldigi icin bu toast gürültü üretiyor.
     if (!isNativePlatform) return;
@@ -932,7 +934,7 @@ export default function ExploreScreen() {
 
     return () => {
       clearTimeout(safetyTimeout);
-      if (ro && headerRef.current) ro.disconnect();
+      if (ro) ro.disconnect();
     };
   }, [loadData]);
 
@@ -1409,7 +1411,7 @@ export default function ExploreScreen() {
 
   return (
     <div 
-      className="h-[100dvh] overflow-hidden bg-gray-50 relative overscroll-none"
+      className="flex h-[100dvh] flex-col overflow-hidden bg-gray-50 relative overscroll-none"
       onTouchStart={handleTouchStart}
       onTouchMove={handleTouchMove}
       onTouchEnd={handleTouchEnd}
@@ -1419,7 +1421,7 @@ export default function ExploreScreen() {
         <div 
           className="absolute left-0 right-0 flex items-center justify-center bg-white border-b border-gray-200 z-20 transition-transform duration-200"
           style={{ 
-            top: 'calc(109px + env(safe-area-inset-top, 0px))',
+            top: pullIndicatorTop,
             transform: `translateY(${Math.min(pullDistance, 120) - 60}px)`,
             height: '60px'
           }}
@@ -1448,7 +1450,7 @@ export default function ExploreScreen() {
         paddingBottom: '0.5rem',
         height: 'auto',
         minHeight: '56px', // increased to avoid overlapping header/search
-        zIndex: 100
+        zIndex: 50
       }}>
         <div className="px-4 h-full flex items-center justify-between">
           <div className="flex items-center gap-3 flex-1 min-w-0">
@@ -1490,15 +1492,12 @@ export default function ExploreScreen() {
         </div>
       </div>
 
-      {/* Header - positioned directly below hero with no gap */}
-      <div ref={headerRef} className="bg-white border-b border-gray-200 sticky" style={{ 
-        // place the search/header directly below the hero (measured heroHeight) with a small gap
-        top: `calc(${contentTopOffset}px + env(safe-area-inset-top, 0px))`, 
-        margin: 0, 
-        padding: 0,
-        zIndex: 99
-      }}>
-        <div className="px-4 py-0" style={{ marginTop: 0 }}>
+      {/* Reserve vertical space for fixed hero so search bar is not drawn under the blue band */}
+      <div className="shrink-0 w-full pointer-events-none" aria-hidden style={{ height: heroSpacerHeight }} />
+
+      {/* Search + filters — below hero in document flow; stays visible (not inside scroll area) */}
+      <div ref={headerRef} className="relative z-40 shrink-0 bg-white border-b border-gray-200 shadow-sm">
+        <div className="px-4 py-2">
           <div className="flex gap-2">
             <div className="flex-1 relative">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
@@ -1609,14 +1608,10 @@ export default function ExploreScreen() {
       {/* Content */}
         <div 
         ref={scrollContainerRef}
-        className="px-3 sm:px-4 md:px-6 pb-3 sm:pb-4 md:pb-6 space-y-3 sm:space-y-4 overflow-y-auto max-w-7xl mx-auto"
+        className="min-h-0 flex-1 px-3 sm:px-4 md:px-6 pb-3 sm:pb-4 md:pb-6 space-y-3 sm:space-y-4 overflow-y-auto max-w-7xl mx-auto w-full"
           style={{ 
           paddingTop: pullDistance > 0 ? `${Math.min(pullDistance, 60)}px` : '0px',
           paddingBottom: bottomBandReserve,
-          // Scroll area should start right below the top "esnaftaucuz" band.
-          marginTop: `calc(${contentTopOffset}px)`,
-          minHeight: `calc(100dvh - (${contentTopOffset}px + 5rem + env(safe-area-inset-bottom, 0px) + ${bottomNativeOffset}px))`,
-          maxHeight: `calc(100dvh - (${contentTopOffset}px + 5rem + env(safe-area-inset-bottom, 0px) + ${bottomNativeOffset}px))`,
           transition: pullDistance === 0 ? 'padding-top 0.2s' : 'none',
           overscrollBehaviorY: 'contain',
           WebkitOverflowScrolling: 'touch',

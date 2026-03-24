@@ -4131,16 +4131,9 @@ export const merchantSubscriptionAPI = {
     } catch (error: any) {
       console.error('❌ Get merchant subscription status error (fallback):', error);
       if (isTransientError(error)) {
-        return {
-          id: userId,
-          is_merchant: true,
-          merchant_subscription_status: 'inactive',
-          merchant_subscription_plan: 'merchant_basic_monthly',
-          merchant_subscription_fee_tl: 900,
-          merchant_subscription_current_period_start: null,
-          merchant_subscription_current_period_end: null,
-          is_active: false,
-        };
+        // On transient errors, return null so callers know we got no
+        // authoritative answer rather than silently reporting "inactive".
+        return null;
       }
       throw new Error(error.message || 'Abonelik durumu alınamadı');
     }
@@ -4184,7 +4177,6 @@ export const merchantSubscriptionAPI = {
     purchaseToken: string;
     productId: string;
     orderId?: string;
-    packageName?: string;
     purchaseTime?: number;
   }) => {
     try {
@@ -4208,17 +4200,26 @@ export const merchantSubscriptionAPI = {
             purchaseToken: data.purchaseToken,
             productId: data.productId,
             orderId: data.orderId || null,
-            packageName: data.packageName || null,
             purchaseTime: data.purchaseTime || null,
           }),
         }),
         30000,
         'Google Play doğrulama isteği zaman aşımına uğradı'
       );
-      const json = await res.json().catch(() => null);
-      if (!res.ok || json?.ok === false) {
-        throw new Error(String(json?.error || `HTTP ${res.status}`));
+
+      const rawText = await res.text().catch(() => '');
+      let json: any = null;
+      try {
+        json = rawText ? JSON.parse(rawText) : null;
+      } catch {
+        console.error('merchant-subscription-google-confirm: invalid JSON', rawText?.slice(0, 300));
       }
+
+      if (!res.ok || json?.ok === false) {
+        const errMsg = String(json?.error || json?.details || `HTTP ${res.status}: ${rawText.substring(0, 200)}`);
+        throw new Error(errMsg);
+      }
+
       return json;
     } catch (error: any) {
       console.error('❌ Confirm Google Play purchase error:', error);

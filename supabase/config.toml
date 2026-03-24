@@ -1,0 +1,4 @@
+# Supabase CLI — https://supabase.com/docs/guides/cli/config
+# Linked production project (Dashboard URL project ref).
+
+project_id = "xmskjcdwmwlcmjexnnxw"

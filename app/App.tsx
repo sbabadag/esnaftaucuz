@@ -6,6 +6,7 @@ import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { LanguageProvider } from './contexts/LanguageContext';
 import { ThemeProvider } from './contexts/ThemeContext';
 import SplashScreen from './components/screens/SplashScreen';
+import { LoadingScreenWithVersion } from './components/LoadingScreenWithVersion';
 import OnboardingScreen from './components/screens/OnboardingScreen';
 import LoginScreen from './components/screens/LoginScreen';
 import MainApp from './components/screens/MainApp';
@@ -20,9 +21,7 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { user, isLoading } = useAuth();
 
   if (isLoading) {
-    return <div className="min-h-screen bg-background flex items-center justify-center">
-      <div className="text-gray-500">Yükleniyor...</div>
-    </div>;
+    return <LoadingScreenWithVersion message="Yükleniyor..." />;
   }
 
   if (!user) {
@@ -108,11 +107,7 @@ function AppRoutes() {
   // If OAuth callback is in progress, show loading
   if (isOAuthCallback && isLoading) {
     console.log('🔐 OAuth callback in progress, showing loading...');
-    return (
-      <div className="min-h-screen bg-background flex items-center justify-center">
-        <div className="text-gray-500">Giriş yapılıyor...</div>
-      </div>
-    );
+    return <LoadingScreenWithVersion message="Giriş yapılıyor..." />;
   }
   
   // If user is already logged in, redirect to main app
@@ -140,11 +135,7 @@ function AppRoutes() {
 
   // If still loading auth state, show loading
   if (isLoading) {
-    return (
-      <div className="min-h-screen bg-background flex items-center justify-center">
-        <div className="text-gray-500">Yükleniyor...</div>
-      </div>
-    );
+    return <LoadingScreenWithVersion message="Yükleniyor..." />;
   }
 
   if (showLoggedInLaunchIntro) {

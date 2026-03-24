@@ -1,0 +1,32 @@
+# Deploy merchant-subscription-google-confirm to production.
+# Setup (once): GitHub repo → Settings → Secrets → Actions:
+#   SUPABASE_ACCESS_TOKEN = Personal Access Token from https://supabase.com/dashboard/account/tokens
+# Then: Actions → "Deploy Supabase Edge (Google confirm)" → Run workflow
+
+name: Deploy Supabase Edge (Google confirm)
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: supabase-deploy-google-confirm
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Supabase CLI
+        uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Deploy merchant-subscription-google-confirm
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: |
+          supabase functions deploy merchant-subscription-google-confirm \
+            --project-ref xmskjcdwmwlcmjexnnxw

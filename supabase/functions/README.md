@@ -9,8 +9,19 @@ Project now uses Google Play Billing only.
 
 ## Deploy
 
+**Önerilen (token gerekir):** GitHub → Actions → **Deploy Supabase Edge (Google confirm)** → Run workflow.  
+Repo **Secrets** içinde `SUPABASE_ACCESS_TOKEN` tanımlı olmalı ([token oluştur](https://supabase.com/dashboard/account/tokens)).
+
+Yerel:
+
 ```bash
-supabase functions deploy merchant-subscription-google-confirm
+export SUPABASE_ACCESS_TOKEN=sbp_...   # Windows: set SUPABASE_ACCESS_TOKEN=...
+supabase functions deploy merchant-subscription-google-confirm --project-ref xmskjcdwmwlcmjexnnxw
+```
+
+PowerShell: `scripts/deploy-supabase-google-confirm.ps1`
+
+```bash
 supabase functions deploy dispatch-notification-push
 ```
 

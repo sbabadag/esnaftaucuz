@@ -5,7 +5,6 @@ type ConfirmBody = {
   purchaseToken?: string;
   productId?: string;
   orderId?: string;
-  packageName?: string;
   purchaseTime?: number;
 };
 
@@ -146,13 +145,12 @@ Deno.serve(async (req) => {
     const body = (await req.json().catch(() => ({}))) as ConfirmBody;
     const purchaseToken = String(body?.purchaseToken || '').trim();
     const productIdFromClient = String(body?.productId || '').trim();
-    const packageNameFromClient = String(body?.packageName || '').trim();
     if (!purchaseToken) {
       return jsonResponse(400, { error: 'purchaseToken is required' });
     }
-    if (packageNameFromClient && packageNameFromClient !== GOOGLE_PLAY_PACKAGE_NAME) {
-      return jsonResponse(400, { error: 'Package name mismatch' });
-    }
+    // Do not trust client packageName for verification — always use
+    // GOOGLE_PLAY_PACKAGE_NAME from env for the Android Publisher API URL.
+    // (Sending a mismatched package from the client used to hard-fail here.)
 
     const googleAccessToken = await createGoogleAccessToken();
     const verifyUrl = `https://androidpublisher.googleapis.com/androidpublisher/v3/applications/${encodeURIComponent(
@@ -173,11 +171,30 @@ Deno.serve(async (req) => {
 
     const subscriptionState = String(verifyJson?.subscriptionState || '').trim();
     const lineItems = Array.isArray(verifyJson?.lineItems) ? verifyJson.lineItems : [];
-    const matchedLineItem = productIdFromClient
-      ? lineItems.find((item: any) => String(item?.productId || '') === productIdFromClient)
-      : (lineItems[0] || null);
+
+    const pickLineItem = (): any | null => {
+      const pid = productIdFromClient;
+      if (pid) {
+        const exact = lineItems.find((item: any) => String(item?.productId || '') === pid);
+        if (exact) return exact;
+        const lower = pid.toLowerCase();
+        const ci = lineItems.find((item: any) =>
+          String(item?.productId || '').toLowerCase() === lower
+        );
+        if (ci) return ci;
+      }
+      if (lineItems.length === 1) return lineItems[0];
+      const withExpiry = lineItems.filter((item: any) => String(item?.expiryTime || '').trim());
+      if (withExpiry.length >= 1) return withExpiry[0];
+      return lineItems[0] || null;
+    };
+
+    const matchedLineItem = pickLineItem();
     if (!matchedLineItem) {
-      return jsonResponse(409, { error: 'Verified purchase does not include requested product id' });
+      return jsonResponse(409, {
+        error: 'Google Play verify response has no subscription line items',
+        hint: 'Check purchase token and GOOGLE_PLAY_PACKAGE_NAME match the Play Console app',
+      });
     }
 
     const verifiedProductId = String(matchedLineItem?.productId || productIdFromClient || '').trim();
