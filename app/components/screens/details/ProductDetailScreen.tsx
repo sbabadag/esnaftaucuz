@@ -12,7 +12,7 @@ import { productsAPI, pricesAPI, favoritesAPI, locationsAPI } from '../../../ser
 import { useAuth } from '../../../contexts/AuthContext';
 import { useGeolocation } from '../../../../src/hooks/useGeolocation';
 import { forwardGeocode } from '../../../utils/geocoding';
-import { supabase } from '../../../lib/supabase';
+import { supabase, safeGetSession } from '../../../lib/supabase';
 import { toast } from 'sonner';
 
 interface Price {
@@ -189,11 +189,8 @@ export default function ProductDetailScreen() {
         const direct = localStorage.getItem('authToken');
         if (direct) return direct;
         try {
-          const sessionResult = await Promise.race([
-            supabase.auth.getSession(),
-            new Promise<any>((resolve) => setTimeout(() => resolve(null), 1500)),
-          ]);
-          return (sessionResult as any)?.data?.session?.access_token || null;
+          const { accessToken } = await safeGetSession();
+          return accessToken || null;
         } catch {
           return null;
         }

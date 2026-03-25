@@ -15,8 +15,10 @@ export function BuildVersionBadge({ className = '', variant = 'onLight' }: Props
   useEffect(() => {
     let cancelled = false;
     (async () => {
+      const isNative = Capacitor.isNativePlatform();
+      const platform = Capacitor.getPlatform();
       try {
-        if (Capacitor.isNativePlatform()) {
+        if (isNative) {
           const info = await App.getInfo();
           if (!cancelled) {
             setLine1(`Sürüm ${info.version}  ·  build ${info.build}`);
@@ -24,11 +26,15 @@ export function BuildVersionBadge({ className = '', variant = 'onLight' }: Props
           }
           return;
         }
-      } catch {
-        /* ignore */
+      } catch (e: any) {
+        if (!cancelled) {
+          setLine1(`Native (${platform}) · getInfo hatası`);
+          setLine2(String(e?.message || '').substring(0, 60));
+        }
+        return;
       }
       if (!cancelled) {
-        setLine1('Web / geliştirici');
+        setLine1(`Web / geliştirici (${platform})`);
         setLine2('');
       }
     })();

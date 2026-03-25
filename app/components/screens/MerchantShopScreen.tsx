@@ -11,7 +11,7 @@ import { merchantProductsAPI, productsAPI, locationsAPI } from '../../services/s
 import { useAuth } from '../../contexts/AuthContext';
 import { useGeolocation } from '../../../src/hooks/useGeolocation';
 import { forwardGeocode } from '../../utils/geocoding';
-import { supabase } from '../../lib/supabase';
+import { supabase, safeGetSession } from '../../lib/supabase';
 import { v4 as uuidv4 } from 'uuid';
 import { Capacitor } from '@capacitor/core';
 
@@ -407,8 +407,8 @@ export default function MerchantShopScreen() {
       throw new Error('Kayıt için gerekli ayarlar eksik');
     }
 
-    const sessionRes = await supabase.auth.getSession();
-    const accessToken = sessionRes?.data?.session?.access_token || localStorage.getItem('authToken');
+    const { accessToken: sessionToken } = await safeGetSession();
+    const accessToken = sessionToken || localStorage.getItem('authToken');
     const headers: Record<string, string> = {
       apikey: sbKey,
       'Content-Type': 'application/json',

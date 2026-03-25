@@ -16,7 +16,7 @@ import { FirebaseMessaging } from '@capacitor-firebase/messaging';
 import { reverseGeocode } from '../../utils/geocoding';
 import { useTheme } from '../../contexts/ThemeContext';
 import { useLanguage } from '../../contexts/LanguageContext';
-import { supabase } from '../../lib/supabase';
+import { supabase, safeGetSession } from '../../lib/supabase';
 
 const settingsItems = [
   { icon: Bell, label: 'Bildirimler', path: null },
@@ -286,8 +286,8 @@ export default function SettingsScreen() {
 
       let accessToken = '';
       try {
-        const sessionRes = await withTimeout(supabase.auth.getSession(), 10000, 'getSession');
-        accessToken = sessionRes?.data?.session?.access_token || '';
+        const { accessToken: safeToken } = await safeGetSession();
+        accessToken = safeToken;
         lines.push(`Session token: ${accessToken ? `ok (${accessToken.length} chars)` : 'missing'}`);
       } catch (sessionError: any) {
         lines.push(`Session token: timeout/error (${String(sessionError?.message || sessionError)})`);

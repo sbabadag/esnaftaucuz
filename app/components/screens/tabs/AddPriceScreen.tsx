@@ -10,7 +10,7 @@ import { productsAPI, locationsAPI, pricesAPI } from '../../../services/supabase
 import { useAuth } from '../../../contexts/AuthContext';
 import { useGeolocation } from '../../../../src/hooks/useGeolocation';
 import { forwardGeocode } from '../../../utils/geocoding';
-import { supabase } from '../../../lib/supabase';
+import { supabase, safeGetSession } from '../../../lib/supabase';
 
 const steps = ['product', 'price', 'location', 'photo', 'confirm'];
 
@@ -325,11 +325,7 @@ export default function AddPriceScreen() {
 
       const result = await Promise.race([
         (async () => {
-          const sessionRes = await Promise.race([
-            supabase.auth.getSession(),
-            new Promise<any>((resolve) => setTimeout(() => resolve(null), 1500)),
-          ]);
-          const accessToken = (sessionRes as any)?.data?.session?.access_token;
+          const { accessToken } = await safeGetSession();
           return pricesAPI.create({
           product: formData.productId,
           productName: formData.productName,

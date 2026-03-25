@@ -5,7 +5,7 @@
  * No backend server needed - everything runs client-side with Supabase.
  */
 
-import { supabase } from '../lib/supabase';
+import { supabase, safeGetSession } from '../lib/supabase';
 import { v4 as uuidv4 } from 'uuid';
 import { Browser } from '@capacitor/browser';
 import { Capacitor } from '@capacitor/core';
@@ -155,11 +155,8 @@ const getRestAuthHeaders = async () => {
   const sbKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
   let accessToken: string | null = null;
   try {
-    const sessionResult: any = await Promise.race([
-      supabase.auth.getSession(),
-      new Promise((resolve) => setTimeout(() => resolve(null), 6000)),
-    ]);
-    accessToken = sessionResult?.data?.session?.access_token || null;
+    const safe = await safeGetSession();
+    accessToken = safe.accessToken || null;
   } catch {
     accessToken = null;
   }
@@ -624,7 +621,6 @@ export const authAPI = {
       const isMobile = typeof window !== 'undefined' && 
         (window as any).Capacitor?.isNativePlatform();
       
-      // OAuth options
       const oauthOptions: any = {
         queryParams: {
           access_type: 'offline',
@@ -719,7 +715,11 @@ export const authAPI = {
       if (isMobile && data.url) {
         const safeOAuthUrl = getSafeOAuthUrl(data.url);
         console.log('📱 Opening OAuth URL in Chrome Custom Tab:', safeOAuthUrl.substring(0, 80) + '...');
-        await Browser.open({ url: safeOAuthUrl });
+        await Browser.open({
+          url: safeOAuthUrl,
+          toolbarColor: '#16a34a',
+          presentationStyle: 'popover',
+        });
         return { redirectUrl: safeOAuthUrl, openedInBrowser: true };
       }
 
@@ -1516,14 +1516,9 @@ export const pricesAPI = {
               // ignore
             }
 
-            // Last quick fallback: ask supabase session with strict timeout.
             try {
-              const sessionResult = await Promise.race([
-                supabase.auth.getSession(),
-                new Promise<any>((resolve) => setTimeout(() => resolve(null), 1500)),
-              ]);
-              const token = (sessionResult as any)?.data?.session?.access_token;
-              return token || null;
+              const safe = await safeGetSession();
+              return safe.accessToken || null;
             } catch {
               return null;
             }
@@ -1699,11 +1694,9 @@ export const pricesAPI = {
             console.warn('⚠️ getUser failed, trying session fallback:', getUserError.message);
           }
 
-          // Fallback path for native resume edge-cases:
-          // use locally persisted session user if available.
-          const { data: sessionData } = await supabase.auth.getSession();
-          if (sessionData?.session?.user) {
-            return sessionData.session.user;
+          const { session: fallbackSession } = await safeGetSession();
+          if (fallbackSession?.user) {
+            return fallbackSession.user;
           }
 
           return null;
@@ -2928,13 +2921,7 @@ export const favoritesAPI = {
   },
 
   _getSessionForUser: async (userId: string) => {
-    const { data, error } = await favoritesAPI._withTimeout(
-      supabase.auth.getSession(),
-      20000,
-      'Session timeout'
-    );
-    if (error) throw error;
-    const session = data?.session;
+    const { session } = await safeGetSession();
     if (!session?.access_token || !session?.user?.id) {
       throw new Error('Auth session bulunamadi, lutfen yeniden giris yapin');
     }
@@ -4072,24 +4059,6 @@ export const merchantSubscriptionAPI = {
     };
 
     try {
-      try {
-        const { error: syncError } = await withHardTimeout(
-          supabase.rpc('sync_merchant_subscription_status', {
-            p_user_id: userId,
-          }),
-          9000,
-          'Abonelik senkronizasyonu zaman aşımına uğradı'
-        );
-        if (syncError) {
-          console.warn('⚠️ Failed to sync merchant subscription status:', syncError);
-        }
-      } catch (syncError: any) {
-        if (!isTransientError(syncError)) {
-          console.warn('⚠️ Subscription sync non-transient error:', syncError);
-        }
-        // Fail-open: continue with current profile snapshot.
-      }
-
       const { data: profile, error: profileError } = await withHardTimeout(
         supabase
           .from('users')
@@ -4109,20 +4078,8 @@ export const merchantSubscriptionAPI = {
       );
       if (profileError) throw profileError;
 
-      let isActive = false;
-      try {
-        const activeResult = await withHardTimeout(
-          supabase.rpc('has_active_merchant_subscription', { p_user_id: userId }),
-          9000,
-          'Abonelik aktiflik sorgusu zaman aşımına uğradı'
-        );
-        if (!(activeResult as any)?.error) {
-          isActive = !!(activeResult as any)?.data;
-        }
-      } catch {
-        const status = String((profile as any)?.merchant_subscription_status || '').toLowerCase();
-        isActive = status === 'active' || status === 'past_due';
-      }
+      const dbStatus = String((profile as any)?.merchant_subscription_status || '').toLowerCase();
+      const isActive = dbStatus === 'active' || dbStatus === 'past_due';
 
       return {
         ...(profile || {}),
@@ -4184,8 +4141,19 @@ export const merchantSubscriptionAPI = {
       const sbAnon = String(import.meta.env.VITE_SUPABASE_ANON_KEY || '');
       if (!sbUrl || !sbAnon) throw new Error('Supabase yapılandırması eksik');
 
-      const { data: sessionData } = await supabase.auth.getSession();
-      const accessToken = String(sessionData?.session?.access_token || '').trim() || getAccessTokenFromStorageFallback() || '';
+      // Try refreshing the session first to get a fresh token (payment confirmation needs a valid JWT)
+      let accessToken = '';
+      try {
+        const { data: refreshed } = await Promise.race([
+          supabase.auth.refreshSession(),
+          new Promise<any>((r) => setTimeout(() => r({ data: null }), 6000)),
+        ]);
+        accessToken = refreshed?.session?.access_token || '';
+      } catch { /* fallback below */ }
+      if (!accessToken) {
+        const { accessToken: safeToken } = await safeGetSession();
+        accessToken = safeToken || getAccessTokenFromStorageFallback() || '';
+      }
       if (!accessToken) throw new Error('Oturum bulunamadı');
 
       const res = await withHardTimeout(
@@ -4229,8 +4197,8 @@ export const merchantSubscriptionAPI = {
 
   cleanupOldPayments: async () => {
     try {
-      const { data: sessionData } = await supabase.auth.getSession();
-      const accessToken = sessionData?.session?.access_token;
+      const { accessToken: safeToken, session: sessionData } = await safeGetSession();
+      const accessToken = safeToken;
       if (!accessToken) {
         throw new Error('Oturum bulunamadı');
       }

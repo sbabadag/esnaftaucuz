@@ -18,9 +18,9 @@ export const supabase = createClient(
     auth: {
       persistSession: true,
       autoRefreshToken: true,
-      detectSessionInUrl: true,
+      detectSessionInUrl: !isMobile,
       storage: typeof window !== 'undefined' ? window.localStorage : undefined,
-      flowType: 'implicit',
+      flowType: 'pkce',
     },
     db: {
       schema: 'public',
@@ -32,3 +32,55 @@ export const supabase = createClient(
     },
   }
 );
+
+/**
+ * Safe wrapper around supabase.auth.getSession() that never hangs.
+ * On Android WebView, getSession() can hang indefinitely during token refresh.
+ * Falls back to reading the access token directly from localStorage.
+ */
+export async function safeGetSession(): Promise<{ accessToken: string; session: any | null }> {
+  let session: any = null;
+  let accessToken = '';
+
+  try {
+    const result = await Promise.race([
+      supabase.auth.getSession(),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), 4000)),
+    ]);
+    session = (result as any)?.data?.session || null;
+    accessToken = session?.access_token || '';
+  } catch { /* timeout or error */ }
+
+  if (!accessToken) {
+    accessToken = getAccessTokenFromStorage();
+  }
+
+  return { accessToken, session };
+}
+
+function getAccessTokenFromStorage(): string {
+  try {
+    const directToken = localStorage.getItem('authToken');
+    if (directToken && typeof directToken === 'string' && directToken.includes('.') && !directToken.startsWith('{')) {
+      return directToken;
+    }
+
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i) || '';
+      const isSupabaseKey =
+        (key.startsWith('sb-') && key.endsWith('-auth-token')) ||
+        key.startsWith('supabase.auth.');
+      if (!isSupabaseKey) continue;
+
+      const raw = localStorage.getItem(key) || '';
+      if (!raw) continue;
+
+      try {
+        const parsed = JSON.parse(raw);
+        const tkn = parsed?.access_token || parsed?.accessToken || '';
+        if (typeof tkn === 'string' && tkn.includes('.')) return tkn;
+      } catch { /* not JSON */ }
+    }
+  } catch { /* storage error */ }
+  return '';
+}

@@ -21,7 +21,7 @@ import DeliveryReturnPolicyScreen from './DeliveryReturnPolicyScreen';
 import DistanceSalesAgreementScreen from './DistanceSalesAgreementScreen';
 import { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
-import { supabase } from '../../lib/supabase';
+import { supabase, safeGetSession } from '../../lib/supabase';
 import { addLocalNotification } from '../../lib/notification-store';
 import { asUuidOrNull, isLikelyJwt, isUuid, normalizePushEvent } from '../../lib/push-notification-utils';
 import { Capacitor } from '@capacitor/core';
@@ -151,8 +151,8 @@ export default function MainApp() {
           const sbUrl = String(import.meta.env.VITE_SUPABASE_URL || '');
           const sbKey = String(import.meta.env.VITE_SUPABASE_ANON_KEY || '');
           if (sbUrl && sbKey) {
-            const { data: sessionData } = await supabase.auth.getSession();
-            const token = String(sessionData?.session?.access_token || '').trim();
+            const { accessToken: safeToken } = await safeGetSession();
+            const token = String(safeToken || '').trim();
             if (token) {
               const restRes = await fetch(
                 `${sbUrl}/rest/v1/users?id=eq.${user.id}&select=is_merchant,merchant_subscription_status,merchant_subscription_plan`,
@@ -347,10 +347,10 @@ export default function MainApp() {
       const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string;
       const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
       let accessToken: string | null = null;
-      for (let i = 0; i < 5 && !accessToken; i++) {
+      for (let i = 0; i < 3 && !accessToken; i++) {
         try {
-          const sessionRes = await supabase.auth.getSession();
-          accessToken = sessionRes?.data?.session?.access_token || null;
+          const { accessToken: safeToken } = await safeGetSession();
+          accessToken = safeToken || null;
           if (!accessToken) {
             await new Promise((resolve) => setTimeout(resolve, 1200 * (i + 1)));
           }

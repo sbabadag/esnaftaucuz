@@ -1,6 +1,6 @@
 import { createContext, useContext, useState, useEffect, useRef, ReactNode } from 'react';
 import { authAPI } from '../services/supabase-api';
-import { supabase } from '../lib/supabase';
+import { supabase, safeGetSession } from '../lib/supabase';
 import { toast } from 'sonner';
 
 interface User {
@@ -691,11 +691,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           }
 
           const isMerchantFromProfile = resolveMerchantStatus(profile);
-          const isMerchantFinal = isMerchantFromProfile || hasMerchantProducts;
+          const subscriptionActive = ['active', 'past_due'].includes(
+            String(profile?.merchant_subscription_status || '').toLowerCase()
+          );
+          const isMerchantFinal = isMerchantFromProfile || hasMerchantProducts || subscriptionActive;
 
-          // AUTO-REPAIR: If merchant_products prove merchant role but DB flag is wrong, fix it
-          if (hasMerchantProducts && !isMerchantFromProfile) {
-            console.log('🔧 Auto-repairing is_merchant flag (merchant_products exist but is_merchant=false)');
+          // AUTO-REPAIR: If evidence proves merchant role but DB flag is wrong, fix it
+          const needsRepair = !normalizeMerchantFlag(profile?.is_merchant) &&
+            (hasMerchantProducts || subscriptionActive);
+          if (needsRepair) {
+            console.log('🔧 Auto-repairing is_merchant flag (products/subscription exist but is_merchant=false)');
             try {
               const { data: repairedProfile } = await supabase
                 .from('users')
@@ -858,7 +863,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           if (isLoading && isOAuthCallbackRef.current) {
             // Recovery attempt: if session already exists, continue instead of dropping to login.
             try {
-              const { data: { session } } = await supabase.auth.getSession();
+              const { session } = await safeGetSession();
               if (session) {
                 console.log('✅ OAuth timeout recovery: session found, continuing profile load');
                 await loadUserProfile(session, 'INITIAL_SESSION', true);
@@ -894,15 +899,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }, 20000);
 
       try {
-        const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+        const { session } = await safeGetSession();
         
         clearTimeout(safetyTimeout);
-        
-        if (sessionError) {
-          console.error('Session error:', sessionError);
-          setIsLoading(false);
-          return;
-        }
 
         if (session) {
           await loadUserProfile(session, 'INITIAL_SESSION', false);
@@ -1325,7 +1324,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const refreshUser = async () => {
     try {
-      const { data: { session } } = await supabase.auth.getSession();
+      const { session } = await safeGetSession();
       if (!session) {
         console.warn('⚠️ No session found for refreshUser');
         return;
@@ -1370,10 +1369,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       
       if (profile) {
         const isMerchantFromProfile = resolveMerchantStatus(profile);
-        const isMerchantFinal = isMerchantFromProfile || hasMerchantProducts;
+        const subscriptionActive = ['active', 'past_due'].includes(
+          String(profile?.merchant_subscription_status || '').toLowerCase()
+        );
+        const isMerchantFinal = isMerchantFromProfile || hasMerchantProducts || subscriptionActive;
 
-        // AUTO-REPAIR in refreshUser path too
-        if (hasMerchantProducts && !isMerchantFromProfile) {
+        const needsRepair = !normalizeMerchantFlag(profile?.is_merchant) &&
+          (hasMerchantProducts || subscriptionActive);
+        if (needsRepair) {
           console.log('🔧 refreshUser: Auto-repairing is_merchant flag');
           try {
             const { data: repairedProfile } = await supabase

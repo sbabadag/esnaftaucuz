@@ -1,6 +1,6 @@
-import { useNavigate } from 'react-router-dom';
-import { useEffect } from 'react';
-import { Settings, Heart, Award, Share2, LogOut, ChevronRight, Store, CreditCard } from 'lucide-react';
+import { useNavigate, useLocation } from 'react-router-dom';
+import { useEffect, useCallback } from 'react';
+import { Settings, Heart, Award, Share2, LogOut, ChevronRight, Store, CreditCard, RefreshCw, Crown, User } from 'lucide-react';
 import { Avatar, AvatarFallback, AvatarImage } from '../../ui/avatar';
 import { Badge } from '../../ui/badge';
 import { Button } from '../../ui/button';
@@ -9,23 +9,46 @@ import { toast } from 'sonner';
 import { useTheme } from '../../../contexts/ThemeContext';
 import { useState } from 'react';
 import { useLanguage } from '../../../contexts/LanguageContext';
+import { supabase } from '../../../lib/supabase';
 
 export default function ProfileScreen() {
   const navigate = useNavigate();
-  const { logout, user } = useAuth();
+  const location = useLocation();
+  const { logout, user, refreshUser } = useAuth();
   const { theme, toggleTheme } = useTheme();
   const { t, lang, setLang } = useLanguage();
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [dbStatus, setDbStatus] = useState<{
+    is_merchant: boolean;
+    merchant_subscription_status: string;
+    merchant_subscription_plan: string;
+  } | null>(null);
 
-  // Debug: Log user and is_merchant status
+  const fetchMerchantStatus = useCallback(async () => {
+    if (!user?.id) return;
+    try {
+      const { data, error } = await supabase
+        .from('users')
+        .select('is_merchant, merchant_subscription_status, merchant_subscription_plan')
+        .eq('id', user.id)
+        .single();
+      if (!error && data) {
+        setDbStatus({
+          is_merchant: !!data.is_merchant,
+          merchant_subscription_status: data.merchant_subscription_status || 'inactive',
+          merchant_subscription_plan: data.merchant_subscription_plan || '',
+        });
+      }
+    } catch { /* best effort */ }
+  }, [user?.id]);
+
+  // Fetch on mount and every time this route becomes active
   useEffect(() => {
-    console.log('🔍 ProfileScreen - User data:', {
-      id: user?.id,
-      email: user?.email,
-      is_merchant: (user as any)?.is_merchant,
-      is_merchant_type: typeof (user as any)?.is_merchant,
-      fullUser: user,
-    });
-  }, [user]);
+    fetchMerchantStatus();
+    if (refreshUser) {
+      refreshUser().catch(() => {});
+    }
+  }, [location.pathname]);
 
   const handleLogout = async () => {
     try {
@@ -61,16 +84,18 @@ export default function ProfileScreen() {
     return levels[user.level] || t('LEVEL_NEW');
   };
 
-  const merchantStatus = String((user as any)?.merchant_subscription_status || '').toLowerCase();
-  const merchantPlan = String((user as any)?.merchant_subscription_plan || '').trim();
+  // Prefer fresh DB data over cached user object
+  const effectiveIsMerchant = dbStatus?.is_merchant ?? (user as any)?.is_merchant ?? false;
+  const merchantStatus = String(dbStatus?.merchant_subscription_status || (user as any)?.merchant_subscription_status || '').toLowerCase();
+  const merchantPlan = String(dbStatus?.merchant_subscription_plan || (user as any)?.merchant_subscription_plan || '').trim();
   const isMerchant =
-    (user as any)?.is_merchant === true ||
+    effectiveIsMerchant === true ||
     merchantStatus === 'active' ||
     merchantStatus === 'past_due' ||
     merchantPlan.length > 0;
   const themeColor = isMerchant ? 'blue' : 'green';
   const themeColorClass = isMerchant ? 'blue-600' : 'green-600';
-  const merchantSubscriptionStatus = (user as any)?.merchant_subscription_status || 'inactive';
+  const merchantSubscriptionStatus = merchantStatus || 'inactive';
   const merchantSubscriptionFee = (user as any)?.merchant_subscription_fee_tl || 500;
   const merchantSubscriptionPeriodEnd = (user as any)?.merchant_subscription_current_period_end;
 
@@ -85,6 +110,28 @@ export default function ProfileScreen() {
       case 'inactive':
       default:
         return 'Pasif';
+    }
+  };
+
+  const getSubscriptionBadgeColor = () => {
+    switch (merchantSubscriptionStatus) {
+      case 'active': return 'bg-green-100 text-green-700 border-green-200';
+      case 'past_due': return 'bg-yellow-100 text-yellow-700 border-yellow-200';
+      case 'canceled': return 'bg-red-100 text-red-700 border-red-200';
+      default: return 'bg-gray-100 text-gray-600 border-gray-200';
+    }
+  };
+
+  const handleRefreshStatus = async () => {
+    setIsRefreshing(true);
+    try {
+      await fetchMerchantStatus();
+      if (refreshUser) await refreshUser();
+      toast.success('Üyelik durumu güncellendi');
+    } catch {
+      toast.error('Durum güncellenemedi');
+    } finally {
+      setIsRefreshing(false);
     }
   };
 
@@ -135,18 +182,6 @@ export default function ProfileScreen() {
               <span className={`text-sm ${isMerchant ? 'text-white/80' : 'text-gray-600'}`}>{t('LEVEL_LABEL')}</span>
               <Badge variant="secondary">{getLevelBadge()} 🏅</Badge>
             </div>
-            {isMerchant && (
-              <div className={`mt-3 rounded-md border px-3 py-2 text-sm ${isMerchant ? 'border-white/30 bg-white/10 text-white' : 'border-gray-200 bg-white text-gray-700'}`}>
-                <div className="flex items-center justify-between gap-2">
-                  <span>Abonelik</span>
-                  <span className="font-semibold">{getMerchantSubscriptionLabel()}</span>
-                </div>
-                <div className={`${isMerchant ? 'text-white/80' : 'text-gray-500'}`}>
-                  {merchantSubscriptionFee} TL / ay
-                  {merchantSubscriptionPeriodEnd ? ` - Bitiş: ${new Date(merchantSubscriptionPeriodEnd).toLocaleDateString('tr-TR')}` : ''}
-                </div>
-              </div>
-            )}
           </div>
         </div>
 
@@ -173,6 +208,81 @@ export default function ProfileScreen() {
             <div className="text-sm text-gray-600">{t('POINTS')}</div>
           </div>
         </div>
+      </div>
+
+      {/* Membership Status Card */}
+      <div className="mx-4 mt-4 rounded-xl border bg-white shadow-sm overflow-hidden">
+        <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100">
+          <div className="flex items-center gap-2">
+            {isMerchant ? (
+              <Crown className="w-5 h-5 text-blue-600" />
+            ) : (
+              <User className="w-5 h-5 text-gray-500" />
+            )}
+            <span className="font-semibold text-gray-800">Üyelik Durumu</span>
+          </div>
+          <button
+            onClick={handleRefreshStatus}
+            disabled={isRefreshing}
+            className="p-1.5 rounded-full hover:bg-gray-100 transition-colors"
+          >
+            <RefreshCw className={`w-4 h-4 text-gray-500 ${isRefreshing ? 'animate-spin' : ''}`} />
+          </button>
+        </div>
+        <div className="px-4 py-3 space-y-2">
+          <div className="flex items-center justify-between">
+            <span className="text-sm text-gray-500">Hesap Tipi</span>
+            <span className={`text-sm font-semibold ${isMerchant ? 'text-blue-600' : 'text-gray-700'}`}>
+              {isMerchant ? 'Esnaf Hesabı' : 'Normal Kullanıcı'}
+            </span>
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-sm text-gray-500">Abonelik</span>
+            <span className={`text-xs font-medium px-2 py-0.5 rounded-full border ${getSubscriptionBadgeColor()}`}>
+              {getMerchantSubscriptionLabel()}
+            </span>
+          </div>
+          {isMerchant && merchantPlan && (
+            <div className="flex items-center justify-between">
+              <span className="text-sm text-gray-500">Plan</span>
+              <span className="text-sm text-gray-700">
+                {merchantPlan.includes('basic') ? 'Temel Esnaf' : merchantPlan.includes('premium') ? 'Premium Esnaf' : merchantPlan}
+              </span>
+            </div>
+          )}
+          {isMerchant && merchantSubscriptionPeriodEnd && (
+            <div className="flex items-center justify-between">
+              <span className="text-sm text-gray-500">Bitiş Tarihi</span>
+              <span className="text-sm text-gray-700">
+                {new Date(merchantSubscriptionPeriodEnd).toLocaleDateString('tr-TR')}
+              </span>
+            </div>
+          )}
+          <div className="flex items-center justify-between">
+            <span className="text-sm text-gray-500">E-posta</span>
+            <span className="text-sm text-gray-700">{user?.email || '-'}</span>
+          </div>
+        </div>
+        {!isMerchant && (
+          <div className="px-4 py-3 border-t border-gray-100 bg-gray-50">
+            <button
+              onClick={() => navigate('/app/merchant-subscription')}
+              className="w-full text-center text-sm text-blue-600 font-medium hover:text-blue-700"
+            >
+              Esnaf hesabına yükselt →
+            </button>
+          </div>
+        )}
+        {isMerchant && merchantSubscriptionStatus !== 'active' && (
+          <div className="px-4 py-3 border-t border-gray-100 bg-yellow-50">
+            <button
+              onClick={() => navigate('/app/merchant-subscription')}
+              className="w-full text-center text-sm text-yellow-700 font-medium hover:text-yellow-800"
+            >
+              Aboneliği yönet →
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Menu */}

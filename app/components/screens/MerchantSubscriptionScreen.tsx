@@ -1,13 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ArrowLeft, CreditCard, RefreshCw } from 'lucide-react';
+import { ArrowLeft, CreditCard, RefreshCw, RotateCcw } from 'lucide-react';
 import { Button } from '../ui/button';
 import { BuildVersionBadge } from '../BuildVersionBadge';
 import { useAuth } from '../../contexts/AuthContext';
 import { merchantSubscriptionAPI } from '../../services/supabase-api';
 import { toast } from 'sonner';
 import { Capacitor } from '@capacitor/core';
-import { GooglePlayBilling } from '../../lib/google-play-billing';
+import { GooglePlayBilling, type GooglePlayRestoredPurchase } from '../../lib/google-play-billing';
+import { supabase, safeGetSession } from '../../lib/supabase';
 
 type MerchantSubscriptionStatus = 'inactive' | 'active' | 'past_due' | 'canceled';
 
@@ -51,12 +52,33 @@ export default function MerchantSubscriptionScreen() {
   const [statusData, setStatusData] = useState<any>(null);
   const [payments, setPayments] = useState<any[]>([]);
   const [isStartingTrial, setIsStartingTrial] = useState(false);
+  const [isRestoring, setIsRestoring] = useState(false);
+
+  const setLocalMerchantFlag = () => {
+    try {
+      const raw = localStorage.getItem('user');
+      if (raw) {
+        const cached = JSON.parse(raw);
+        cached.is_merchant = true;
+        cached.merchant_subscription_status = 'active';
+        localStorage.setItem('user', JSON.stringify(cached));
+      }
+      if (user?.email) {
+        localStorage.setItem('merchant-hint-' + user.email, '1');
+      }
+    } catch { /* best effort */ }
+  };
 
   // Prevents stale DB reads from overwriting a confirmed-active optimistic state.
   const purchaseConfirmedAtRef = useRef<number>(0);
   const PROTECTION_WINDOW_MS = 120_000;
 
-  const currentStatus: MerchantSubscriptionStatus = (statusData?.merchant_subscription_status || 'inactive') as MerchantSubscriptionStatus;
+  const currentStatus: MerchantSubscriptionStatus = (() => {
+    const raw = String(statusData?.merchant_subscription_status || '').toLowerCase();
+    if (raw === 'active' || raw === 'past_due' || raw === 'canceled') return raw as MerchantSubscriptionStatus;
+    if (statusData?.is_active) return 'active';
+    return 'inactive';
+  })();
   const feeTl = statusData?.merchant_subscription_fee_tl || MONTHLY_FEE_TL;
   const [selectedBillingMonths, setSelectedBillingMonths] = useState<1 | 12>(1);
   const periodEndDate = statusData?.merchant_subscription_current_period_end
@@ -65,7 +87,7 @@ export default function MerchantSubscriptionScreen() {
   const daysRemaining = periodEndDate
     ? Math.max(0, Math.ceil((periodEndDate.getTime() - Date.now()) / (1000 * 60 * 60 * 24)))
     : 0;
-  const isSubscriptionActive = !!statusData?.is_active;
+  const isSubscriptionActive = !!statusData?.is_active || currentStatus === 'active' || currentStatus === 'past_due';
   const isRenewalLocked = isSubscriptionActive && daysRemaining > 7;
   const isTrialPlan = String(statusData?.merchant_subscription_plan || '').includes('trial');
   const onboardingRequired = (() => {
@@ -100,17 +122,35 @@ export default function MerchantSubscriptionScreen() {
     if (!user?.id) return null;
     try {
       if (showLoader) setIsLoading(true);
-      const [status, paymentList] = await Promise.all([
-        merchantSubscriptionAPI.getStatus(user.id),
-        merchantSubscriptionAPI.getPayments(user.id, 10),
-      ]);
+
+      let status: any = null;
+      let paymentList: any[] = [];
+
+      try {
+        status = await merchantSubscriptionAPI.getStatus(user.id);
+      } catch (e) {
+        console.warn('⚠️ getStatus failed, trying direct DB:', e);
+        try {
+          const { data, error } = await supabase
+            .from('users')
+            .select('id, is_merchant, merchant_subscription_status, merchant_subscription_plan, merchant_subscription_fee_tl, merchant_subscription_current_period_start, merchant_subscription_current_period_end')
+            .eq('id', user.id)
+            .single();
+          if (!error && data) {
+            const dbSt = String(data.merchant_subscription_status || '').toLowerCase();
+            status = { ...data, is_active: dbSt === 'active' || dbSt === 'past_due' };
+          }
+        } catch { /* give up */ }
+      }
+
+      try {
+        paymentList = await merchantSubscriptionAPI.getPayments(user.id, 10);
+      } catch { /* payments are non-critical */ }
 
       if (status !== null) {
         const inProtectionWindow =
           Date.now() - purchaseConfirmedAtRef.current < PROTECTION_WINDOW_MS;
 
-        // During the protection window after a confirmed purchase, never
-        // let a stale DB read regress from active → inactive.
         setStatusData((prev: any) => {
           if (inProtectionWindow && isStatusActive(prev) && !isStatusActive(status)) {
             console.log('🛡️ Protecting confirmed-active state from stale DB read');
@@ -123,15 +163,6 @@ export default function MerchantSubscriptionScreen() {
       return { status, paymentList };
     } catch (error: any) {
       console.error('Subscription screen load error:', error);
-      const msg = String(error?.message || '').toLowerCase();
-      const isTransient =
-        msg.includes('zaman aşım') ||
-        msg.includes('timeout') ||
-        msg.includes('failed to fetch') ||
-        msg.includes('network');
-      if (!isTransient) {
-        toast.error(error.message || 'Abonelik verileri yüklenemedi');
-      }
       return null;
     } finally {
       if (showLoader) setIsLoading(false);
@@ -294,7 +325,7 @@ export default function MerchantSubscriptionScreen() {
 
       if (activated) {
         toast.success('Abonelik Google Play ile aktif edildi!');
-
+        setLocalMerchantFlag();
         await new Promise((r) => setTimeout(r, 3000));
         try { await loadData(false); } catch { /* best effort */ }
         try { if (refreshUser) await refreshUser(); } catch { /* best effort */ }
@@ -360,7 +391,7 @@ export default function MerchantSubscriptionScreen() {
       }
 
       toast.success(`${TRIAL_DAYS} günlük deneme aboneliği başlatıldı.`);
-
+      setLocalMerchantFlag();
       await new Promise((r) => setTimeout(r, 2000));
       try { if (refreshUser) await refreshUser(); } catch { /* best effort */ }
       try { await loadData(false); } catch { /* best effort */ }
@@ -369,6 +400,157 @@ export default function MerchantSubscriptionScreen() {
       toast.error(error.message || 'Deneme aboneliği başlatılamadı');
     } finally {
       setIsStartingTrial(false);
+    }
+  };
+
+  const handleRestorePurchases = async () => {
+    if (!user?.id) {
+      toast.error('Oturum bulunamadı.');
+      return;
+    }
+    if (!Capacitor.isNativePlatform() || Capacitor.getPlatform() !== 'android') {
+      toast.error('Satın alma geri yükleme sadece Android üzerinden çalışır.');
+      return;
+    }
+
+    try {
+      setIsRestoring(true);
+      toast.info('Google Play satın almaları sorgulanıyor...');
+
+      const result = await GooglePlayBilling.restorePurchases();
+      const purchases: GooglePlayRestoredPurchase[] = JSON.parse(result.purchases || '[]');
+
+      if (!purchases.length) {
+        toast.warning('Google Play hesabınızda aktif abonelik bulunamadı.');
+        return;
+      }
+
+      toast.info(`${purchases.length} satın alma bulundu. Sunucuya gönderiliyor...`);
+
+      let confirmedAny = false;
+      const errors: string[] = [];
+
+      const sbUrl = String(import.meta.env.VITE_SUPABASE_URL || '');
+      const sbAnon = String(import.meta.env.VITE_SUPABASE_ANON_KEY || '');
+
+      let accessToken = '';
+      try {
+        const { data: refreshed } = await Promise.race([
+          supabase.auth.refreshSession(),
+          new Promise<any>((r) => setTimeout(() => r({ data: null }), 6000)),
+        ]);
+        accessToken = refreshed?.session?.access_token || '';
+      } catch { /* fallback below */ }
+      if (!accessToken) {
+        const safe = await safeGetSession();
+        accessToken = safe.accessToken;
+      }
+      if (!accessToken) {
+        toast.error('Oturum bulunamadı. Lütfen uygulamadan çıkıp tekrar giriş yapın.', { duration: 8000 });
+        return;
+      }
+      toast.info('Oturum bulundu, devam ediliyor...', { duration: 3000 });
+
+      for (const p of purchases) {
+        const stateLabels: Record<number, string> = { 0: 'PURCHASED', 1: 'PENDING', 2: 'UNSPECIFIED' };
+        const stateLabel = stateLabels[p.purchaseState] || `UNKNOWN(${p.purchaseState})`;
+
+        try {
+          toast.info(`${p.productId} (${stateLabel}) doğrulanıyor...`, { duration: 8000 });
+
+          if (p.purchaseState === 1) {
+            errors.push(`${p.productId}: Satın alma PENDING (beklemede) - henüz tamamlanmamış. Google Play'den ödemeyi tamamlayın.`);
+            continue;
+          }
+
+          toast.info('Sunucuya gönderiliyor...', { duration: 5000 });
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 15000);
+
+          let res: Response;
+          try {
+            res = await fetch(`${sbUrl}/functions/v1/merchant-subscription-google-confirm`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                apikey: sbAnon,
+                Authorization: `Bearer ${accessToken}`,
+              },
+              body: JSON.stringify({
+                purchaseToken: p.purchaseToken,
+                productId: p.productId,
+                orderId: p.orderId || null,
+                purchaseTime: p.purchaseTime || null,
+              }),
+              signal: controller.signal,
+            });
+          } catch (fetchErr: any) {
+            clearTimeout(timeoutId);
+            const msg = fetchErr?.name === 'AbortError' ? '15sn timeout - sunucu yanıt vermedi' : (fetchErr?.message || String(fetchErr));
+            errors.push(`${p.productId}: Fetch hatası: ${msg}`);
+            continue;
+          }
+          clearTimeout(timeoutId);
+
+          const rawText = await res.text().catch(() => '');
+          toast.info(`Sunucu yanıtı: HTTP ${res.status}`, { duration: 5000 });
+
+          let json: any = null;
+          try { json = rawText ? JSON.parse(rawText) : null; } catch { /* */ }
+
+          if (!res.ok) {
+            const errDetail = json?.error || json?.details || rawText?.substring(0, 200) || `HTTP ${res.status}`;
+            errors.push(`${p.productId}: ${errDetail}`);
+            continue;
+          }
+
+          const confirmResult = json;
+          if (confirmResult?.ok) {
+            confirmedAny = true;
+            purchaseConfirmedAtRef.current = Date.now();
+
+            if (confirmResult.active) {
+              const planCode =
+                (confirmResult.billingPeriodMonths ?? 1) >= 12
+                  ? 'merchant_google_play_yearly'
+                  : 'merchant_google_play_monthly';
+              setStatusData((prev: any) => ({
+                ...(prev || {}),
+                id: user.id,
+                is_merchant: true,
+                merchant_subscription_status: confirmResult.status || 'active',
+                merchant_subscription_plan: planCode,
+                merchant_subscription_fee_tl: confirmResult.amountTl || feeTl,
+                merchant_subscription_current_period_start: new Date().toISOString(),
+                merchant_subscription_current_period_end: confirmResult.periodEnd || null,
+                is_active: true,
+              }));
+            }
+          } else {
+            errors.push(`${p.productId}: Sunucu onay döndürmedi`);
+          }
+        } catch (err: any) {
+          const errMsg = err?.message || String(err);
+          console.error('Restore confirm error for', p.productId, err);
+          errors.push(`${p.productId}: ${errMsg}`);
+        }
+      }
+
+      if (confirmedAny) {
+        toast.success('Satın alma başarıyla geri yüklendi!');
+        setLocalMerchantFlag();
+        await new Promise((r) => setTimeout(r, 2000));
+        try { if (refreshUser) await refreshUser(); } catch { /* best effort */ }
+        try { await loadData(false); } catch { /* best effort */ }
+      } else {
+        const detail = errors.length > 0 ? errors.join(' | ') : 'Bilinmeyen hata';
+        toast.error(`Onay başarısız: ${detail}`, { duration: 10000 });
+      }
+    } catch (error: any) {
+      console.error('Restore purchases error:', error);
+      toast.error(error.message || 'Satın alma geri yükleme başarısız.');
+    } finally {
+      setIsRestoring(false);
     }
   };
 
@@ -523,6 +705,17 @@ export default function MerchantSubscriptionScreen() {
             <p className="text-xs text-amber-700 mt-2">
               Aboneliğiniz aktif ({daysRemaining} gün kaldı). Erken yenileme için ödeme yapabilirsiniz.
             </p>
+          )}
+          {Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android' && (
+            <Button
+              variant="outline"
+              onClick={handleRestorePurchases}
+              disabled={isRestoring || isPaying}
+              className="w-full mt-3 h-10"
+            >
+              <RotateCcw className={`w-4 h-4 mr-2 ${isRestoring ? 'animate-spin' : ''}`} />
+              {isRestoring ? 'Sorgulanıyor...' : 'Satın Almaları Geri Yükle'}
+            </Button>
           )}
         </div>
 

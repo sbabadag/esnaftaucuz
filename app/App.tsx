@@ -205,6 +205,15 @@ function App() {
       }
     };
 
+    // Clean up stale OAuth pending state (>2 min old) to prevent blocking future logins
+    try {
+      const pendingTs = Number(localStorage.getItem(OAUTH_PENDING_KEY) || '0');
+      if (pendingTs && Date.now() - pendingTs > 120_000) {
+        clearOAuthPending();
+        console.log('🧹 Cleared stale OAuth pending state');
+      }
+    } catch { /* best effort */ }
+
     let pushActionListener: any = null;
     const pendingQueueKey = 'pending_push_events_v1';
     const trySyncPushImmediately = async (normalized: any) => {
@@ -305,6 +314,8 @@ function App() {
       oauthExchangeInFlightRef.current = true;
       lastHandledOAuthCodeRef.current = normalizedCode;
       lastHandledOAuthAtRef.current = now;
+
+      Browser.close().catch(() => {});
 
       console.log(`🔐 OAuth PKCE callback detected (${source})`);
       console.log('🔐 Code:', normalizedCode.substring(0, 20) + '...');
@@ -450,11 +461,18 @@ function App() {
           }
         }
         
-        // Session is now set, AuthContext will handle the rest via onAuthStateChange
-        // Clean up URL
+        // Clean up PKCE verifier keys so they don't interfere with future logins
+        try {
+          for (let i = localStorage.length - 1; i >= 0; i--) {
+            const k = localStorage.key(i);
+            if (k && (k.includes('code-verifier') || k.includes('code_verifier'))) {
+              localStorage.removeItem(k);
+            }
+          }
+        } catch { /* best effort */ }
+
         clearOAuthPending();
         window.history.replaceState({}, document.title, getAppRootPath());
-        // Notify router listeners when callback URL is normalized.
         window.dispatchEvent(new PopStateEvent('popstate'));
       } catch (err: any) {
         console.error('❌ Error exchanging code for session:', err);
