@@ -43,6 +43,9 @@ ios/
 android/key.properties
 android/app/*.jks
 android/app/*.keystore
+# Google Play API (service account JSON — never commit)
+android/play-publish-credentials.json
+play-publish-credentials.json
 
 # Backend
 backend/uploads/

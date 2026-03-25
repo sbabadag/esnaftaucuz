@@ -415,19 +415,10 @@ export default function MerchantSubscriptionScreen() {
           paddingBottom: 'calc(1rem + env(safe-area-inset-bottom, 0px))',
         }}
       >
-        <div className="rounded-lg border border-blue-100 bg-blue-50/90 p-3 text-xs text-blue-900 leading-relaxed">
-          <p className="font-semibold text-blue-950">Bu ekran neden “değişmiyor” olabilir?</p>
-          <p className="mt-1.5">
-            <strong>Durum</strong> ve <strong>ödeme geçmişi</strong> telefondaki uygulama sürümünden değil,{' '}
-            <strong>Supabase veritabanından</strong> gelir. Google Play’de ödeme tamamlansa bile, sunucudaki{' '}
-            <strong>doğrulama (edge function)</strong> kayıt oluşturmadıysa burada hâlâ “Pasif” ve boş geçmiş
-            görürsün. Uygulama güncellemesi tek başına sunucuya satır eklemez.
-          </p>
-          <p className="mt-2 text-blue-800/90">
-            Çözüm: Supabase’de <code className="rounded bg-white/80 px-1">merchant-subscription-google-confirm</code>{' '}
-            fonksiyonunun deploy edildiğinden ve Google Play API / paket adı secret’larının doğru olduğundan emin olun.
-          </p>
-        </div>
+        <p className="text-xs text-gray-500 px-0.5 -mt-1 mb-1">
+          Durum ve ödeme listesi hesabınızdaki kayıtlara göre gösterilir. Ödeme sonrası hemen güncellenmezse üstteki{' '}
+          <strong>Yenile</strong>ye basmayı deneyin.
+        </p>
 
         <div className="bg-white rounded-lg p-4 border border-gray-200">
           <div className="flex items-center justify-between mb-2">
@@ -540,13 +531,9 @@ export default function MerchantSubscriptionScreen() {
           {isLoading ? (
             <p className="text-sm text-gray-500">Yükleniyor...</p>
           ) : payments.length === 0 ? (
-            <div className="space-y-1">
-              <p className="text-sm text-gray-500">Henüz ödeme kaydı yok.</p>
-              <p className="text-xs text-amber-800/90">
-                Kayıt yoksa sunucu tarafında ödeme satırı oluşmamış demektir; Play’de harcama görünse bile buraya
-                yansımaz.
-              </p>
-            </div>
+            <p className="text-sm text-gray-500">
+              Henüz ödeme kaydı yok. Ödeme yaptıysanız birkaç dakika sonra <strong>Yenile</strong>ye basın.
+            </p>
           ) : (
             <div className="space-y-2">
               {payments.map((payment) => (
