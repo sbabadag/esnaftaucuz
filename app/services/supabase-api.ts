@@ -11,6 +11,28 @@ import { Browser } from '@capacitor/browser';
 import { Capacitor } from '@capacitor/core';
 import { getImmediateUnreadCount } from '../lib/notification-store';
 
+// In-memory merchant subscription cache — set once after login, avoids
+// repeated RPC/REST calls on every product operation.
+let _merchantSubActive: boolean | null = null;
+let _merchantSubCheckedAt = 0;
+const MERCHANT_SUB_CACHE_TTL = 10 * 60 * 1000; // 10 minutes
+
+export const setMerchantSubscriptionCache = (active: boolean) => {
+  _merchantSubActive = active;
+  _merchantSubCheckedAt = Date.now();
+};
+
+export const clearMerchantSubscriptionCache = () => {
+  _merchantSubActive = null;
+  _merchantSubCheckedAt = 0;
+};
+
+const getMerchantSubscriptionCache = (): boolean | null => {
+  if (_merchantSubActive === null) return null;
+  if (Date.now() - _merchantSubCheckedAt > MERCHANT_SUB_CACHE_TTL) return null;
+  return _merchantSubActive;
+};
+
 const normalizeMerchantFlag = (value: any): boolean => {
   if (value === true) return true;
   if (value === false || value == null) return false;
@@ -714,7 +736,24 @@ export const authAPI = {
       // The callback deep link is handled by App.tsx via appUrlOpen listener.
       if (isMobile && data.url) {
         const safeOAuthUrl = getSafeOAuthUrl(data.url);
-        console.log('📱 Opening OAuth URL in Chrome Custom Tab:', safeOAuthUrl.substring(0, 80) + '...');
+        console.log('📱 Opening OAuth URL for mobile:', safeOAuthUrl.substring(0, 80) + '...');
+
+        // Samsung Internet Custom Tabs don't properly handle custom URL scheme redirects.
+        // Use the native system browser via Intent.ACTION_VIEW which reliably fires
+        // Android intents for custom scheme URLs like com.esnaftaucuz.app://
+        const isAndroid = (window as any).Capacitor?.getPlatform?.() === 'android';
+        if (isAndroid) {
+          try {
+            const { GooglePlayBilling } = await import('../lib/google-play-billing');
+            await GooglePlayBilling.openInSystemBrowser({ url: safeOAuthUrl });
+            console.log('📱 Opened OAuth URL in system browser (Intent.ACTION_VIEW)');
+            return { redirectUrl: safeOAuthUrl, openedInBrowser: true };
+          } catch (e) {
+            console.warn('⚠️ openInSystemBrowser failed, falling back to Browser.open:', e);
+          }
+        }
+
+        // Fallback: Capacitor Browser plugin (Custom Tabs)
         await Browser.open({
           url: safeOAuthUrl,
           toolbarColor: '#16a34a',
@@ -3390,6 +3429,7 @@ const isTransientSubscriptionCheckError = (error: unknown) => {
   const msg = String((error as any)?.message || error || '').toLowerCase();
   return (
     msg.includes('zaman aşım') ||
+    msg.includes('zaman asim') ||
     msg.includes('timeout') ||
     msg.includes('aborted') ||
     msg.includes('network') ||
@@ -3399,13 +3439,58 @@ const isTransientSubscriptionCheckError = (error: unknown) => {
 };
 
 const ensureMerchantSubscriptionActive = async (merchantId: string) => {
+  // Strategy 0: In-memory cache (instant, set after login)
+  const cached = getMerchantSubscriptionCache();
+  if (cached === true) {
+    console.log('✅ Subscription check: cache hit (active)');
+    return;
+  }
+  // cached === null or false → verify via API (don't trust negative cache
+  // because server-side RPC may have trial/grace-period logic)
+
+  // Strategy 1: REST query (fast, avoids Supabase client session issues)
+  const sbUrl = import.meta.env.VITE_SUPABASE_URL as string;
+  const sbKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
+  if (sbUrl && sbKey) {
+    try {
+      const headers = await getRestAuthHeaders();
+      const controller = new AbortController();
+      const tid = setTimeout(() => controller.abort(), 8000);
+      const resp = await fetch(
+        `${sbUrl}/rest/v1/rpc/has_active_merchant_subscription`,
+        {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ p_user_id: merchantId }),
+          signal: controller.signal,
+        }
+      );
+      clearTimeout(tid);
+      if (resp.ok) {
+        const result = await resp.json().catch(() => null);
+        if (result === true) {
+          setMerchantSubscriptionCache(true);
+          return;
+        }
+        if (result === false) {
+          throw new Error(getMerchantSubscriptionAccessError());
+        }
+      }
+      console.warn('⚠️ REST subscription check non-OK, falling through');
+    } catch (error: any) {
+      if (error?.message?.includes('aboneliğiniz aktif değil')) throw error;
+      console.warn('⚠️ REST subscription check failed, trying RPC:', error?.message);
+    }
+  }
+
+  // Strategy 2: Supabase client RPC (last resort)
   try {
     const { data, error } = await withHardTimeout(
       supabase.rpc('has_active_merchant_subscription', {
         p_user_id: merchantId,
       }),
-      12000,
-      'Abonelik kontrolü zaman asimina ugradi'
+      8000,
+      'Abonelik kontrolü zaman aşımına uğradı'
     );
 
     if (error) {
@@ -3417,7 +3502,9 @@ const ensureMerchantSubscriptionActive = async (merchantId: string) => {
       throw new Error('Abonelik durumu kontrol edilemedi. Lütfen tekrar deneyin.');
     }
 
-    if (!data) {
+    if (data) {
+      setMerchantSubscriptionCache(true);
+    } else {
       throw new Error(getMerchantSubscriptionAccessError());
     }
   } catch (error: any) {

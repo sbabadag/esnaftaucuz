@@ -17,6 +17,7 @@ const config: CapacitorConfig = {
   version,
   android: {
     versionCode: androidVersionCode,
+    webContentsDebuggingEnabled: true,
   },
   webDir: 'dist',
   // Production: No server.url = use bundled files from assets/public

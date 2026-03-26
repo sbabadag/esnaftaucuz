@@ -142,7 +142,7 @@ export default function ExploreScreen() {
   // Bu nedenle native tarafta sabit bir üst inset ekleyerek bandı dead area altına iteriz.
   const heroNativeTopOffset = isNativePlatform ? 34 : 0;
   const bottomNativeOffset = isNativePlatform ? 10 : 0;
-  const bottomBandReserve = `calc(5rem + env(safe-area-inset-bottom, 0px) + ${bottomNativeOffset}px)`;
+  const bottomBandReserve = `calc(4.5rem + env(safe-area-inset-bottom, 0px) + ${bottomNativeOffset}px)`;
   /** Fixed hero does not reserve layout space; spacer uses this height so search sits below the blue band. */
   const heroBodyPx = Math.max(heroHeight || 0, 64);
   const heroSpacerHeight = `calc(env(safe-area-inset-top, 0px) + ${heroNativeTopOffset + heroBodyPx + HEADER_GAP}px)`;
@@ -1411,7 +1411,8 @@ export default function ExploreScreen() {
 
   return (
     <div 
-      className="flex h-[100dvh] flex-col overflow-hidden bg-gray-50 relative overscroll-none"
+      className="flex flex-col overflow-hidden bg-gray-50 relative overscroll-none"
+      style={{ height: `calc(100dvh - ${bottomBandReserve})` }}
       onTouchStart={handleTouchStart}
       onTouchMove={handleTouchMove}
       onTouchEnd={handleTouchEnd}
@@ -1608,10 +1609,9 @@ export default function ExploreScreen() {
       {/* Content */}
         <div 
         ref={scrollContainerRef}
-        className="min-h-0 flex-1 px-3 sm:px-4 md:px-6 pb-3 sm:pb-4 md:pb-6 space-y-3 sm:space-y-4 overflow-y-auto max-w-7xl mx-auto w-full"
+        className="min-h-0 flex-1 px-3 sm:px-4 md:px-6 space-y-3 sm:space-y-4 overflow-y-auto max-w-7xl mx-auto w-full"
           style={{ 
           paddingTop: pullDistance > 0 ? `${Math.min(pullDistance, 60)}px` : '0px',
-          paddingBottom: bottomBandReserve,
           transition: pullDistance === 0 ? 'padding-top 0.2s' : 'none',
           overscrollBehaviorY: 'contain',
           WebkitOverflowScrolling: 'touch',

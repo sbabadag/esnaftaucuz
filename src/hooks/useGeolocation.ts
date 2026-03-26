@@ -24,103 +24,61 @@ export const useGeolocation = () => {
   const getCurrentPosition = async (): Promise<Position | null> => {
     try {
       if (isNative()) {
-        // Use Capacitor Geolocation on native
-        // First check and request permissions
         const permissions = await Geolocation.checkPermissions();
-        console.log('📱 Native: Current permissions:', permissions);
-        
         if (!hasLocationPermission(permissions)) {
-          console.log('📱 Native: Requesting location permission...');
           const requestResult = await Geolocation.requestPermissions();
-          console.log('📱 Native: Permission request result:', requestResult);
-          
           if (!hasLocationPermission(requestResult)) {
-            console.error('📱 Native: Location permission denied');
             throw new Error('Location permission denied');
           }
         }
-        
-        // Increased timeout for Android/iOS (30 seconds) to handle slower GPS acquisition
-        console.log('📱 Native: Getting current position...');
-        let position;
-        try {
-          position = await Geolocation.getCurrentPosition({
-            enableHighAccuracy: true,
-            timeout: 30000, // 30 seconds (increased for better GPS acquisition)
-            maximumAge: 10000,
-          });
-        } catch {
-          // Fallback for devices that only provide coarse location initially.
-          position = await Geolocation.getCurrentPosition({
-            enableHighAccuracy: false,
-            timeout: 30000,
-            maximumAge: 60000,
-          });
+
+        // Race: fast coarse location vs slower GPS - return whichever comes first
+        const coarsePromise = Geolocation.getCurrentPosition({
+          enableHighAccuracy: false,
+          timeout: 5000,
+          maximumAge: 30000,
+        }).catch(() => null);
+
+        const gpsPromise = Geolocation.getCurrentPosition({
+          enableHighAccuracy: true,
+          timeout: 10000,
+          maximumAge: 10000,
+        }).catch(() => null);
+
+        const [coarse, gps] = await Promise.allSettled([coarsePromise, gpsPromise]);
+        const gpsResult = gps.status === 'fulfilled' ? gps.value : null;
+        const coarseResult = coarse.status === 'fulfilled' ? coarse.value : null;
+        const position = gpsResult || coarseResult;
+
+        if (!position) {
+          throw new Error('Konum alınamadı');
         }
-        console.log('📱 Native: Position obtained:', position);
         return {
           latitude: position.coords.latitude,
           longitude: position.coords.longitude,
         };
       } else {
-        // Use HTML5 Geolocation API on web
-        const webPosition = await new Promise<Position>((resolve, reject) => {
-          if (!navigator.geolocation) {
-            reject(new Error('Geolocation is not supported'));
-            return;
-          }
+        if (!navigator.geolocation) {
+          throw new Error('Geolocation is not supported');
+        }
 
-          console.log('🌐 Requesting geolocation on web...');
-          const startTime = Date.now();
+        const getPos = (highAccuracy: boolean, timeout: number, maxAge: number) =>
+          new Promise<Position>((resolve, reject) => {
+            navigator.geolocation.getCurrentPosition(
+              (p) => resolve({ latitude: p.coords.latitude, longitude: p.coords.longitude }),
+              reject,
+              { enableHighAccuracy: highAccuracy, timeout, maximumAge: maxAge },
+            );
+          });
 
-          // First try with high accuracy (slower but more accurate)
-          navigator.geolocation.getCurrentPosition(
-            (position) => {
-              const elapsed = Date.now() - startTime;
-              console.log(`✅ Geolocation obtained in ${elapsed}ms`);
-              resolve({
-                latitude: position.coords.latitude,
-                longitude: position.coords.longitude,
-              });
-            },
-            (error) => {
-              console.error('Geolocation error (high accuracy):', error);
-              
-              // If timeout or position unavailable, try with lower accuracy
-              if (error.code === 3 || error.code === 2) {
-                console.log('⚠️ Retrying with lower accuracy...');
-                navigator.geolocation.getCurrentPosition(
-                  (position) => {
-                    const elapsed = Date.now() - startTime;
-                    console.log(`✅ Geolocation obtained (low accuracy) in ${elapsed}ms`);
-                    resolve({
-                      latitude: position.coords.latitude,
-                      longitude: position.coords.longitude,
-                    });
-                  },
-                  (retryError) => {
-                    console.error('Geolocation error (low accuracy):', retryError);
-                    reject(retryError);
-                  },
-                  {
-                    enableHighAccuracy: false,
-                    timeout: 15000, // 15 seconds for retry
-                    maximumAge: 60000, // Accept cached position up to 1 minute old
-                  }
-                );
-              } else {
-                reject(error);
-              }
-            },
-            {
-              enableHighAccuracy: true,
-              timeout: 20000, // 20 seconds (increased from 10)
-              maximumAge: 0, // Don't use cached position for first attempt
-            }
-          );
-        });
+        // Race coarse (fast) vs GPS (accurate) - use whichever resolves first
+        const result = await Promise.any([
+          getPos(false, 5000, 30000),
+          getPos(true, 10000, 10000),
+        ]).catch(() => null);
 
-        return webPosition;
+        if (!result) throw new Error('Konum alınamadı');
+        return result;
       }
     } catch (error) {
       console.error('Geolocation error:', error);

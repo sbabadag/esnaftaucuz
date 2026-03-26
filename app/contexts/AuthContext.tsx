@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, useEffect, useRef, ReactNode } from 'react';
-import { authAPI } from '../services/supabase-api';
+import { authAPI, setMerchantSubscriptionCache, clearMerchantSubscriptionCache } from '../services/supabase-api';
 import { supabase, safeGetSession } from '../lib/supabase';
 import { toast } from 'sonner';
 
@@ -266,6 +266,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
     userRef.current = newUser;
     setUser(newUser);
+
+    // Keep the in-memory subscription cache in sync so product operations
+    // never need a blocking RPC call.  Only cache positive results here;
+    // uncertain/inactive states fall through to the REST/RPC check so the
+    // server-side function (which may have trial/grace-period logic) decides.
+    if (newUser === null) {
+      clearMerchantSubscriptionCache();
+    } else if (newUser.is_merchant) {
+      const status = String(newUser.merchant_subscription_status || '').toLowerCase();
+      if (status === 'active' || status === 'past_due') {
+        setMerchantSubscriptionCache(true);
+      }
+      // Don't cache false — let the API check handle edge cases
+    }
   };
   useEffect(() => {
     userRef.current = user;

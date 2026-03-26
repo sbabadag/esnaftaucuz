@@ -18,6 +18,12 @@ export default function ProfileScreen() {
   const { theme, toggleTheme } = useTheme();
   const { t, lang, setLang } = useLanguage();
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const isNativePlatform =
+    typeof window !== 'undefined' &&
+    !!(window as any).Capacitor?.isNativePlatform &&
+    (window as any).Capacitor.isNativePlatform();
+  const bottomNativeOffset = isNativePlatform ? 10 : 0;
+  const bottomBandReserve = `calc(4.5rem + env(safe-area-inset-bottom, 0px) + ${bottomNativeOffset}px)`;
   const [dbStatus, setDbStatus] = useState<{
     is_merchant: boolean;
     merchant_subscription_status: string;
@@ -158,54 +164,49 @@ export default function ProfileScreen() {
   ];
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="flex flex-col overflow-y-auto bg-gray-50" style={{ height: `calc(100dvh - ${bottomBandReserve})` }}>
       {/* Profile Header */}
       <div
-        className={`${isMerchant ? 'bg-blue-600' : 'bg-white'} p-6 border-b ${isMerchant ? 'border-blue-600' : 'border-gray-200'}`}
-        style={{ paddingTop: 'calc(1.5rem + env(safe-area-inset-top, 0px))' }}
+        className={`${isMerchant ? 'bg-blue-600' : 'bg-white'} px-4 py-2 border-b ${isMerchant ? 'border-blue-600' : 'border-gray-200'}`}
+        style={{ paddingTop: 'calc(0.5rem + env(safe-area-inset-top, 0px))' }}
       >
-        <div className="flex items-center gap-4 mb-6">
-          <Avatar className="w-20 h-20">
+        <div className="flex items-center gap-3">
+          <Avatar className="w-11 h-11">
             <AvatarImage src={user?.avatar || ''} />
-            <AvatarFallback className={`${isMerchant ? 'bg-blue-600' : 'bg-green-600'} text-white text-2xl`}>
+            <AvatarFallback className={`${isMerchant ? 'bg-blue-600' : 'bg-green-600'} text-white text-sm`}>
               {getUserInitials()}
             </AvatarFallback>
           </Avatar>
-          <div className="flex-1">
-            <div className="flex items-center gap-2">
-              <h2 className={`text-2xl ${isMerchant ? 'text-white' : ''}`}>{user?.name || 'Kullanıcı'}</h2>
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-1.5">
+              <h2 className={`text-base font-semibold truncate ${isMerchant ? 'text-white' : ''}`}>{user?.name || 'Kullanıcı'}</h2>
               {isMerchant && (
-                <Badge className="bg-white text-blue-600">Esnaf</Badge>
+                <Badge className="bg-white text-blue-600 text-[10px] px-1 py-0 leading-4">Esnaf</Badge>
               )}
             </div>
-            <div className="flex items-center gap-2 mt-1">
-              <span className={`text-sm ${isMerchant ? 'text-white/80' : 'text-gray-600'}`}>{t('LEVEL_LABEL')}</span>
-              <Badge variant="secondary">{getLevelBadge()} 🏅</Badge>
+            <div className="flex items-center gap-1.5">
+              <span className={`text-[11px] ${isMerchant ? 'text-white/80' : 'text-gray-600'}`}>{t('LEVEL_LABEL')}</span>
+              <Badge variant="secondary" className="text-[10px] px-1 py-0 leading-4">{getLevelBadge()} 🏅</Badge>
             </div>
           </div>
-        </div>
-
-        {/* Stats */}
-        <div className="grid grid-cols-3 gap-4">
-          <div className="text-center">
-            <div className={`text-2xl ${isMerchant ? 'text-blue-600' : 'text-green-600'}`}>
-              {typeof user?.contributions === 'object' 
-                ? user.contributions?.shares || 0 
-                : user?.contributions || 0}
+          {/* Stats inline */}
+          <div className="flex gap-3 flex-shrink-0">
+            <div className="text-center">
+              <div className={`text-sm font-bold ${isMerchant ? 'text-white' : 'text-green-600'}`}>
+                {typeof user?.contributions === 'object' ? user.contributions?.shares || 0 : user?.contributions || 0}
+              </div>
+              <div className={`text-[10px] ${isMerchant ? 'text-white/70' : 'text-gray-500'}`}>{t('SHARES')}</div>
             </div>
-            <div className="text-sm text-gray-600">{t('SHARES')}</div>
-          </div>
-          <div className="text-center">
-            <div className={`text-2xl ${isMerchant ? 'text-blue-600' : 'text-green-600'}`}>
-              {typeof user?.contributions === 'object' 
-                ? user.contributions?.verifications || 0 
-                : 0}
+            <div className="text-center">
+              <div className={`text-sm font-bold ${isMerchant ? 'text-white' : 'text-green-600'}`}>
+                {typeof user?.contributions === 'object' ? user.contributions?.verifications || 0 : 0}
+              </div>
+              <div className={`text-[10px] ${isMerchant ? 'text-white/70' : 'text-gray-500'}`}>{t('VERIFICATIONS')}</div>
             </div>
-            <div className="text-sm text-gray-600">{t('VERIFICATIONS')}</div>
-          </div>
-          <div className="text-center">
-            <div className={`text-2xl ${isMerchant ? 'text-blue-600' : 'text-green-600'}`}>{user?.points || 0}</div>
-            <div className="text-sm text-gray-600">{t('POINTS')}</div>
+            <div className="text-center">
+              <div className={`text-sm font-bold ${isMerchant ? 'text-white' : 'text-green-600'}`}>{user?.points || 0}</div>
+              <div className={`text-[10px] ${isMerchant ? 'text-white/70' : 'text-gray-500'}`}>{t('POINTS')}</div>
+            </div>
           </div>
         </div>
       </div>

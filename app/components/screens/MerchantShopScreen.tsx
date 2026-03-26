@@ -10,7 +10,7 @@ import { toast } from 'sonner';
 import { merchantProductsAPI, productsAPI, locationsAPI } from '../../services/supabase-api';
 import { useAuth } from '../../contexts/AuthContext';
 import { useGeolocation } from '../../../src/hooks/useGeolocation';
-import { forwardGeocode } from '../../utils/geocoding';
+import { forwardGeocode, reverseGeocode } from '../../utils/geocoding';
 import { supabase, safeGetSession } from '../../lib/supabase';
 import { v4 as uuidv4 } from 'uuid';
 import { Capacitor } from '@capacitor/core';
@@ -190,35 +190,62 @@ export default function MerchantShopScreen() {
   const loadAvailableProducts = async () => {
     setIsLoadingAvailableProducts(true);
     try {
-      const data = await productsAPI.getAll();
-      if (Array.isArray(data) && data.length > 0) {
-        setAvailableProducts(data);
-        return;
+      let data: any[] = [];
+
+      // Direct REST fetch (fastest, bypasses cachedQuery)
+      try {
+        const sbUrl = import.meta.env.VITE_SUPABASE_URL as string;
+        const sbKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
+        if (sbUrl && sbKey) {
+          const controller = new AbortController();
+          const tid = setTimeout(() => controller.abort(), 8000);
+          const resp = await fetch(
+            `${sbUrl}/rest/v1/products?select=id,name,category,image&is_active=eq.true&order=name.asc&limit=500`,
+            { headers: { apikey: sbKey, Authorization: `Bearer ${sbKey}` }, signal: controller.signal },
+          );
+          clearTimeout(tid);
+          if (resp.ok) {
+            const rows = await resp.json();
+            if (Array.isArray(rows)) data = rows;
+          }
+        }
+      } catch (e) {
+        console.warn('Direct REST product fetch failed:', e);
       }
 
-      // Fallback: use locally cached global products index if API returns empty.
-      const cacheKeys = [
-        `products-search-index:${user?.id || 'anon'}`,
-        'products-search-index:anon',
-      ];
-      for (const key of cacheKeys) {
+      // Fallback: Supabase client with timeout
+      if (data.length === 0) {
         try {
-          const raw = localStorage.getItem(key);
-          if (!raw) continue;
-          const parsed = JSON.parse(raw);
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            setAvailableProducts(parsed);
-            return;
-          }
-        } catch {
-          // ignore cache parse errors
+          const { data: rows } = await withTimeout(
+            supabase.from('products').select('id,name,category,image').eq('is_active', true).order('name', { ascending: true }).limit(500),
+            8000,
+            'Ürün listesi zaman aşımı',
+          );
+          if (Array.isArray(rows)) data = rows;
+        } catch (e) {
+          console.warn('Supabase client product fetch failed:', e);
         }
       }
 
-      setAvailableProducts([]);
+      // Fallback: localStorage cache
+      if (data.length === 0) {
+        for (const key of [`products-search-index:${user?.id || 'anon'}`, 'products-search-index:anon']) {
+          try {
+            const raw = localStorage.getItem(key);
+            if (!raw) continue;
+            const parsed = JSON.parse(raw);
+            if (Array.isArray(parsed) && parsed.length > 0) { data = parsed; break; }
+          } catch { /* ignore */ }
+        }
+      }
+
+      setAvailableProducts(data);
+      if (data.length === 0) {
+        toast.error('Ürün listesi boş veya yüklenemedi');
+      }
     } catch (error) {
       console.error('Failed to load products:', error);
-      toast.error('Ürün listesi yüklenemedi, lütfen tekrar deneyin');
+      toast.error('Ürün listesi yüklenemedi');
     } finally {
       setIsLoadingAvailableProducts(false);
     }
@@ -320,19 +347,36 @@ export default function MerchantShopScreen() {
   const handleGetLocation = async () => {
     try {
       setIsGettingLocation(true);
+      toast.info('Konum alınıyor...');
       const position = await getCurrentPosition();
       
       if (position) {
         const { latitude, longitude } = position;
-        setFormData({
-          ...formData,
+        setFormData((prev) => ({
+          ...prev,
           coordinates: { lat: latitude, lng: longitude },
-        });
-        toast.success('Konum alındı');
+        }));
+
+        const geo = await reverseGeocode(latitude, longitude);
+        if (geo.success && geo.address) {
+          setFormData((prev) => ({
+            ...prev,
+            locationName: geo.address!,
+          }));
+          toast.success(`Konum: ${geo.address}`);
+        } else {
+          setFormData((prev) => ({
+            ...prev,
+            locationName: `${latitude.toFixed(5)}, ${longitude.toFixed(5)}`,
+          }));
+          toast.success('Konum alındı');
+        }
+      } else {
+        toast.error('Konum alınamadı. Konum izni verildiğinden emin olun.');
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error('Location error:', error);
-      toast.error('Konum alınamadı');
+      toast.error(error?.message || 'Konum alınamadı');
     } finally {
       setIsGettingLocation(false);
     }
@@ -396,7 +440,7 @@ export default function MerchantShopScreen() {
     const msg = String((error as any)?.message || error || '').toLocaleLowerCase('tr');
     return (
       msg.includes('abonelik') &&
-      (msg.includes('zaman aşım') || msg.includes('timeout') || msg.includes('time out'))
+      (msg.includes('zaman aşım') || msg.includes('zaman asim') || msg.includes('timeout') || msg.includes('time out'))
     );
   };
 
@@ -404,16 +448,20 @@ export default function MerchantShopScreen() {
     const sbUrl = import.meta.env.VITE_SUPABASE_URL as string;
     const sbKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
     if (!sbUrl || !sbKey || !user) {
-      throw new Error('Kayıt için gerekli ayarlar eksik');
+      throw new Error(`REST ayarlar eksik: url=${!!sbUrl} key=${!!sbKey} user=${!!user}`);
     }
 
     const { accessToken: sessionToken } = await safeGetSession();
     const accessToken = sessionToken || localStorage.getItem('authToken');
+    if (!accessToken) {
+      throw new Error('Oturum token bulunamadı - lütfen tekrar giriş yapın');
+    }
+
     const headers: Record<string, string> = {
       apikey: sbKey,
       'Content-Type': 'application/json',
+      Authorization: `Bearer ${accessToken}`,
     };
-    if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
 
     const payload: any = {
       price: parseFloat(formData.price),
@@ -440,17 +488,14 @@ export default function MerchantShopScreen() {
 
     const resp = await fetch(url, {
       method,
-      headers: {
-        ...headers,
-        Prefer: prefer,
-      },
+      headers: { ...headers, Prefer: prefer },
       body: JSON.stringify(payload),
       signal: controller.signal,
     });
     clearTimeout(tid);
     if (!resp.ok) {
       const body = await resp.text().catch(() => '');
-      throw new Error(body || 'REST kayıt başarısız');
+      throw new Error(`REST ${resp.status}: ${body.substring(0, 200) || 'Kayıt başarısız'}`);
     }
   };
 
@@ -468,6 +513,16 @@ export default function MerchantShopScreen() {
     try {
       setIsSubmitting(true);
       console.log('🔄 Starting product submit...', { editingProduct: !!editingProduct });
+
+      // Ensure session is fresh to avoid auth redirects
+      try {
+        const { accessToken } = await safeGetSession();
+        if (!accessToken) {
+          await supabase.auth.refreshSession();
+        }
+      } catch (sessionErr) {
+        console.warn('⚠️ Session refresh before submit:', sessionErr);
+      }
 
       // Upload images with timeout
       let imageUrls: string[] = [];
@@ -487,32 +542,61 @@ export default function MerchantShopScreen() {
         }
       }
 
-      // Create or update product with timeout
+      // Save product — try direct REST first (fastest, most reliable on mobile),
+      // then fall back to merchantProductsAPI which includes subscription check.
       console.log('💾 Saving product...');
-      const savePromise = editingProduct
-        ? merchantProductsAPI.update(editingProduct.id, {
-            price: parseFloat(formData.price),
-            unit: formData.unit,
-            images: imageUrls.length > 0 ? imageUrls : editingProduct.images,
-            location_id: formData.locationId || undefined,
-            coordinates: formData.coordinates || undefined,
-          })
-        : merchantProductsAPI.create({
-            merchant_id: user.id,
-            product_id: formData.productId,
-            price: parseFloat(formData.price),
-            unit: formData.unit,
-            images: imageUrls,
-            location_id: formData.locationId || undefined,
-            coordinates: formData.coordinates || undefined,
-          });
-      
-      const timeoutPromise = new Promise((_, reject) => 
-        setTimeout(() => reject(new Error('İşlem zaman aşımına uğradı')), 45000)
-      );
-      
-      await Promise.race([savePromise, timeoutPromise]);
-      console.log('✅ Product saved successfully');
+      toast.info('Ürün kaydediliyor...');
+      let saved = false;
+      let lastError: any = null;
+
+      // Attempt 1: Direct REST (bypasses subscription check + Supabase client)
+      try {
+        await saveMerchantProductViaRest(imageUrls);
+        saved = true;
+        console.log('✅ Product saved via direct REST');
+      } catch (restErr: any) {
+        lastError = restErr;
+        console.warn('⚠️ Direct REST save failed:', restErr?.message);
+        toast.warning(`REST kayıt: ${restErr?.message?.substring(0, 100) || 'başarısız'}`, { duration: 5000 });
+      }
+
+      // Attempt 2: merchantProductsAPI (has subscription check + Supabase fallback)
+      if (!saved) {
+        try {
+          const savePromise = editingProduct
+            ? merchantProductsAPI.update(editingProduct.id, {
+                price: parseFloat(formData.price),
+                unit: formData.unit,
+                images: imageUrls.length > 0 ? imageUrls : editingProduct.images,
+                location_id: formData.locationId || undefined,
+                coordinates: formData.coordinates || undefined,
+              })
+            : merchantProductsAPI.create({
+                merchant_id: user.id,
+                product_id: formData.productId,
+                price: parseFloat(formData.price),
+                unit: formData.unit,
+                images: imageUrls,
+                location_id: formData.locationId || undefined,
+                coordinates: formData.coordinates || undefined,
+              });
+
+          const timeoutPromise = new Promise((_, reject) =>
+            setTimeout(() => reject(new Error('İşlem zaman aşımına uğradı')), 30000)
+          );
+
+          await Promise.race([savePromise, timeoutPromise]);
+          saved = true;
+          console.log('✅ Product saved via merchantProductsAPI');
+        } catch (apiErr: any) {
+          lastError = apiErr;
+          console.error('❌ merchantProductsAPI save failed:', apiErr?.message);
+        }
+      }
+
+      if (!saved) {
+        throw lastError || new Error('Ürün kaydedilemedi');
+      }
 
       toast.success(editingProduct ? 'Ürün güncellendi' : 'Ürün eklendi');
 
@@ -549,32 +633,8 @@ export default function MerchantShopScreen() {
       }
     } catch (error: any) {
       console.error('❌ Submit error:', error);
-      if (isSubscriptionCheckTimeoutError(error)) {
-        try {
-          const fallbackImageUrls = formData.images.length > 0 ? await uploadImages(formData.images) : [];
-          await saveMerchantProductViaRest(fallbackImageUrls);
-          toast.success(editingProduct ? 'Ürün güncellendi' : 'Ürün eklendi');
-          setFormData({
-            productId: '',
-            price: '',
-            unit: 'kg',
-            images: [],
-            imagePreviews: [],
-            locationId: '',
-            locationName: '',
-            coordinates: null,
-          });
-          setProductSearchQuery('');
-          setEditingProduct(null);
-          await loadMerchantProducts();
-          setIsDialogOpen(false);
-          return;
-        } catch (fallbackError: any) {
-          console.error('❌ Fallback REST submit error:', fallbackError);
-        }
-      }
-      const errorMessage = error.message || 'Bir hata oluştu';
-      toast.error(errorMessage);
+      const errorMessage = error?.message || 'Bir hata oluştu';
+      toast.error(`Hata: ${errorMessage.substring(0, 200)}`, { duration: 8000 });
     } finally {
       // Always reset submitting state
       setIsSubmitting(false);
@@ -666,12 +726,9 @@ export default function MerchantShopScreen() {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50 relative">
-      {/* Header */}
-      <div
-        className="bg-white border-b border-gray-200 sticky z-20 relative"
-        style={{ top: `calc(env(safe-area-inset-top, 0px) + ${headerTopOffsetPx}px)` }}
-      >
+    <div className="fixed inset-0 flex flex-col bg-gray-50" style={{ top: `calc(env(safe-area-inset-top, 0px) + ${headerTopOffsetPx}px)` }}>
+      {/* Header - sits in flex column, never scrolls */}
+      <div className="flex-shrink-0 bg-white border-b border-gray-200">
         <div className="flex items-center justify-between p-4">
           <div className="flex items-center gap-3">
             <Button
@@ -687,11 +744,11 @@ export default function MerchantShopScreen() {
             <Dialog 
               open={isDialogOpen} 
               onOpenChange={(open) => {
-                // Only allow closing if not submitting
-                if (!open && !isSubmitting) {
+                if (open) {
+                  setIsDialogOpen(true);
+                } else if (!isSubmitting) {
                   setIsDialogOpen(false);
                   setEditingProduct(null);
-                  // Reset form when dialog closes
                   setFormData({
                     productId: '',
                     price: '',
@@ -910,6 +967,9 @@ export default function MerchantShopScreen() {
         </div>
       </div>
 
+      {/* Scrollable content area */}
+      <div className="flex-1 overflow-y-auto">
+
       {isOwnShopById && isMerchantOnboardingPending && (
         <div className="mx-4 mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
           Abonelik baslatilana kadar dukkani sadece goruntuleyebilirsiniz. Urun ekleme, duzenleme ve silme kapatildi.
@@ -1069,6 +1129,7 @@ export default function MerchantShopScreen() {
           })
         )}
       </div>
+      </div>{/* end scrollable content */}
     </div>
   );
 }

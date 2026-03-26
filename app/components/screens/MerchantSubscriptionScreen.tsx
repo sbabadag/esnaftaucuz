@@ -4,7 +4,7 @@ import { ArrowLeft, CreditCard, RefreshCw, RotateCcw } from 'lucide-react';
 import { Button } from '../ui/button';
 import { BuildVersionBadge } from '../BuildVersionBadge';
 import { useAuth } from '../../contexts/AuthContext';
-import { merchantSubscriptionAPI } from '../../services/supabase-api';
+import { merchantSubscriptionAPI, setMerchantSubscriptionCache } from '../../services/supabase-api';
 import { toast } from 'sonner';
 import { Capacitor } from '@capacitor/core';
 import { GooglePlayBilling, type GooglePlayRestoredPurchase } from '../../lib/google-play-billing';
@@ -324,6 +324,7 @@ export default function MerchantSubscriptionScreen() {
       }
 
       if (activated) {
+        setMerchantSubscriptionCache(true);
         toast.success('Abonelik Google Play ile aktif edildi!');
         setLocalMerchantFlag();
         await new Promise((r) => setTimeout(r, 3000));
@@ -336,6 +337,7 @@ export default function MerchantSubscriptionScreen() {
           const s = loaded?.status as any;
           if (isStatusActive(s)) {
             activated = true;
+            setMerchantSubscriptionCache(true);
             if (s.merchant_subscription_plan) {
               setSelectedBillingMonths(billingMonthsFromPlan(s.merchant_subscription_plan));
             }
@@ -537,6 +539,7 @@ export default function MerchantSubscriptionScreen() {
       }
 
       if (confirmedAny) {
+        setMerchantSubscriptionCache(true);
         toast.success('Satın alma başarıyla geri yüklendi!');
         setLocalMerchantFlag();
         await new Promise((r) => setTimeout(r, 2000));
