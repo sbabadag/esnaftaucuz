@@ -557,7 +557,7 @@ export default function MerchantShopScreen() {
       } catch (restErr: any) {
         lastError = restErr;
         console.warn('⚠️ Direct REST save failed:', restErr?.message);
-        toast.warning(`REST kayıt: ${restErr?.message?.substring(0, 100) || 'başarısız'}`, { duration: 5000 });
+        // Silent fallback to attempt 2
       }
 
       // Attempt 2: merchantProductsAPI (has subscription check + Supabase fallback)
@@ -634,7 +634,7 @@ export default function MerchantShopScreen() {
     } catch (error: any) {
       console.error('❌ Submit error:', error);
       const errorMessage = error?.message || 'Bir hata oluştu';
-      toast.error(`Hata: ${errorMessage.substring(0, 200)}`, { duration: 8000 });
+      toast.error('Ürün kaydedilemedi. Lütfen tekrar deneyin.', { duration: 5000 });
     } finally {
       // Always reset submitting state
       setIsSubmitting(false);

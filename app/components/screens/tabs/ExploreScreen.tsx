@@ -1236,8 +1236,8 @@ export default function ExploreScreen() {
             console.error('❌ Geocoding failed:', errorMsg);
             setCurrentLocation('Mevcut Konum');
             if (!isBenignAddressUnavailableError(errorMsg)) {
-              toast.warning('Konum tespit edildi', {
-                description: `Adres bilgisi yüklenemedi: ${errorMsg}. Konumunuz kaydedildi.`,
+              toast.info('Konum tespit edildi', {
+                description: 'Konumunuz kaydedildi.',
               });
             }
             // Reload data with new location even if geocoding failed
