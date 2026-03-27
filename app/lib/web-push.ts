@@ -1,5 +1,5 @@
 import { initializeApp, getApps, type FirebaseOptions } from 'firebase/app';
-import { getMessaging, getToken, isSupported } from 'firebase/messaging';
+import { getMessaging, getToken, isSupported, onMessage, type Messaging } from 'firebase/messaging';
 
 const requiredFirebaseVars = [
   'VITE_FIREBASE_API_KEY',
@@ -82,4 +82,19 @@ export const registerWebPushAndGetToken = async () => {
   );
 
   return token || null;
+};
+
+/** Web: uygulama ön plandayken FCM bildirimi SW yerine buraya düşer; SW sadece arka plan. */
+export const subscribeWebForegroundMessages = (handler: (payload: unknown) => void): (() => void) => {
+  const app = ensureFirebaseApp();
+  if (!app || typeof window === 'undefined') return () => {};
+  let messaging: Messaging;
+  try {
+    messaging = getMessaging(app);
+  } catch {
+    return () => {};
+  }
+  return onMessage(messaging, (payload) => {
+    handler(payload);
+  });
 };

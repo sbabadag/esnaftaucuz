@@ -42,6 +42,10 @@ const config: CapacitorConfig = {
         location: 'esnaftaucuz, sana en yakın fiyatları gösterebilmek için konumuna ihtiyaç duyuyor.',
       },
     },
+    // iOS ön plan: sistem banner/alert kapalı; rozet güncellenir, metin toast ile (usePushNotificationPipeline)
+    FirebaseMessaging: {
+      presentationOptions: ['badge'],
+    },
   },
 };
 

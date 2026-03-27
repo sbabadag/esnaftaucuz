@@ -2,7 +2,7 @@ import { useEffect } from 'react';
 import { toast } from 'sonner';
 import { Capacitor } from '@capacitor/core';
 import { FirebaseMessaging, Importance } from '@capacitor-firebase/messaging';
-import { registerWebPushAndGetToken } from '../lib/web-push';
+import { registerWebPushAndGetToken, subscribeWebForegroundMessages } from '../lib/web-push';
 import { pushTokensAPI } from '../services/supabase-api';
 
 type SyncFn = (payload: any) => Promise<boolean>;
@@ -139,6 +139,7 @@ export const usePushRegistration = ({
     let tokenRefreshListener: any = null;
     let receivedListener: any = null;
     let actionListener: any = null;
+    let webForegroundUnsub: (() => void) | null = null;
 
     const registerPush = async () => {
       if (!userId) return;
@@ -210,9 +211,7 @@ export const usePushRegistration = ({
 
           receivedListener = await FirebaseMessaging.addListener('notificationReceived', async (event) => {
             if (cancelled) return;
-            persistLocalNotification(event);
-            await syncNotificationFromPush(event);
-            // Foreground: system bildirimi yok; kullanıcıya alttan in-app mesaj göster
+            // Önce toast (senkronizasyon yavaş olsa bile kullanıcı görür)
             try {
               const n = extractPushPayload(event);
               const title = String(n?.title || 'Bildirim').trim() || 'Bildirim';
@@ -223,8 +222,10 @@ export const usePushRegistration = ({
                 position: 'bottom-center',
               });
             } catch {
-              // ignore toast errors
+              toast.info('Yeni bildirim', { duration: 5000, position: 'bottom-center' });
             }
+            persistLocalNotification(event);
+            await syncNotificationFromPush(event);
           });
 
           actionListener = await FirebaseMessaging.addListener('notificationActionPerformed', async (event) => {
@@ -266,6 +267,23 @@ export const usePushRegistration = ({
           const token = await registerWebPushAndGetToken();
           if (!token || cancelled) return;
           await pushTokensAPI.upsert(userId, token, 'web');
+          webForegroundUnsub = subscribeWebForegroundMessages((payload) => {
+            if (cancelled) return;
+            try {
+              const n = extractPushPayload(payload);
+              const title = String(n?.title || 'Bildirim').trim() || 'Bildirim';
+              const body = String(n?.body || '').trim() || 'Yeni bildirim var.';
+              toast(title, {
+                description: body,
+                duration: 6500,
+                position: 'bottom-center',
+              });
+            } catch {
+              toast.info('Yeni bildirim', { duration: 5000, position: 'bottom-center' });
+            }
+            persistLocalNotification(payload);
+            void syncNotificationFromPush(payload);
+          });
         }
 
         if (cancelled) return;
@@ -281,6 +299,7 @@ export const usePushRegistration = ({
       try { tokenRefreshListener?.remove?.(); } catch {}
       try { receivedListener?.remove?.(); } catch {}
       try { actionListener?.remove?.(); } catch {}
+      try { webForegroundUnsub?.(); } catch { webForegroundUnsub = null; }
     };
   }, [userId, navigate, persistLocalNotification, syncNotificationFromPush, extractPushPayload]);
 };
