@@ -39,6 +39,8 @@ jobs:
           NODE_ENV: production
           # Custom domain kullanılıyorsa base path'i / yap
           CUSTOM_DOMAIN: ${{ vars.CUSTOM_DOMAIN || 'false' }}
+          # GitHub project site: assets must load from /REPO/... (vars.VITE_SITE_BASE override, e.g. / for root)
+          VITE_SITE_BASE: ${{ vars.VITE_SITE_BASE || '/esnaftaucuz/' }}
 
       - name: Setup Pages
         uses: actions/configure-pages@v4

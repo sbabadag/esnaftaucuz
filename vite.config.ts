@@ -27,10 +27,19 @@ const usePagesSubpath =
   Boolean(process.env.GITHUB_ACTIONS) &&
   !['true', '1', 'yes'].includes(String(process.env.CUSTOM_DOMAIN || '').toLowerCase());
 
+/** GitHub Pages project site base; set in CI via VITE_SITE_BASE. Local/Capacitor: unset → "/" */
+function resolveBase(): string {
+  const explicit = String(process.env.VITE_SITE_BASE ?? '').trim();
+  if (explicit === '/') return '/';
+  if (explicit !== '') {
+    return explicit.endsWith('/') ? explicit : `${explicit}/`;
+  }
+  return usePagesSubpath ? '/esnaftaucuz/' : '/';
+}
+
 // Unified Vite config tuned for mobile livereload with Capacitor.
 export default defineConfig({
-  // Use /esnaftaucuz/ for GitHub Pages project site, / for custom domain or local
-  base: usePagesSubpath ? '/esnaftaucuz/' : '/',
+  base: resolveBase(),
   plugins: [
     // React and Tailwind plugins are required
     react(),
