@@ -58,8 +58,11 @@ export default function SettingsScreen() {
   const [isLoadingAddress, setIsLoadingAddress] = useState(false);
   const [isRunningPushTest, setIsRunningPushTest] = useState(false);
   const [pushTestResult, setPushTestResult] = useState<string>('');
-  // Detect at runtime if the WebView is loading from an HTTP origin (dev server)
-  const isDevWebview = typeof window !== 'undefined' && typeof window.location !== 'undefined' && window.location.protocol.startsWith('http');
+  // Insecure dev server only (http://). Do NOT use startsWith('http') — that matches https:// and shows this banner in production Capacitor (https://localhost).
+  const isDevWebview =
+    typeof window !== 'undefined' &&
+    typeof window.location !== 'undefined' &&
+    window.location.protocol === 'http:';
 
   const normalizePermissionStatus = (permissions: any): 'granted' | 'denied' | 'prompt' | 'prompt-with-rationale' => {
     const locationStatus = String(permissions?.location || '').toLowerCase();

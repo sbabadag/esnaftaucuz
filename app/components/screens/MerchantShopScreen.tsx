@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { useNavigate, useParams, useLocation, useSearchParams } from 'react-router-dom';
 import { ArrowLeft, Plus, Edit, Trash2, Camera, Image as ImageIcon, X, MapPin, Navigation, CheckCircle2, XCircle, Search, Eye } from 'lucide-react';
 import { Button } from '../ui/button';
@@ -71,6 +71,10 @@ export default function MerchantShopScreen() {
   const [userVerifications, setUserVerifications] = useState<Record<string, { is_verified: boolean }>>({});
   const [isLoadingAvailableProducts, setIsLoadingAvailableProducts] = useState(false);
   const [productSearchQuery, setProductSearchQuery] = useState('');
+  /** null = sunucu araması yok; dizi = ilike sonucu (web’de 500 limitini aşmak için) */
+  const [serverSearchResults, setServerSearchResults] = useState<Product[] | null>(null);
+  const [isServerSearching, setIsServerSearching] = useState(false);
+  const serverSearchSeq = useRef(0);
 
   const isOwnShopById = merchantId === user?.id;
   const isMerchantOnboardingPending = (() => {
@@ -103,8 +107,9 @@ export default function MerchantShopScreen() {
       .trim();
 
   const normalizedQuery = normalizeForSearch(productSearchQuery);
-  const filteredProducts = availableProducts
-    .filter((p) => {
+
+  const filteredProducts = useMemo(() => {
+    return availableProducts.filter((p) => {
       if (!normalizedQuery) return true;
       const normalizedName = normalizeForSearch(p.name || '');
       const normalizedCategory = normalizeForSearch(p.category || '');
@@ -112,8 +117,88 @@ export default function MerchantShopScreen() {
         normalizedName.includes(normalizedQuery) ||
         normalizedCategory.includes(normalizedQuery)
       );
-    })
-    .slice(0, 40);
+    });
+  }, [availableProducts, normalizedQuery]);
+
+  /** 2+ karakter: sunucu ilike; yoksa yerel filtre (daha geniş liste) */
+  const productsForList = useMemo(() => {
+    const qTrim = productSearchQuery.trim();
+    if (editingProduct) {
+      const ep = editingProduct.product;
+      if (ep?.id) {
+        return [{ id: ep.id, name: ep.name, category: ep.category, image: ep.image }];
+      }
+      const one = availableProducts.find((p) => p.id === formData.productId);
+      return one ? [one] : [];
+    }
+    if (qTrim.length >= 2) {
+      if (isServerSearching) return [];
+      if (serverSearchResults !== null) {
+        const byId = new Map(serverSearchResults.map((p) => [p.id, p]));
+        if (formData.productId && !byId.has(formData.productId)) {
+          const sel = availableProducts.find((p) => p.id === formData.productId);
+          if (sel) byId.set(sel.id, sel);
+        }
+        return Array.from(byId.values());
+      }
+    }
+    return filteredProducts.slice(0, 150);
+  }, [
+    editingProduct,
+    productSearchQuery,
+    serverSearchResults,
+    isServerSearching,
+    filteredProducts,
+    availableProducts,
+    formData.productId,
+  ]);
+
+  // Sunucu tarafı ürün araması (tüm katalogda; limit=500 yalnızca ilk sayfayı getiriyordu)
+  useEffect(() => {
+    if (!isDialogOpen || editingProduct) {
+      setServerSearchResults(null);
+      setIsServerSearching(false);
+      return;
+    }
+    const q = productSearchQuery.trim();
+    if (q.length < 2) {
+      setServerSearchResults(null);
+      setIsServerSearching(false);
+      return;
+    }
+    const safe = q.replace(/[%_\\]/g, ' ').replace(/[,()]/g, ' ').trim();
+    if (safe.length < 2) {
+      setServerSearchResults([]);
+      setIsServerSearching(false);
+      return;
+    }
+
+    const seq = ++serverSearchSeq.current;
+    setIsServerSearching(true);
+    setServerSearchResults(null);
+    const t = window.setTimeout(async () => {
+      try {
+        const { data, error } = await supabase
+          .from('products')
+          .select('id,name,category,image')
+          .eq('is_active', true)
+          .or(`name.ilike.%${safe}%,category.ilike.%${safe}%`)
+          .order('name', { ascending: true })
+          .limit(120);
+
+        if (serverSearchSeq.current !== seq) return;
+        if (error) throw error;
+        setServerSearchResults(Array.isArray(data) ? (data as Product[]) : []);
+      } catch (e) {
+        console.warn('Server product search failed:', e);
+        if (serverSearchSeq.current !== seq) return;
+        setServerSearchResults([]);
+      } finally {
+        if (serverSearchSeq.current === seq) setIsServerSearching(false);
+      }
+    }, 320);
+    return () => clearTimeout(t);
+  }, [productSearchQuery, isDialogOpen, editingProduct]);
 
   useEffect(() => {
     if (merchantId) {
@@ -192,33 +277,48 @@ export default function MerchantShopScreen() {
     try {
       let data: any[] = [];
 
-      // Direct REST fetch (fastest, bypasses cachedQuery)
-      try {
+      // Sayfalı REST: tek istekte limit=500 yalnızca ilk alfabetik ürünleri getiriyordu (web’de eksik arama).
+      const fetchPaged = async (): Promise<any[]> => {
         const sbUrl = import.meta.env.VITE_SUPABASE_URL as string;
         const sbKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
-        if (sbUrl && sbKey) {
+        if (!sbUrl || !sbKey) return [];
+        const pageSize = 1000;
+        const maxRows = 8000;
+        const merged: any[] = [];
+        for (let offset = 0; offset < maxRows; offset += pageSize) {
           const controller = new AbortController();
-          const tid = setTimeout(() => controller.abort(), 8000);
-          const resp = await fetch(
-            `${sbUrl}/rest/v1/products?select=id,name,category,image&is_active=eq.true&order=name.asc&limit=500`,
-            { headers: { apikey: sbKey, Authorization: `Bearer ${sbKey}` }, signal: controller.signal },
-          );
-          clearTimeout(tid);
-          if (resp.ok) {
+          const tid = setTimeout(() => controller.abort(), 12000);
+          try {
+            const resp = await fetch(
+              `${sbUrl}/rest/v1/products?select=id,name,category,image&is_active=eq.true&order=name.asc&limit=${pageSize}&offset=${offset}`,
+              { headers: { apikey: sbKey, Authorization: `Bearer ${sbKey}` }, signal: controller.signal },
+            );
+            clearTimeout(tid);
+            if (!resp.ok) break;
             const rows = await resp.json();
-            if (Array.isArray(rows)) data = rows;
+            if (!Array.isArray(rows) || rows.length === 0) break;
+            merged.push(...rows);
+            if (rows.length < pageSize) break;
+          } catch {
+            clearTimeout(tid);
+            break;
           }
         }
+        return merged;
+      };
+
+      try {
+        data = await fetchPaged();
       } catch (e) {
-        console.warn('Direct REST product fetch failed:', e);
+        console.warn('Paged REST product fetch failed:', e);
       }
 
-      // Fallback: Supabase client with timeout
+      // Fallback: Supabase client (tek sayfa limit, yine de yedek)
       if (data.length === 0) {
         try {
           const { data: rows } = await withTimeout(
-            supabase.from('products').select('id,name,category,image').eq('is_active', true).order('name', { ascending: true }).limit(500),
-            8000,
+            supabase.from('products').select('id,name,category,image').eq('is_active', true).order('name', { ascending: true }).limit(2000),
+            12000,
             'Ürün listesi zaman aşımı',
           );
           if (Array.isArray(rows)) data = rows;
@@ -444,7 +544,7 @@ export default function MerchantShopScreen() {
     );
   };
 
-  const saveMerchantProductViaRest = async (imageUrls: string[]) => {
+  const saveMerchantProductViaRest = async (imageUrls: string[], resolvedPrice: number) => {
     const sbUrl = import.meta.env.VITE_SUPABASE_URL as string;
     const sbKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
     if (!sbUrl || !sbKey || !user) {
@@ -464,7 +564,7 @@ export default function MerchantShopScreen() {
     };
 
     const payload: any = {
-      price: parseFloat(formData.price),
+      price: resolvedPrice,
       unit: formData.unit,
       images: imageUrls.length > 0 ? imageUrls : (editingProduct?.images || []),
       location_id: formData.locationId || null,
@@ -510,6 +610,13 @@ export default function MerchantShopScreen() {
       return;
     }
 
+    const priceRaw = String(formData.price).replace(',', '.').trim();
+    const priceNum = parseFloat(priceRaw);
+    if (!Number.isFinite(priceNum) || priceNum < 0) {
+      toast.error('Geçerli bir fiyat girin');
+      return;
+    }
+
     try {
       setIsSubmitting(true);
       console.log('🔄 Starting product submit...', { editingProduct: !!editingProduct });
@@ -551,7 +658,7 @@ export default function MerchantShopScreen() {
 
       // Attempt 1: Direct REST (bypasses subscription check + Supabase client)
       try {
-        await saveMerchantProductViaRest(imageUrls);
+        await saveMerchantProductViaRest(imageUrls, priceNum);
         saved = true;
         console.log('✅ Product saved via direct REST');
       } catch (restErr: any) {
@@ -565,7 +672,7 @@ export default function MerchantShopScreen() {
         try {
           const savePromise = editingProduct
             ? merchantProductsAPI.update(editingProduct.id, {
-                price: parseFloat(formData.price),
+                price: priceNum,
                 unit: formData.unit,
                 images: imageUrls.length > 0 ? imageUrls : editingProduct.images,
                 location_id: formData.locationId || undefined,
@@ -574,7 +681,7 @@ export default function MerchantShopScreen() {
             : merchantProductsAPI.create({
                 merchant_id: user.id,
                 product_id: formData.productId,
-                price: parseFloat(formData.price),
+                price: priceNum,
                 unit: formData.unit,
                 images: imageUrls,
                 location_id: formData.locationId || undefined,
@@ -805,13 +912,17 @@ export default function MerchantShopScreen() {
                       </div>
 
                       <div className="max-h-52 overflow-y-auto rounded-md border border-gray-200 p-2">
-                        {isLoadingAvailableProducts ? (
+                        {isLoadingAvailableProducts || (productSearchQuery.trim().length >= 2 && isServerSearching) ? (
                           <div className="text-sm text-gray-500 p-2">Ürün listesi yükleniyor...</div>
-                        ) : filteredProducts.length === 0 ? (
-                          <div className="text-sm text-gray-500 p-2">Ürün bulunamadı</div>
+                        ) : productsForList.length === 0 ? (
+                          <div className="text-sm text-gray-500 p-2">
+                            {productSearchQuery.trim().length >= 2
+                              ? 'Aramanıza uygun ürün bulunamadı. Farklı yazı yazmayı deneyin.'
+                              : 'Ürün bulunamadı'}
+                          </div>
                         ) : (
                           <div className="grid grid-cols-2 gap-2">
-                            {filteredProducts.map((product) => {
+                            {productsForList.map((product) => {
                               const isSelected = formData.productId === product.id;
                               return (
                                 <button

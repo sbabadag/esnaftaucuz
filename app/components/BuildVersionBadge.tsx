@@ -22,7 +22,7 @@ export function BuildVersionBadge({ className = '', variant = 'onLight' }: Props
           const info = await App.getInfo();
           if (!cancelled) {
             setLine1(`Sürüm ${info.version}  ·  build ${info.build}`);
-            setLine2('Google Play · Dahili test');
+            setLine2('');
           }
           return;
         }
@@ -34,7 +34,7 @@ export function BuildVersionBadge({ className = '', variant = 'onLight' }: Props
         return;
       }
       if (!cancelled) {
-        setLine1(`Web / geliştirici (${platform})`);
+        setLine1(`Web · ${platform}`);
         setLine2('');
       }
     })();

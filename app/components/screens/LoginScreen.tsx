@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion } from 'motion/react';
 import { ShoppingBag, Mail, Lock, Eye, EyeOff } from 'lucide-react';
@@ -24,32 +24,6 @@ export default function LoginScreen({ onLogin }: { onLogin?: () => void }) {
   const [isMerchant, setIsMerchant] = useState(false);
   const MERCHANT_SIGNUP_INTENT_KEY = 'merchant-signup-intent';
   const MERCHANT_SUBSCRIPTION_ONBOARDING_KEY = 'merchant-subscription-onboarding-user';
-  const oauthDebug = useMemo(() => {
-    try {
-      const pendingRaw = localStorage.getItem('oauth-pending-ts') || '0';
-      const pendingTs = Number(pendingRaw || '0');
-      const ageMs = pendingTs > 0 ? Math.max(0, Date.now() - pendingTs) : -1;
-      const hashParams = new URLSearchParams(window.location.hash.substring(1));
-      const searchParams = new URLSearchParams(window.location.search);
-      return {
-        pendingTs,
-        pendingAgeSec: ageMs >= 0 ? Math.floor(ageMs / 1000) : -1,
-        hasAccessToken: hashParams.has('access_token'),
-        hasCode: hashParams.has('code'),
-        hasError: hashParams.has('error') || searchParams.has('error'),
-        merchantIntentUrl: searchParams.get('merchant_intent') || hashParams.get('merchant_intent') || '',
-      };
-    } catch {
-      return {
-        pendingTs: 0,
-        pendingAgeSec: -1,
-        hasAccessToken: false,
-        hasCode: false,
-        hasError: false,
-        merchantIntentUrl: '',
-      };
-    }
-  }, [mode, isLoading]);
 
   const handleGoogleLogin = async (forceMerchantIntent: boolean = false) => {
     try {
@@ -207,10 +181,6 @@ export default function LoginScreen({ onLogin }: { onLogin?: () => void }) {
           transition={{ delay: 0.4 }}
           className="w-full space-y-4"
         >
-          <div className="w-full text-xs rounded-md border border-amber-200 bg-amber-50 text-amber-900 px-3 py-2">
-            OAuth Debug: pendingTs={String(oauthDebug.pendingTs)} | ageSec={String(oauthDebug.pendingAgeSec)} | accessToken={String(oauthDebug.hasAccessToken)} | code={String(oauthDebug.hasCode)} | error={String(oauthDebug.hasError)} | merchantIntent={oauthDebug.merchantIntentUrl || '-'}
-          </div>
-
           {/* Email/Password Form */}
           <form onSubmit={handleEmailAuth} className="space-y-4">
             {mode === 'register' && (

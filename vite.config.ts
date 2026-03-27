@@ -22,10 +22,15 @@ function getLocalIp(): string {
 const devHost = process.env.VITE_DEV_HOST || getLocalIp();
 const devPort = process.env.VITE_DEV_PORT ? Number(process.env.VITE_DEV_PORT) : 5173;
 
+// GitHub workflow sets CUSTOM_DOMAIN to string "false" when unset — must not treat as custom domain.
+const usePagesSubpath =
+  Boolean(process.env.GITHUB_ACTIONS) &&
+  !['true', '1', 'yes'].includes(String(process.env.CUSTOM_DOMAIN || '').toLowerCase());
+
 // Unified Vite config tuned for mobile livereload with Capacitor.
 export default defineConfig({
-  // Use /esnaftaucuz/ for GitHub Pages, / for custom domain
-  base: process.env.GITHUB_ACTIONS && !process.env.CUSTOM_DOMAIN ? '/esnaftaucuz/' : '/',
+  // Use /esnaftaucuz/ for GitHub Pages project site, / for custom domain or local
+  base: usePagesSubpath ? '/esnaftaucuz/' : '/',
   plugins: [
     // React and Tailwind plugins are required
     react(),

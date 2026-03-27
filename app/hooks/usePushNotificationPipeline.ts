@@ -1,4 +1,5 @@
 import { useEffect } from 'react';
+import { toast } from 'sonner';
 import { Capacitor } from '@capacitor/core';
 import { FirebaseMessaging, Importance } from '@capacitor-firebase/messaging';
 import { registerWebPushAndGetToken } from '../lib/web-push';
@@ -211,6 +212,19 @@ export const usePushRegistration = ({
             if (cancelled) return;
             persistLocalNotification(event);
             await syncNotificationFromPush(event);
+            // Foreground: system bildirimi yok; kullanıcıya alttan in-app mesaj göster
+            try {
+              const n = extractPushPayload(event);
+              const title = String(n?.title || 'Bildirim').trim() || 'Bildirim';
+              const body = String(n?.body || '').trim() || 'Yeni bildirim var.';
+              toast(title, {
+                description: body,
+                duration: 6500,
+                position: 'bottom-center',
+              });
+            } catch {
+              // ignore toast errors
+            }
           });
 
           actionListener = await FirebaseMessaging.addListener('notificationActionPerformed', async (event) => {
