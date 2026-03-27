@@ -1,14 +1,10 @@
 #!/usr/bin/env node
 /**
- * Creates a normal (non-merchant) test user via Supabase Admin API + public.users row.
+ * "Ucuzcu Gezgin" normal kullanıcı — iki yöntem:
+ * 1) SUPABASE_SERVICE_ROLE_KEY varsa: Admin API (en güvenilir)
+ * 2) Yoksa: VITE_SUPABASE_ANON_KEY ile signUp / signIn (e-posta onayı kapalıysa otomatik)
  *
- * Requires in .env (or environment):
- *   VITE_SUPABASE_URL  (or SUPABASE_URL)
- *   SUPABASE_SERVICE_ROLE_KEY   — Dashboard → Project Settings → API → service_role (secret)
- *
- * Usage:
- *   node scripts/create-test-user.mjs
- *   TEST_USER_EMAIL=x@y.com TEST_USER_PASSWORD='...' node scripts/create-test-user.mjs
+ * .env: VITE_SUPABASE_URL, ve service_role VEYA anon key
  */
 
 import { createClient } from '@supabase/supabase-js';
@@ -42,23 +38,26 @@ function loadEnvFile() {
 const env = loadEnvFile();
 const url = env.VITE_SUPABASE_URL || env.SUPABASE_URL;
 const serviceKey = env.SUPABASE_SERVICE_ROLE_KEY;
+const anonKey = env.VITE_SUPABASE_ANON_KEY || env.SUPABASE_ANON_KEY;
 
 const DISPLAY_NAME = 'Ucuzcu Gezgin';
 const EMAIL = env.TEST_USER_EMAIL || 'ucuzcu.gezgin.test@example.com';
 const PASSWORD = env.TEST_USER_PASSWORD || 'UcuzcuGezgin2026!';
 
-if (!url || !serviceKey) {
-  console.error(
-    'Eksik ortam değişkeni: VITE_SUPABASE_URL ve SUPABASE_SERVICE_ROLE_KEY gerekli (.env içinde).'
-  );
-  process.exit(1);
-}
-
-const supabase = createClient(url, serviceKey, {
-  auth: { autoRefreshToken: false, persistSession: false },
+const profileRow = (userId) => ({
+  id: userId,
+  email: EMAIL,
+  name: DISPLAY_NAME,
+  is_guest: false,
+  is_merchant: false,
+  search_radius: 15,
 });
 
-async function main() {
+async function createWithServiceRole() {
+  const supabase = createClient(url, serviceKey, {
+    auth: { autoRefreshToken: false, persistSession: false },
+  });
+
   const { data: existing, error: listErr } = await supabase.auth.admin.listUsers({
     page: 1,
     perPage: 200,
@@ -72,8 +71,13 @@ async function main() {
     console.log('Bu e-posta zaten kayıtlı:', EMAIL);
     console.log('user id:', dup.id);
     const { data: row } = await supabase.from('users').select('id,name,is_merchant').eq('id', dup.id).maybeSingle();
-    console.log('public.users:', row || '(satır yok — giriş yapınca oluşabilir)');
-    process.exit(0);
+    console.log('public.users:', row || '(satır yok)');
+    if (!row) {
+      const { error: u } = await supabase.from('users').upsert(profileRow(dup.id), { onConflict: 'id' });
+      if (u) console.error('Profil eklenemedi:', u.message);
+      else console.log('public.users satırı eklendi.');
+    }
+    return;
   }
 
   const { data: created, error: createErr } = await supabase.auth.admin.createUser({
@@ -88,30 +92,104 @@ async function main() {
     process.exit(1);
   }
 
-  const id = created.user.id;
-
-  const { error: upsertErr } = await supabase.from('users').upsert(
-    {
-      id,
-      email: EMAIL,
-      name: DISPLAY_NAME,
-      is_guest: false,
-      is_merchant: false,
-      search_radius: 15,
-    },
-    { onConflict: 'id' }
-  );
+  const { error: upsertErr } = await supabase
+    .from('users')
+    .upsert(profileRow(created.user.id), { onConflict: 'id' });
 
   if (upsertErr) {
     console.error('public.users kaydı başarısız:', upsertErr.message);
     process.exit(1);
   }
 
-  console.log('Tamam — normal kullanıcı oluşturuldu.');
+  printOk(created.user.id);
+}
+
+async function createWithAnon() {
+  const supabase = createClient(url, anonKey, {
+    auth: { autoRefreshToken: false, persistSession: false },
+  });
+
+  let session = null;
+
+  const { data: signUpData, error: signUpErr } = await supabase.auth.signUp({
+    email: EMAIL,
+    password: PASSWORD,
+    options: { data: { name: DISPLAY_NAME, full_name: DISPLAY_NAME } },
+  });
+
+  if (signUpErr) {
+    const msg = String(signUpErr.message || '').toLowerCase();
+    const already =
+      msg.includes('already') ||
+      msg.includes('registered') ||
+      signUpErr.status === 422 ||
+      signUpErr.code === 'user_already_exists';
+    if (already) {
+      const { data: signInData, error: signInErr } = await supabase.auth.signInWithPassword({
+        email: EMAIL,
+        password: PASSWORD,
+      });
+      if (signInErr || !signInData.session) {
+        console.error('Hesap var ama giriş yapılamadı (şifre yanlış veya başka sorun):', signInErr?.message);
+        process.exit(1);
+      }
+      session = signInData.session;
+    } else {
+      console.error('Kayıt hatası:', signUpErr.message);
+      process.exit(1);
+    }
+  } else {
+    session = signUpData.session;
+    if (!session && signUpData.user) {
+      console.error(
+        'Kayıt oluştu ama oturum yok — Supabase’te "Confirm email" açık olabilir.\n' +
+          'Dashboard → Authentication → Providers → Email → "Confirm email" kapatın veya\n' +
+          'SUPABASE_SERVICE_ROLE_KEY ile tekrar çalıştırın.'
+      );
+      process.exit(1);
+    }
+  }
+
+  if (!session?.user?.id) {
+    console.error('Oturum alınamadı.');
+    process.exit(1);
+  }
+
+  const userId = session.user.id;
+
+  const { error: upsertErr } = await supabase.from('users').upsert(profileRow(userId), { onConflict: 'id' });
+
+  if (upsertErr) {
+    console.error('public.users kaydı başarısız:', upsertErr.message);
+    process.exit(1);
+  }
+
+  printOk(userId);
+}
+
+function printOk(id) {
+  console.log('Tamam — normal kullanıcı (Ucuzcu Gezgin).');
   console.log('  Görünen ad:', DISPLAY_NAME);
   console.log('  E-posta:   ', EMAIL);
-  console.log('  Şifre:     ', PASSWORD, '(TEST_USER_PASSWORD ile değiştirebilirsin)');
+  console.log('  Şifre:     ', PASSWORD);
   console.log('  user id:   ', id);
+}
+
+async function main() {
+  if (!url) {
+    console.error('VITE_SUPABASE_URL eksik.');
+    process.exit(1);
+  }
+  if (serviceKey) {
+    console.log('(service_role ile oluşturuluyor…)');
+    await createWithServiceRole();
+  } else if (anonKey) {
+    console.log('(anon key ile kayıt/giriş — e-posta onayı kapalı olmalı)');
+    await createWithAnon();
+  } else {
+    console.error('VITE_SUPABASE_ANON_KEY veya SUPABASE_SERVICE_ROLE_KEY gerekli (.env).');
+    process.exit(1);
+  }
 }
 
 main().catch((e) => {
