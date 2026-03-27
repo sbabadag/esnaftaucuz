@@ -37,10 +37,11 @@ jobs:
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL || '' }}
           VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY || '' }}
           NODE_ENV: production
-          # Custom domain kullanılıyorsa base path'i / yap
+          # www... kökte yayın: true. github.io/REPO/ için false veya boş.
           CUSTOM_DOMAIN: ${{ vars.CUSTOM_DOMAIN || 'false' }}
-          # GitHub project site: assets must load from /REPO/... (vars.VITE_SITE_BASE override, e.g. / for root)
-          VITE_SITE_BASE: ${{ vars.VITE_SITE_BASE || '/esnaftaucuz/' }}
+          # Boş bırakılırsa vite.config CUSTOM_DOMAIN + GITHUB_ACTIONS ile / veya /esnaftaucuz/ seçer.
+          # Zorunlu override: repo Variables → VITE_SITE_BASE (örn. / veya /esnaftaucuz/)
+          VITE_SITE_BASE: ${{ vars.VITE_SITE_BASE || '' }}
 
       - name: Setup Pages
         uses: actions/configure-pages@v4
