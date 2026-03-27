@@ -64,6 +64,23 @@ interface Product {
 
 const resolveMerchantRole = resolveMerchantRoleFromProfile;
 
+/** Son eklenen fiyatlar: önce yıldızlı ürünler (sıra korunur), sonra diğerleri. */
+function sortRecentPricesFavoritesFirst<T extends { product?: { id?: string }; product_id?: string }>(
+  prices: T[],
+  favoriteProductIds: Set<string>
+): T[] {
+  if (!prices.length || !favoriteProductIds.size) return prices;
+  const getPid = (p: T) => String(p?.product?.id || (p as any)?.product_id || '').trim();
+  const fav: T[] = [];
+  const rest: T[] = [];
+  for (const row of prices) {
+    const pid = getPid(row);
+    if (pid && favoriteProductIds.has(pid)) fav.push(row);
+    else rest.push(row);
+  }
+  return [...fav, ...rest];
+}
+
 export default function ExploreScreen() {
   const navigate = useNavigate();
   const { getCurrentPosition } = useGeolocation();
@@ -100,6 +117,7 @@ export default function ExploreScreen() {
   const retryCountRef = useRef<number>(0);
   const lastSlowToastAtRef = useRef<number>(0);
   const restoredCacheRef = useRef<boolean>(false);
+  const favoriteProductIdsRef = useRef<Set<string>>(new Set());
   const [currentLocation, setCurrentLocation] = useState<string>('Konya / Selçuklu');
   const [isGettingLocation, setIsGettingLocation] = useState(false);
   const [userLocation, setUserLocation] = useState<{ lat: number; lng: number } | null>(null);
@@ -446,6 +464,24 @@ export default function ExploreScreen() {
     }, 25000);
 
     try {
+      let favoriteProductIds = new Set<string>();
+      if (user?.id) {
+        try {
+          const { data: favRows, error: favErr } = await supabase
+            .from('user_favorites')
+            .select('product_id')
+            .eq('user_id', user.id);
+          if (!favErr && favRows) {
+            favoriteProductIds = new Set(
+              favRows.map((r: { product_id?: string }) => String(r.product_id || '').trim()).filter(Boolean)
+            );
+          }
+        } catch {
+          /* ignore */
+        }
+      }
+      favoriteProductIdsRef.current = favoriteProductIds;
+
       // Primary source: server-side feed (service-role) to avoid client-side RLS/join issues.
       if (!shouldForceDirect) try {
         const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string;
@@ -516,18 +552,28 @@ export default function ExploreScreen() {
           }
 
           if (trendFromFn.length > 0) setTrendProducts(trendFromFn);
-          if (recentFromFn.length > 0) setRecentPrices(recentFromFn);
+          if (recentFromFn.length > 0) {
+            setRecentPrices(sortRecentPricesFavoritesFirst(recentFromFn, favoriteProductIds));
+          }
           setMerchantShops(shopsToUse);
-          if (recentFromFn.length > 0) setNearbyCheapest(recentFromFn.slice(0, 8));
+          if (recentFromFn.length > 0) {
+            setNearbyCheapest(
+              sortRecentPricesFavoritesFirst(recentFromFn, favoriteProductIds).slice(0, 8)
+            );
+          }
 
           if (trendFromFn.length > 0 || recentFromFn.length > 0 || shopsToUse.length > 0) {
+            const sortedRecentEarly =
+              recentFromFn.length > 0
+                ? sortRecentPricesFavoritesFirst(recentFromFn, favoriteProductIds)
+                : [];
             try {
               localStorage.setItem(
                 exploreCacheKey,
                 JSON.stringify({
                   trendProducts: trendFromFn,
-                  recentPrices: recentFromFn,
-                  nearbyCheapest: recentFromFn.slice(0, 8),
+                  recentPrices: sortedRecentEarly,
+                  nearbyCheapest: sortedRecentEarly.slice(0, 8),
                   merchantShops: shopsToUse,
                   savedAt: new Date().toISOString(),
                 })
@@ -713,8 +759,9 @@ export default function ExploreScreen() {
           price: p.price,
           location: p.location?.name,
         })));
-        nextRecentPrices = enrichedRecent;
-        setRecentPrices(enrichedRecent);
+        const sortedRecent = sortRecentPricesFavoritesFirst(enrichedRecent, favoriteProductIds);
+        nextRecentPrices = sortedRecent;
+        setRecentPrices(sortedRecent);
       } else {
         console.error('❌ Recent prices failed:', recent.reason);
       }
@@ -773,7 +820,10 @@ export default function ExploreScreen() {
           console.error('❌ Fallback recent prices query failed:', fallbackRecentError);
         } else if (Array.isArray(fallbackRecentRows) && fallbackRecentRows.length > 0) {
           const enrichedFallbackRecent = await enrichPricesWithProducts(fallbackRecentRows as any[]);
-          nextRecentPrices = enrichedFallbackRecent as Price[];
+          nextRecentPrices = sortRecentPricesFavoritesFirst(
+            enrichedFallbackRecent as Price[],
+            favoriteProductIds
+          );
           setRecentPrices(nextRecentPrices);
           console.log('✅ Fallback recent prices loaded:', nextRecentPrices.length);
         }
@@ -811,8 +861,9 @@ export default function ExploreScreen() {
             const trendFromFn = Array.isArray(feedData.trendProducts) ? feedData.trendProducts : [];
             const shopsFromFn = Array.isArray(feedData.merchantShops) ? feedData.merchantShops : [];
             if (recentFromFn.length > 0) {
-              nextRecentPrices = recentFromFn;
-              setRecentPrices(recentFromFn);
+              const sortedFn = sortRecentPricesFavoritesFirst(recentFromFn, favoriteProductIds);
+              nextRecentPrices = sortedFn;
+              setRecentPrices(sortedFn);
             }
             if (trendFromFn.length > 0) {
               nextTrendProducts = trendFromFn;
@@ -980,9 +1031,9 @@ export default function ExploreScreen() {
                     // Check if already exists
                     const exists = prev.some((p) => (p.id || p._id) === (fullPrice.id || fullPrice._id));
                     if (exists) return prev;
-                    
-                    // Add to beginning of list
-                    return [fullPrice, ...prev].slice(0, 100); // Keep max 100 items
+
+                    const merged = [fullPrice, ...prev].slice(0, 100);
+                    return sortRecentPricesFavoritesFirst(merged, favoriteProductIdsRef.current);
                   });
                   
                   // Show toast notification
@@ -1027,11 +1078,12 @@ export default function ExploreScreen() {
                 if (!fullPrice) return;
                 
                 // Update in recent prices
-                setRecentPrices((prev) =>
-                  prev.map((p) =>
+                setRecentPrices((prev) => {
+                  const next = prev.map((p) =>
                     (p.id || p._id) === (fullPrice.id || fullPrice._id) ? fullPrice : p
-                  )
-                );
+                  );
+                  return sortRecentPricesFavoritesFirst(next, favoriteProductIdsRef.current);
+                });
                 
                 // Update in nearby cheapest
                 setNearbyCheapest((prev) =>
