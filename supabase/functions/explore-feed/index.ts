@@ -22,6 +22,7 @@ Deno.serve(async (req) => {
     const limitTrending = Number(body?.limitTrending || 12);
     const limitShops = Number(body?.limitShops || 20);
 
+    // Son fiyatlar: is_active filtresi kullanma — DB'de cok kayit false/null legacy ise liste bos kaliyordu.
     const { data: recentRows, error: recentError } = await client
       .from('prices')
       .select('id, product_id, location_id, price, unit, created_at, is_verified, photo, coordinates, is_active')
@@ -46,7 +47,6 @@ Deno.serve(async (req) => {
       client
         .from('products')
         .select('id, name, category, image')
-        .eq('is_active', true)
         .order('search_count', { ascending: false })
         .limit(limitTrending),
       client

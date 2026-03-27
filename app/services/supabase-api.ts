@@ -5,7 +5,7 @@
  * No backend server needed - everything runs client-side with Supabase.
  */
 
-import { supabase, safeGetSession } from '../lib/supabase';
+import { supabase, safeGetSession, getAnonReadClient } from '../lib/supabase';
 import { resolveMerchantRoleFromProfile } from '../lib/merchant-role';
 import { v4 as uuidv4 } from 'uuid';
 import { Browser } from '@capacitor/browser';
@@ -76,9 +76,14 @@ const cachedQuery = async <T,>(key: string, ttlMs: number, fetcher: () => Promis
 
   const pending = fetcher()
     .then((value) => {
+      let effectiveTtl = ttlMs;
+      // Boş liste 12sn cache'lenince Keşfet sürekli boş kalabiliyor (ilk istek [] ise).
+      if (key.startsWith('prices:getAll') && Array.isArray(value) && value.length === 0) {
+        effectiveTtl = 0;
+      }
       apiQueryCache.set(key, {
         value,
-        expiresAt: Date.now() + ttlMs,
+        expiresAt: Date.now() + effectiveTtl,
       });
       return value;
     })
@@ -101,6 +106,12 @@ const invalidateCachedQueries = (prefix: string) => {
       apiQueryCache.delete(key);
     }
   }
+};
+
+/** Keşfet fiyat/ürün listesi sorguları — filtre degisince veya bos liste sonrasi cache temizligi */
+export const invalidateExploreListCaches = () => {
+  invalidateCachedQueries('prices:getAll');
+  invalidateCachedQueries('products:getTrending');
 };
 
 const withHardTimeout = async <T,>(promise: Promise<T>, timeoutMs: number, timeoutMessage: string): Promise<T> => {
@@ -930,7 +941,7 @@ export const productsAPI = {
         const controller = new AbortController();
         const tid = setTimeout(() => controller.abort(), 10000);
         const resp = await fetch(
-          `${sbUrl}/rest/v1/products?select=id,name,category,image&is_active=eq.true&order=search_count.desc&limit=6`,
+          `${sbUrl}/rest/v1/products?select=id,name,category,image&order=search_count.desc&limit=6`,
           { headers: { apikey: sbKey, Authorization: `Bearer ${sbKey}` }, signal: controller.signal }
         );
         clearTimeout(tid);
@@ -1148,7 +1159,7 @@ export const pricesAPI = {
 
           const params: string[] = [
             'select=id,product_id,location_id,user_id,price,unit,created_at,is_verified,photo,coordinates,is_active',
-            'is_active=eq.true',
+            // is_active filtresi yok: false/null legacy kayitlar da listelensin (Keşfet bos kalmasin)
           ];
           if (filters?.product) params.push(`product_id=eq.${filters.product}`);
           if (filters?.location) params.push(`location_id=eq.${filters.location}`);
@@ -1202,15 +1213,16 @@ export const pricesAPI = {
         }
       }
 
-      let query = supabase
+      const readClient = getAnonReadClient() ?? supabase;
+
+      let query = readClient
         .from('prices')
         .select(`
           *,
           product:products(id, name, category, default_unit, image),
           location:locations(id, name, type, address, coordinates, city, district),
           user:users(id, name, avatar, level)
-        `)
-        .eq('is_active', true);
+        `);
 
       if (filters?.product) {
         query = query.eq('product_id', filters.product);
@@ -1270,14 +1282,13 @@ export const pricesAPI = {
         console.warn('⚠️ Falling back to join-less prices query');
 
         // Fallback: avoid relation joins (users/products/locations) in case one policy breaks the full select.
-        let basicQuery = supabase
+        let basicQuery = readClient
           .from('prices')
           .select('id, user_id, product_id, location_id, price, unit, created_at, is_verified, photo, coordinates, is_active')
           .order(filters?.sort === 'cheapest' ? 'price' : 'created_at', { ascending: filters?.sort === 'cheapest' })
           .limit(filters?.limit || 500);
 
-        // Keep core constraints compatible with previous behavior.
-        basicQuery = basicQuery.eq('is_active', true);
+        // is_active filtresi yok (legacy / false kayitlar da gelsin)
         if (filters?.product) basicQuery = basicQuery.eq('product_id', filters.product);
         if (filters?.location) basicQuery = basicQuery.eq('location_id', filters.location);
         if (filters?.verified) basicQuery = basicQuery.eq('is_verified', true);
@@ -1300,10 +1311,10 @@ export const pricesAPI = {
 
         const [{ data: productsRows }, { data: locationsRows }] = await Promise.all([
           productIds.length
-            ? supabase.from('products').select('id, name, category, default_unit, image').in('id', productIds)
+            ? readClient.from('products').select('id, name, category, default_unit, image').in('id', productIds)
             : Promise.resolve({ data: [] as any[] }),
           locationIds.length
-            ? supabase.from('locations').select('id, name, type, address, coordinates, city, district').in('id', locationIds)
+            ? readClient.from('locations').select('id, name, type, address, coordinates, city, district').in('id', locationIds)
             : Promise.resolve({ data: [] as any[] }),
         ]);
 
@@ -1333,7 +1344,7 @@ export const pricesAPI = {
           )
         );
         if (productIds.length > 0) {
-          const { data: productsByIdRows } = await supabase
+          const { data: productsByIdRows } = await readClient
             .from('products')
             .select('id, name, category, default_unit, image')
             .in('id', productIds);
@@ -1443,6 +1454,48 @@ export const pricesAPI = {
         return [];
       }
     });
+  },
+
+  /**
+   * Keşfet için: JWT kullanmayan anon istemci — oturumlu kullanıcıda RLS'in [] dönmesi engellenir.
+   */
+  fetchRecentForExplore: async (limit: number = 24): Promise<any[]> => {
+    const client = getAnonReadClient();
+    if (!client) {
+      console.warn('fetchRecentForExplore: missing VITE_SUPABASE_URL or VITE_SUPABASE_ANON_KEY');
+      return [];
+    }
+    try {
+      const { data, error } = await client
+        .from('prices')
+        .select(
+          `
+          id,
+          product_id,
+          location_id,
+          user_id,
+          price,
+          unit,
+          created_at,
+          is_verified,
+          photo,
+          coordinates,
+          product:products(id, name, category, default_unit, image),
+          location:locations(id, name, type, city, district, coordinates)
+        `
+        )
+        .order('created_at', { ascending: false })
+        .limit(limit);
+
+      if (error) {
+        console.warn('fetchRecentForExplore select error:', error.message);
+        return [];
+      }
+      return Array.isArray(data) ? data : [];
+    } catch (e) {
+      console.warn('fetchRecentForExplore failed:', e);
+      return [];
+    }
   },
 
   getByProduct: async (productId: string, sort: 'newest' | 'cheapest' | 'expensive' | 'verified' = 'cheapest') => {

@@ -7,9 +7,10 @@ import { Button } from '../../ui/button';
 import { useAuth } from '../../../contexts/AuthContext';
 import { toast } from 'sonner';
 import { useTheme } from '../../../contexts/ThemeContext';
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { useLanguage } from '../../../contexts/LanguageContext';
 import { supabase } from '../../../lib/supabase';
+import { resolveMerchantRoleFromProfile } from '../../../lib/merchant-role';
 
 export default function ProfileScreen() {
   const navigate = useNavigate();
@@ -48,13 +49,13 @@ export default function ProfileScreen() {
     } catch { /* best effort */ }
   }, [user?.id]);
 
-  // Fetch on mount and every time this route becomes active
+  // Fetch on mount, when user changes, and when this route becomes active
   useEffect(() => {
     fetchMerchantStatus();
     if (refreshUser) {
       refreshUser().catch(() => {});
     }
-  }, [location.pathname]);
+  }, [location.pathname, user?.id, fetchMerchantStatus, refreshUser]);
 
   const handleLogout = async () => {
     try {
@@ -90,15 +91,20 @@ export default function ProfileScreen() {
     return levels[user.level] || t('LEVEL_NEW');
   };
 
-  // Prefer fresh DB data over cached user object
-  const effectiveIsMerchant = dbStatus?.is_merchant ?? (user as any)?.is_merchant ?? false;
   const merchantStatus = String(dbStatus?.merchant_subscription_status || (user as any)?.merchant_subscription_status || '').toLowerCase();
   const merchantPlan = String(dbStatus?.merchant_subscription_plan || (user as any)?.merchant_subscription_plan || '').trim();
-  const isMerchant =
-    effectiveIsMerchant === true ||
-    merchantStatus === 'active' ||
-    merchantStatus === 'past_due' ||
-    merchantPlan.length > 0;
+  /** MainApp / Keşfet ile aynı kural; sadece plan alanı dolu olsa bile iptal/pasif hesapları esnaf sayma. */
+  const mergedProfileForRole = useMemo(() => {
+    const u = user as any;
+    if (!u) return null;
+    return {
+      ...u,
+      is_merchant: dbStatus?.is_merchant ?? u.is_merchant,
+      merchant_subscription_status: dbStatus?.merchant_subscription_status ?? u.merchant_subscription_status,
+      merchant_subscription_plan: dbStatus?.merchant_subscription_plan ?? u.merchant_subscription_plan,
+    };
+  }, [user, dbStatus]);
+  const isMerchant = mergedProfileForRole ? resolveMerchantRoleFromProfile(mergedProfileForRole) : false;
   const themeColor = isMerchant ? 'blue' : 'green';
   const themeColorClass = isMerchant ? 'blue-600' : 'green-600';
   const merchantSubscriptionStatus = merchantStatus || 'inactive';

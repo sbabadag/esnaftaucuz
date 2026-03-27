@@ -4,6 +4,7 @@ import { Capacitor } from '@capacitor/core';
 import { FirebaseMessaging, Importance } from '@capacitor-firebase/messaging';
 import { registerWebPushAndGetToken, subscribeWebForegroundMessages } from '../lib/web-push';
 import { pushTokensAPI } from '../services/supabase-api';
+import { ensureNativeStartupPermissions } from '../lib/nativeStartupPermissions';
 
 type SyncFn = (payload: any) => Promise<boolean>;
 type PersistFn = (payload: any) => void;
@@ -162,6 +163,8 @@ export const usePushRegistration = ({
             }
           };
 
+          await ensureNativeStartupPermissions();
+
           await FirebaseMessaging.createChannel({
             id: 'price_alerts',
             name: 'Fiyat Bildirimleri',
@@ -171,9 +174,9 @@ export const usePushRegistration = ({
           });
 
           const permissions = await Promise.race([
-            FirebaseMessaging.requestPermissions(),
-            new Promise<any>((resolve) => setTimeout(() => resolve(null), 8000)),
-          ]);
+            FirebaseMessaging.checkPermissions(),
+            new Promise<any>((resolve) => setTimeout(() => resolve(null), 3000)),
+          ]).catch(() => null);
           const receive = String(permissions?.receive || '').toLowerCase();
           if (cancelled) return;
           if (receive === 'denied') {

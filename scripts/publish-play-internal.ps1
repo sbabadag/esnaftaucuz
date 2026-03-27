@@ -30,7 +30,7 @@ if (-not $hasEnv -and -not (Test-Path $credFile)) {
 }
 
 Set-Location $projectRoot
-npm run android:sync
+npm run mobile:build-sync
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 Set-Location (Join-Path $projectRoot "android")

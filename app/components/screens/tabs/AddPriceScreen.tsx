@@ -27,9 +27,49 @@ interface Location {
   id: string;
   name: string;
   type: string;
+  coordinates?: any;
 }
 
 const resolveMerchantRole = resolveMerchantRoleFromProfile;
+const SHOP_DETECTION_RADIUS_KM = 0.12;
+
+function toRadians(value: number) {
+  return (value * Math.PI) / 180;
+}
+
+function calculateDistanceKm(lat1: number, lng1: number, lat2: number, lng2: number) {
+  const R = 6371;
+  const dLat = toRadians(lat2 - lat1);
+  const dLng = toRadians(lng2 - lng1);
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(toRadians(lat1)) *
+      Math.cos(toRadians(lat2)) *
+      Math.sin(dLng / 2) *
+      Math.sin(dLng / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+}
+
+function parsePointCoordinates(point: any): { lat: number; lng: number } | null {
+  if (!point) return null;
+  if (typeof point === 'string') {
+    const match = point.match(/\(([^,]+),([^)]+)\)/);
+    if (!match) return null;
+    const lng = Number(match[1]);
+    const lat = Number(match[2]);
+    return Number.isFinite(lat) && Number.isFinite(lng) ? { lat, lng } : null;
+  }
+  if (typeof point === 'object') {
+    if (Number.isFinite(point.lat) && Number.isFinite(point.lng)) {
+      return { lat: Number(point.lat), lng: Number(point.lng) };
+    }
+    if (Number.isFinite(point.y) && Number.isFinite(point.x)) {
+      return { lat: Number(point.y), lng: Number(point.x) };
+    }
+  }
+  return null;
+}
 
 export default function AddPriceScreen() {
   const navigate = useNavigate();
@@ -557,7 +597,55 @@ export default function AddPriceScreen() {
         new Promise<null>((resolve) => setTimeout(() => resolve(null), 5000)),
       ]);
 
-      // Never block on location-create network calls here.
+      // If user is inside a merchant shop zone, prefer that shop as "Yer".
+      const detectNearbyMerchantShop = async (lat: number, lng: number) => {
+        try {
+          const { data, error } = await withTimeout(
+            supabase
+              .from('merchant_products')
+              .select(`
+                merchant_id,
+                location_id,
+                coordinates,
+                merchant:users!merchant_products_merchant_id_fkey(id, name),
+                location:locations(id, name, coordinates)
+              `)
+              .or('is_active.eq.true,is_active.is.null')
+              .limit(2000),
+            7000,
+            'merchant-shop-detect-timeout'
+          );
+          if (error || !Array.isArray(data) || data.length === 0) return null;
+
+          let best: { merchantName: string; locationId?: string; lat: number; lng: number; distanceKm: number } | null = null;
+          for (const row of data as any[]) {
+            const c =
+              parsePointCoordinates(row?.coordinates) ||
+              parsePointCoordinates(row?.location?.coordinates);
+            if (!c) continue;
+
+            const merchantName = String(row?.merchant?.name || '').trim();
+            if (!merchantName) continue;
+
+            const distanceKm = calculateDistanceKm(lat, lng, c.lat, c.lng);
+            if (distanceKm > SHOP_DETECTION_RADIUS_KM) continue;
+
+            if (!best || distanceKm < best.distanceKm) {
+              best = {
+                merchantName,
+                locationId: row?.location_id || row?.location?.id || undefined,
+                lat: c.lat,
+                lng: c.lng,
+                distanceKm,
+              };
+            }
+          }
+          return best;
+        } catch {
+          return null;
+        }
+      };
+
       // Pick an existing location immediately and continue flow.
       let sourceLocations = locations;
       if (!sourceLocations || sourceLocations.length === 0) {
@@ -577,14 +665,62 @@ export default function AddPriceScreen() {
         }
       }
 
+      const lat = position?.latitude || 37.8667;
+      const lng = position?.longitude || 32.4833;
+
+      const nearbyShop = await detectNearbyMerchantShop(lat, lng);
+      if (nearbyShop?.merchantName) {
+        let resolvedShopLocationId = nearbyShop.locationId || '';
+        if (!resolvedShopLocationId) {
+          const existingNamedLocation = (sourceLocations || []).find((loc: any) => {
+            if (!loc?.id || !loc?.name) return false;
+            return String(loc.name).trim().toLowerCase() === nearbyShop.merchantName.toLowerCase();
+          });
+          if (existingNamedLocation?.id) {
+            resolvedShopLocationId = existingNamedLocation.id;
+          } else {
+            try {
+              const created = await withTimeout(
+                locationsAPI.create({
+                  name: nearbyShop.merchantName,
+                  type: 'market',
+                  address: nearbyShop.merchantName,
+                  lat: nearbyShop.lat,
+                  lng: nearbyShop.lng,
+                }),
+                7000,
+                'shop-location-create-timeout'
+              );
+              resolvedShopLocationId = created?.id || '';
+              if (resolvedShopLocationId) {
+                setLocations((prev) => [{ id: created.id, name: created.name, type: created.type, coordinates: created.coordinates }, ...prev]);
+              }
+            } catch {
+              // fallback to existing locations below if location creation fails
+            }
+          }
+        }
+
+        if (resolvedShopLocationId) {
+          setFormData({
+            ...formData,
+            locationId: resolvedShopLocationId,
+            locationName: nearbyShop.merchantName,
+            lat,
+            lng,
+          });
+          setCurrentStep(currentStep + 1);
+          toast.success(`Yakındaki dükkan algılandı: ${nearbyShop.merchantName}`);
+          return;
+        }
+      }
+
       const picked = (sourceLocations || [])[0];
       if (!picked?.id) {
         toast.error('Konum listesi yuklenemedi, lutfen tekrar deneyin.');
         return;
       }
 
-      const lat = position?.latitude || 37.8667;
-      const lng = position?.longitude || 32.4833;
       setFormData({
         ...formData,
         locationId: picked.id,

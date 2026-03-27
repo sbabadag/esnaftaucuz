@@ -5,6 +5,7 @@ import { Button } from '../ui/button';
 import { merchantProductsAPI } from '../../services/supabase-api';
 import { useAuth } from '../../contexts/AuthContext';
 import { Capacitor } from '@capacitor/core';
+import { resolveMerchantRoleFromProfile } from '../../lib/merchant-role';
 
 type DailyRow = {
   date: string;
@@ -28,13 +29,7 @@ export default function MerchantReportsScreen() {
   const [dailyRows, setDailyRows] = useState<DailyRow[]>([]);
   const [productRows, setProductRows] = useState<ProductRow[]>([]);
 
-  const merchantStatus = String((user as any)?.merchant_subscription_status || '').toLowerCase();
-  const merchantPlan = String((user as any)?.merchant_subscription_plan || '').trim();
-  const isMerchant =
-    (user as any)?.is_merchant === true ||
-    merchantStatus === 'active' ||
-    merchantStatus === 'past_due' ||
-    merchantPlan.length > 0;
+  const isMerchant = resolveMerchantRoleFromProfile(user as any);
 
   const loadReport = async () => {
       if (!user?.id) {

@@ -544,7 +544,11 @@ export default function MerchantShopScreen() {
     );
   };
 
-  const saveMerchantProductViaRest = async (imageUrls: string[], resolvedPrice: number) => {
+  const saveMerchantProductViaRest = async (
+    imageUrls: string[],
+    resolvedPrice: number,
+    resolvedLocationId: string | null
+  ) => {
     const sbUrl = import.meta.env.VITE_SUPABASE_URL as string;
     const sbKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
     if (!sbUrl || !sbKey || !user) {
@@ -567,7 +571,7 @@ export default function MerchantShopScreen() {
       price: resolvedPrice,
       unit: formData.unit,
       images: imageUrls.length > 0 ? imageUrls : (editingProduct?.images || []),
-      location_id: formData.locationId || null,
+      location_id: resolvedLocationId,
       updated_at: new Date().toISOString(),
     };
     if (!editingProduct) {
@@ -649,6 +653,45 @@ export default function MerchantShopScreen() {
         }
       }
 
+      // Resolve location id from typed address/current coordinates if needed.
+      let resolvedLocationId: string | null = formData.locationId || null;
+      if (!resolvedLocationId && (formData.locationName.trim() || formData.coordinates)) {
+        try {
+          let lat = formData.coordinates?.lat;
+          let lng = formData.coordinates?.lng;
+          const locationName = formData.locationName.trim() || `${user.name} Dukkani`;
+
+          if ((!lat || !lng) && formData.locationName.trim().length > 3) {
+            const geocoded = await withTimeout(
+              forwardGeocode(formData.locationName.trim()),
+              7000,
+              'Konum metni geocode zaman asimi'
+            );
+            if (geocoded?.success && geocoded.coordinates) {
+              lat = geocoded.coordinates.lat;
+              lng = geocoded.coordinates.lng;
+            }
+          }
+
+          if (lat && lng) {
+            const createdLocation = await withTimeout(
+              locationsAPI.create({
+                name: locationName,
+                type: 'market',
+                address: formData.locationName.trim() || locationName,
+                lat,
+                lng,
+              }),
+              8000,
+              'Dukkan konumu kayit zaman asimi'
+            );
+            resolvedLocationId = createdLocation?.id || null;
+          }
+        } catch (locationResolveError) {
+          console.warn('⚠️ Failed to resolve merchant location_id:', locationResolveError);
+        }
+      }
+
       // Save product — try direct REST first (fastest, most reliable on mobile),
       // then fall back to merchantProductsAPI which includes subscription check.
       console.log('💾 Saving product...');
@@ -658,7 +701,7 @@ export default function MerchantShopScreen() {
 
       // Attempt 1: Direct REST (bypasses subscription check + Supabase client)
       try {
-        await saveMerchantProductViaRest(imageUrls, priceNum);
+        await saveMerchantProductViaRest(imageUrls, priceNum, resolvedLocationId);
         saved = true;
         console.log('✅ Product saved via direct REST');
       } catch (restErr: any) {
@@ -675,7 +718,7 @@ export default function MerchantShopScreen() {
                 price: priceNum,
                 unit: formData.unit,
                 images: imageUrls.length > 0 ? imageUrls : editingProduct.images,
-                location_id: formData.locationId || undefined,
+                location_id: resolvedLocationId || undefined,
                 coordinates: formData.coordinates || undefined,
               })
             : merchantProductsAPI.create({
@@ -684,7 +727,7 @@ export default function MerchantShopScreen() {
                 price: priceNum,
                 unit: formData.unit,
                 images: imageUrls,
-                location_id: formData.locationId || undefined,
+                location_id: resolvedLocationId || undefined,
                 coordinates: formData.coordinates || undefined,
               });
 

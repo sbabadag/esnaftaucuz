@@ -34,6 +34,7 @@ import {
   usePendingPushRoute,
   usePushRegistration,
 } from '../../hooks/usePushNotificationPipeline';
+import { ensureNativeStartupPermissions } from '../../lib/nativeStartupPermissions';
 
 // Regular user tabs
 const regularTabs = [
@@ -206,6 +207,7 @@ export default function MainApp() {
       inFlight = true;
       try {
         const platform = Capacitor.getPlatform();
+        await ensureNativeStartupPermissions();
         await FirebaseMessaging.createChannel({
           id: 'price_alerts',
           name: 'Fiyat Bildirimleri',
@@ -213,11 +215,6 @@ export default function MainApp() {
           importance: Importance.High,
           vibration: true,
         }).catch(() => undefined);
-
-        await Promise.race([
-          FirebaseMessaging.requestPermissions(),
-          new Promise<any>((resolve) => setTimeout(() => resolve(null), 8000)),
-        ]).catch(() => null);
 
         let token: string | null = null;
         for (let i = 0; i < 4 && !token && !cancelled; i++) {
