@@ -3,8 +3,8 @@
   <head>
     <meta charset="UTF-8" />
     <script>
-      // GitHub Pages SPA redirect: convert path to query param, then index.html picks it up
-      var pathSegmentsToKeep = 0;
+      // Project site: username.github.io/REPO/... — keep first path segment (repo name)
+      var pathSegmentsToKeep = 1;
       var l = window.location;
       l.replace(
         l.protocol + '//' + l.hostname + (l.port ? ':' + l.port : '') +

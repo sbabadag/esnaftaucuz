@@ -841,12 +841,19 @@ function App() {
 
     tryRedirectToDevServer();
 
+  // GitHub Pages: app is served under /esnaftaucuz/ — must match vite.config base + import.meta.env.BASE_URL
+  const routerBasename = (() => {
+    const raw = String(import.meta.env.BASE_URL || '/');
+    if (raw === '/' || raw === '') return undefined;
+    return raw.replace(/\/$/, '') || undefined;
+  })();
+
   return (
     <MotionConfig reducedMotion="never">
       <LanguageProvider>
         <AuthProvider>
           <ThemeProvider>
-            <BrowserRouter>
+            <BrowserRouter basename={routerBasename}>
               <div className="min-h-screen bg-background">
                 <AppRoutes />
                 <Toaster />
