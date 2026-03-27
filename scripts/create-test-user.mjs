@@ -51,6 +51,8 @@ const profileRow = (userId) => ({
   is_guest: false,
   is_merchant: false,
   search_radius: 15,
+  merchant_subscription_status: 'inactive',
+  merchant_subscription_plan: null,
 });
 
 async function createWithServiceRole() {

@@ -9,6 +9,7 @@ import { toast } from 'sonner';
 import { Capacitor } from '@capacitor/core';
 import { GooglePlayBilling, type GooglePlayRestoredPurchase } from '../../lib/google-play-billing';
 import { supabase, safeGetSession } from '../../lib/supabase';
+import { resolveMerchantRoleFromProfile } from '../../lib/merchant-role';
 
 type MerchantSubscriptionStatus = 'inactive' | 'active' | 'past_due' | 'canceled';
 
@@ -18,13 +19,7 @@ const TRIAL_DAYS = 10;
 const MERCHANT_SUBSCRIPTION_ONBOARDING_KEY = 'merchant-subscription-onboarding-user';
 const MERCHANT_SIGNUP_INTENT_KEY = 'merchant-signup-intent';
 
-const resolveMerchantRole = (profile: any): boolean => {
-  const explicit = profile?.is_merchant === true;
-  const status = String(profile?.merchant_subscription_status || '').toLowerCase();
-  const hasActiveSubscription = status === 'active' || status === 'past_due';
-  const hasMerchantPlan = String(profile?.merchant_subscription_plan || '').trim().length > 0;
-  return explicit || hasActiveSubscription || hasMerchantPlan;
-};
+const resolveMerchantRole = resolveMerchantRoleFromProfile;
 
 /** Align UI plan selection with DB / Play plan id (monthly vs yearly). */
 const billingMonthsFromPlan = (plan: string | undefined | null): 1 | 12 => {

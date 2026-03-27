@@ -16,6 +16,7 @@ import { FirebaseMessaging } from '@capacitor-firebase/messaging';
 import { reverseGeocode } from '../../utils/geocoding';
 import { useTheme } from '../../contexts/ThemeContext';
 import { useLanguage } from '../../contexts/LanguageContext';
+import { resolveMerchantRoleFromProfile } from '../../lib/merchant-role';
 import { supabase, safeGetSession } from '../../lib/supabase';
 
 const settingsItems = [
@@ -31,13 +32,7 @@ const settingsItems = [
 // Predefined radius values (km)
 const RADIUS_OPTIONS = [1, 5, 10, 15, 20, 50, 100, 1000];
 
-const resolveMerchantRole = (profile: any): boolean => {
-  const explicit = profile?.is_merchant === true;
-  const status = String(profile?.merchant_subscription_status || '').toLowerCase();
-  const hasActiveSubscription = status === 'active' || status === 'past_due';
-  const hasMerchantPlan = String(profile?.merchant_subscription_plan || '').trim().length > 0;
-  return explicit || hasActiveSubscription || hasMerchantPlan;
-};
+const resolveMerchantRole = resolveMerchantRoleFromProfile;
 
 export default function SettingsScreen() {
   const navigate = useNavigate();

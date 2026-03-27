@@ -13,6 +13,7 @@ import { useAuth } from '../../../contexts/AuthContext';
 import { useGeolocation } from '../../../../src/hooks/useGeolocation';
 import { forwardGeocode } from '../../../utils/geocoding';
 import { supabase, safeGetSession } from '../../../lib/supabase';
+import { resolveMerchantRoleFromProfile } from '../../../lib/merchant-role';
 import { toast } from 'sonner';
 
 interface Price {
@@ -46,13 +47,7 @@ interface Price {
   lng?: number;
 }
 
-const resolveMerchantRole = (profile: any): boolean => {
-  const explicit = profile?.is_merchant === true;
-  const status = String(profile?.merchant_subscription_status || '').toLowerCase();
-  const hasActiveSubscription = status === 'active' || status === 'past_due';
-  const hasMerchantPlan = String(profile?.merchant_subscription_plan || '').trim().length > 0;
-  return explicit || hasActiveSubscription || hasMerchantPlan;
-};
+const resolveMerchantRole = resolveMerchantRoleFromProfile;
 
 export default function ProductDetailScreen() {
   const { id } = useParams();

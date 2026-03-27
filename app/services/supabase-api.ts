@@ -6,6 +6,7 @@
  */
 
 import { supabase, safeGetSession } from '../lib/supabase';
+import { resolveMerchantRoleFromProfile } from '../lib/merchant-role';
 import { v4 as uuidv4 } from 'uuid';
 import { Browser } from '@capacitor/browser';
 import { Capacitor } from '@capacitor/core';
@@ -45,13 +46,7 @@ const normalizeMerchantFlag = (value: any): boolean => {
   }
   return false;
 };
-const resolveMerchantStatus = (profile: any): boolean => {
-  const explicit = normalizeMerchantFlag(profile?.is_merchant);
-  const subscriptionStatus = String(profile?.merchant_subscription_status || '').toLowerCase();
-  const hasMerchantSubscription = subscriptionStatus === 'active' || subscriptionStatus === 'past_due';
-  const hasMerchantPlan = String(profile?.merchant_subscription_plan || '').trim().length > 0;
-  return explicit || hasMerchantSubscription || hasMerchantPlan;
-};
+const resolveMerchantStatus = resolveMerchantRoleFromProfile;
 
 type ApiCacheEntry<T> = {
   expiresAt: number;

@@ -12,6 +12,7 @@ import { productsAPI, pricesAPI, searchAPI, merchantProductsAPI, notificationsAP
 import { useGeolocation } from '../../../../src/hooks/useGeolocation';
 import { useAuth } from '../../../contexts/AuthContext';
 import { useLanguage } from '../../../contexts/LanguageContext';
+import { resolveMerchantRoleFromProfile } from '../../../lib/merchant-role';
 import { reverseGeocode } from '../../../utils/geocoding';
 import { supabase } from '../../../lib/supabase';
 import { toast } from 'sonner';
@@ -61,13 +62,7 @@ interface Product {
   _id?: string;
 }
 
-const resolveMerchantRole = (profile: any): boolean => {
-  const explicit = profile?.is_merchant === true;
-  const status = String(profile?.merchant_subscription_status || '').toLowerCase();
-  const hasActiveSubscription = status === 'active' || status === 'past_due';
-  const hasMerchantPlan = String(profile?.merchant_subscription_plan || '').trim().length > 0;
-  return explicit || hasActiveSubscription || hasMerchantPlan;
-};
+const resolveMerchantRole = resolveMerchantRoleFromProfile;
 
 export default function ExploreScreen() {
   const navigate = useNavigate();

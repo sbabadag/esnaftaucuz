@@ -1,6 +1,7 @@
 import { createContext, useContext, useState, useEffect, useRef, ReactNode } from 'react';
 import { authAPI, setMerchantSubscriptionCache, clearMerchantSubscriptionCache } from '../services/supabase-api';
 import { supabase, safeGetSession } from '../lib/supabase';
+import { resolveMerchantRoleFromProfile } from '../lib/merchant-role';
 import { toast } from 'sonner';
 
 interface User {
@@ -74,13 +75,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
     return false;
   };
-  const resolveMerchantStatus = (profile: any): boolean => {
-    const explicit = normalizeMerchantFlag(profile?.is_merchant);
-    const subscriptionStatus = String(profile?.merchant_subscription_status || '').toLowerCase();
-    const hasMerchantSubscription = subscriptionStatus === 'active' || subscriptionStatus === 'past_due';
-    const hasMerchantPlan = String(profile?.merchant_subscription_plan || '').trim().length > 0;
-    return explicit || hasMerchantSubscription || hasMerchantPlan;
-  };
+  const resolveMerchantStatus = resolveMerchantRoleFromProfile;
   const getMerchantHint = (email?: string | null): boolean => {
     if (!email) return false;
     try {
@@ -1228,6 +1223,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const login = async (email: string, password: string) => {
     try {
+      try {
+        localStorage.removeItem(MERCHANT_SIGNUP_INTENT_KEY);
+      } catch {
+        /* e-posta girişi önceki esnaf kayıt niyetini sıfırlasın */
+      }
       const data = await authAPI.login(email, password);
       console.log('✅ Login successful, user data (auth API):', {
         id: data.user?.id,

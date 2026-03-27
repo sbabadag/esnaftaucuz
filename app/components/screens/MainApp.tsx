@@ -22,6 +22,7 @@ import DistanceSalesAgreementScreen from './DistanceSalesAgreementScreen';
 import { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
 import { supabase, safeGetSession } from '../../lib/supabase';
+import { resolveMerchantRoleFromProfile } from '../../lib/merchant-role';
 import { addLocalNotification } from '../../lib/notification-store';
 import { asUuidOrNull, isLikelyJwt, isUuid, normalizePushEvent } from '../../lib/push-notification-utils';
 import { Capacitor } from '@capacitor/core';
@@ -51,13 +52,7 @@ const merchantTabs = [
   { path: 'profile', label: 'Profil', icon: User },
 ];
 
-const resolveMerchantRole = (profile: any): boolean => {
-  const explicit = profile?.is_merchant === true;
-  const status = String(profile?.merchant_subscription_status || '').toLowerCase();
-  const hasActiveSubscription = status === 'active' || status === 'past_due';
-  const hasMerchantPlan = String(profile?.merchant_subscription_plan || '').trim().length > 0;
-  return explicit || hasActiveSubscription || hasMerchantPlan;
-};
+const resolveMerchantRole = resolveMerchantRoleFromProfile;
 
 export default function MainApp() {
   const location = useLocation();
