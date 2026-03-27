@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "check-env": "node scripts/check-env.js",
+    "create-test-user": "node scripts/create-test-user.mjs",
     "build": "vite build",
     "build:check": "npm run check-env && vite build",
     "preview": "vite preview",
