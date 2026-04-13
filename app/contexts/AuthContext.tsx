@@ -1053,6 +1053,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             const shouldCleanUrl = event === 'SIGNED_IN' || (event === 'TOKEN_REFRESHED' && oauthInProgress);
             await loadUserProfile(session, event, shouldCleanUrl);
             lastAuthoritativeProfileSyncAtRef.current = Date.now();
+            if (stateChangeTimeout) {
+              clearTimeout(stateChangeTimeout);
+              stateChangeTimeout = null;
+            }
             // Authoritative second-pass refresh: prevents merchant users from
             // being stuck as normal users when first profile load falls back.
             if (event === 'SIGNED_IN' || event === 'INITIAL_SESSION' || event === 'USER_UPDATED' || (event === 'TOKEN_REFRESHED' && !currentUser)) {
