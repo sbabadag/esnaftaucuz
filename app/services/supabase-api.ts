@@ -2694,7 +2694,7 @@ export const searchAPI = {
                 location:locations(id, name, type, address, coordinates, city, district),
                 user:users(id, name, avatar, level)
               `)
-              .eq('is_active', true)
+              .or('is_active.eq.true,is_active.is.null')
               .in('product_id', productIds)
               .order('created_at', { ascending: false })
               .limit(20),
@@ -2713,7 +2713,7 @@ export const searchAPI = {
                 location:locations(id, name, type, address, coordinates, city, district),
                 user:users(id, name, avatar, level)
               `)
-              .eq('is_active', true)
+              .or('is_active.eq.true,is_active.is.null')
               .order('created_at', { ascending: false })
               .limit(40),
             7000,
@@ -2764,7 +2764,8 @@ export const searchAPI = {
           location:locations(id, name, type, address, coordinates, city, district),
           user:users(id, name, avatar, level)
         `)
-        .eq('is_active', true)
+        // Legacy rows: is_active null/false — Keşfet/explore-feed ile aynı (yakındaki en ucuz boş kalmasın)
+        .or('is_active.eq.true,is_active.is.null')
         .order('price', { ascending: true })
         .limit(500); // Increased limit to get more prices for filtering
 

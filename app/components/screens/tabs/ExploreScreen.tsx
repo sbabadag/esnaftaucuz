@@ -195,6 +195,12 @@ export default function ExploreScreen() {
     typeof window !== 'undefined' &&
     !!(window as any).Capacitor?.isNativePlatform &&
     (window as any).Capacitor.isNativePlatform();
+  /** Mobil ağda kısa timeout'lar boş liste + "yavaş yükleme" uyarısını tetikliyordu. */
+  const exploreFeedTimeoutMs = isNativePlatform ? 25000 : 12000;
+  const loadDataHardCapMs = isNativePlatform ? 55000 : 25000;
+  const exploreSafetyToastMs = isNativePlatform ? 95000 : 45000;
+  const legacyParallelTimeoutMs = isNativePlatform ? 24000 : 12000;
+  const merchantShopsFeedTimeoutMs = isNativePlatform ? 14000 : 8000;
   // Pull-to-refresh hem web hem native tarafta aktif olmalı.
   const enablePullToRefresh = true;
   // Android'de env(safe-area-inset-top) çoğu cihazda 0 dönebiliyor.
@@ -216,7 +222,7 @@ export default function ExploreScreen() {
     const now = Date.now();
     if (now - lastSlowToastAtRef.current < 30000) return;
     lastSlowToastAtRef.current = now;
-    toast.error('Veriler gec yukleniyor, lutfen tekrar deneyin');
+    toast.warning('Veriler geç yükleniyor. Ağı kontrol edin veya aşağı çekerek yenileyin.');
   };
 
   useEffect(() => {
@@ -513,7 +519,7 @@ export default function ExploreScreen() {
       setIsRefreshing(false);
       setPullDistance(0);
       // Do not show immediate scary toast here; a longer safety timer handles it.
-    }, 25000);
+    }, loadDataHardCapMs);
 
     try {
       let favoriteProductIds = new Set<string>();
@@ -557,7 +563,7 @@ export default function ExploreScreen() {
         if (supabaseUrl && supabaseAnonKey) {
           try {
             const controller = new AbortController();
-            const timer = setTimeout(() => controller.abort(), 10000);
+            const timer = setTimeout(() => controller.abort(), exploreFeedTimeoutMs);
             const response = await fetch(`${supabaseUrl}/functions/v1/explore-feed`, {
               method: 'POST',
               headers: {
@@ -586,7 +592,9 @@ export default function ExploreScreen() {
             supabase.functions.invoke('explore-feed', {
               body: { limitRecent: 24, limitTrending: 12, limitShops: 20 },
             }),
-            new Promise<any>((_, reject) => setTimeout(() => reject(new Error('explore-feed invoke timeout')), 10000)),
+            new Promise<any>((_, reject) =>
+              setTimeout(() => reject(new Error('explore-feed invoke timeout')), exploreFeedTimeoutMs)
+            ),
           ]) as any;
           if (!invokeRes?.error && invokeRes?.data?.ok) {
             feedData = invokeRes.data;
@@ -605,7 +613,9 @@ export default function ExploreScreen() {
           try {
             const shopsFromApi = await Promise.race([
               merchantProductsAPI.getAllMerchantShops(20),
-              new Promise<any[]>((_, reject) => setTimeout(() => reject(new Error('merchant-shops timeout')), 8000)),
+              new Promise<any[]>((_, reject) =>
+                setTimeout(() => reject(new Error('merchant-shops timeout')), merchantShopsFeedTimeoutMs)
+              ),
             ]);
             if (Array.isArray(shopsFromApi) && shopsFromApi.length > 0) {
               // Prefer API shops when non-empty; boş dizi edge'deki mağazaları silmesin (RLS [] dönebiliyor).
@@ -705,7 +715,7 @@ export default function ExploreScreen() {
         });
       };
 
-      const withTimeout = async <T,>(promise: Promise<T>, label: string, ms: number = 12000): Promise<T> => {
+      const withTimeout = async <T,>(promise: Promise<T>, label: string, ms: number = legacyParallelTimeoutMs): Promise<T> => {
         return await Promise.race([
           promise,
           new Promise<T>((_, reject) =>
@@ -715,7 +725,7 @@ export default function ExploreScreen() {
       };
 
       // Load with per-request timeout to avoid one hung call blocking the whole screen.
-      const trendingPromise = withTimeout(productsAPI.getTrending(), 'trending', 12000);
+      const trendingPromise = withTimeout(productsAPI.getTrending(), 'trending', legacyParallelTimeoutMs);
       
       // Get user's search radius preference (default: 15 km = 15000 meters)
       // Priority: preferences.searchRadius (newer) > search_radius (legacy) > default
@@ -752,22 +762,22 @@ export default function ExploreScreen() {
         sort: 'newest',
         limit: 20,
         todayOnly: false,
-      }), 'recent-prices', 12000);
+      }), 'recent-prices', legacyParallelTimeoutMs);
       
       // Load nearby cheapest - with location filter if available, otherwise show cheapest overall
       const nearbyPromise = (userLat && userLng)
-        ? withTimeout(searchAPI.getNearbyCheapest(userLat, userLng, searchRadiusMeters, 10), 'nearby-prices', 12000)
+        ? withTimeout(searchAPI.getNearbyCheapest(userLat, userLng, searchRadiusMeters, 10), 'nearby-prices', legacyParallelTimeoutMs)
         : withTimeout(
             pricesAPI.getAll({
               sort: 'cheapest',
               limit: 10, // Show cheapest prices even without location
             }),
             'cheapest-prices',
-            12000
+            legacyParallelTimeoutMs
           );
       
       // Load merchant shops
-      const merchantShopsPromise = withTimeout(merchantProductsAPI.getAllMerchantShops(20), 'merchant-shops', 12000);
+      const merchantShopsPromise = withTimeout(merchantProductsAPI.getAllMerchantShops(20), 'merchant-shops', legacyParallelTimeoutMs);
 
       // Wait for all promises (with individual error handling)
       const [trending, recent, nearby, merchantShopsResult] = await Promise.allSettled([
@@ -1052,7 +1062,7 @@ export default function ExploreScreen() {
       if (trendProducts.length === 0 && recentPrices.length === 0 && nearbyCheapest.length === 0 && merchantShops.length === 0) {
         showSlowLoadingToast();
       }
-    }, 45000);
+    }, exploreSafetyToastMs);
     
     loadData().catch((error) => {
       console.error('❌ Load data failed in useEffect:', error);
