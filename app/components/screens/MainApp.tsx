@@ -35,22 +35,23 @@ import {
   usePushRegistration,
 } from '../../hooks/usePushNotificationPipeline';
 import { ensureNativeStartupPermissions } from '../../lib/nativeStartupPermissions';
+import { useLanguage } from '../../contexts/LanguageContext';
 
 // Regular user tabs
 const regularTabs = [
-  { path: 'explore', label: 'Keşfet', icon: Compass },
-  { path: 'map', label: 'Harita', icon: Map },
-  { path: 'add', label: 'Ekle', icon: Plus },
-  { path: 'profile', label: 'Profil', icon: User },
+  { path: 'explore', labelKey: 'EXPLORE', icon: Compass },
+  { path: 'map', labelKey: 'MAP', icon: Map },
+  { path: 'add', labelKey: 'ADD', icon: Plus },
+  { path: 'profile', labelKey: 'PROFILE', icon: User },
 ];
 
-// Merchant tabs - include both "Dükkanım" and "Profil"
+// Merchant tabs - include both shop and profile
 const merchantTabs = [
-  { path: 'explore', label: 'Keşfet', icon: Compass },
-  { path: 'map', label: 'Harita', icon: Map },
-  { path: 'merchant-shop', label: 'Dükkanım', icon: Store },
-  { path: 'merchant-reports', label: 'Raporlar', icon: BarChart3 },
-  { path: 'profile', label: 'Profil', icon: User },
+  { path: 'explore', labelKey: 'EXPLORE', icon: Compass },
+  { path: 'map', labelKey: 'MAP', icon: Map },
+  { path: 'merchant-shop', labelKey: 'MY_SHOP', icon: Store },
+  { path: 'merchant-reports', labelKey: 'REPORTS', icon: BarChart3 },
+  { path: 'profile', labelKey: 'PROFILE', icon: User },
 ];
 
 const resolveMerchantRole = resolveMerchantRoleFromProfile;
@@ -59,6 +60,7 @@ export default function MainApp() {
   const location = useLocation();
   const navigate = useNavigate();
   const { user } = useAuth();
+  const { t } = useLanguage();
   const isNativePlatform = Capacitor.isNativePlatform();
   const nativeBottomLiftPx = isNativePlatform ? 10 : 0;
   const [bannerVisible, setBannerVisible] = useState(true);
@@ -469,10 +471,10 @@ export default function MainApp() {
     console.log('🔍 MainApp - Tabs:', {
       isMerchant,
       tabsCount: tabs.length,
-      tabs: tabs.map(t => t.label),
+      tabs: tabs.map((tab) => t(tab.labelKey)),
       user_is_merchant: (user as any)?.is_merchant,
     });
-  }, [isMerchant, tabs, user]);
+  }, [isMerchant, tabs, user, t]);
   
   // Hide tab bar on detail screens and add price screen
   const hideTabBar = location.pathname.includes('/product/') || 
@@ -582,6 +584,7 @@ export default function MainApp() {
           <div className="flex items-center h-16">
             {tabs.map((tab, index) => {
               const Icon = tab.icon;
+              const tabLabel = t(tab.labelKey);
               // Check if tab is active - special handling for merchant-shop
               const isActive = tab.path === 'merchant-shop' 
                 ? isMerchantShopActive 
@@ -594,7 +597,7 @@ export default function MainApp() {
                 <button
                   key={tab.path}
                   onClick={() => {
-                    console.log('🔘 Tab clicked:', tab.path, tab.label);
+                    console.log('🔘 Tab clicked:', tab.path, tabLabel);
                     handleTabClick(tab.path);
                   }}
                   className={`flex flex-col items-center justify-center h-full transition-colors relative ${
@@ -605,11 +608,11 @@ export default function MainApp() {
                     minWidth: tabWidth,
                     maxWidth: tabWidth,
                   }}
-                  aria-label={tab.label}
+                  aria-label={tabLabel}
                 >
                   <div className="flex flex-col items-center justify-center gap-0.5">
                     <Icon className={`w-5 h-5 flex-shrink-0 ${tab.path === 'add' && (isMerchant ? 'bg-blue-600' : 'bg-green-600')} ${tab.path === 'add' && 'text-white rounded-full p-1 w-8 h-8'}`} />
-                    <span className="text-[10px] leading-tight font-medium whitespace-nowrap">{tab.label}</span>
+                    <span className="text-[10px] leading-tight font-medium whitespace-nowrap">{tabLabel}</span>
                   </div>
                   {isActive && (
                     <div className={`absolute top-0 left-0 right-0 h-0.5 ${isMerchant ? 'bg-blue-600' : 'bg-green-600'}`} />

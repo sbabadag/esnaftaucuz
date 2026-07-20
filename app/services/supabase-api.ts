@@ -699,6 +699,12 @@ export const authAPI = {
             data = candidateData;
             error = null;
             console.log('📱 Mobile detected, using custom URL scheme:', redirectTo);
+            // Token exchange MUST use the exact same redirect_uri as authorize.
+            try {
+              localStorage.setItem('oauth-redirect-uri', redirectTo);
+            } catch {
+              // best effort
+            }
             break;
           }
 
@@ -744,9 +750,21 @@ export const authAPI = {
         const safeOAuthUrl = getSafeOAuthUrl(data.url);
         console.log('📱 Opening OAuth URL for mobile:', safeOAuthUrl.substring(0, 80) + '...');
 
-        // Samsung Internet Custom Tabs don't properly handle custom URL scheme redirects.
-        // Use the native system browser via Intent.ACTION_VIEW which reliably fires
-        // Android intents for custom scheme URLs like com.esnaftaucuz.app://
+        // Prefer Capacitor Browser (Custom Tabs): deep-link return is more reliable with
+        // Cap App plugin than a full external Chrome activity on many devices/emulators.
+        // System browser remains a fallback for OEM browsers that break Custom Tabs.
+        try {
+          await Browser.open({
+            url: safeOAuthUrl,
+            toolbarColor: '#16a34a',
+            presentationStyle: 'popover',
+          });
+          console.log('📱 Opened OAuth URL in Capacitor Browser');
+          return { redirectUrl: safeOAuthUrl, openedInBrowser: true };
+        } catch (browserErr) {
+          console.warn('⚠️ Capacitor Browser.open failed, trying system browser:', browserErr);
+        }
+
         const isAndroid = (window as any).Capacitor?.getPlatform?.() === 'android';
         if (isAndroid) {
           try {
@@ -755,17 +773,12 @@ export const authAPI = {
             console.log('📱 Opened OAuth URL in system browser (Intent.ACTION_VIEW)');
             return { redirectUrl: safeOAuthUrl, openedInBrowser: true };
           } catch (e) {
-            console.warn('⚠️ openInSystemBrowser failed, falling back to Browser.open:', e);
+            console.warn('⚠️ openInSystemBrowser failed:', e);
+            throw e;
           }
         }
 
-        // Fallback: Capacitor Browser plugin (Custom Tabs)
-        await Browser.open({
-          url: safeOAuthUrl,
-          toolbarColor: '#16a34a',
-          presentationStyle: 'popover',
-        });
-        return { redirectUrl: safeOAuthUrl, openedInBrowser: true };
+        throw new Error('OAuth tarayıcısı açılamadı');
       }
 
       // On web, redirect in the same window
@@ -1460,11 +1473,67 @@ export const pricesAPI = {
    * Keşfet için: JWT kullanmayan anon istemci — oturumlu kullanıcıda RLS'in [] dönmesi engellenir.
    */
   fetchRecentForExplore: async (limit: number = 24): Promise<any[]> => {
-    const client = getAnonReadClient();
-    if (!client) {
+    const sbUrl = String(import.meta.env.VITE_SUPABASE_URL || '').replace(/\/$/, '');
+    const sbKey = String(import.meta.env.VITE_SUPABASE_ANON_KEY || '').trim();
+    if (!sbUrl || !sbKey) {
       console.warn('fetchRecentForExplore: missing VITE_SUPABASE_URL or VITE_SUPABASE_ANON_KEY');
       return [];
     }
+
+    // Prefer plain REST (same as working PC curl) — more reliable than JS client on Android WebView.
+    try {
+      const controller = new AbortController();
+      const tid = setTimeout(() => controller.abort(), 12000);
+      const headers = { apikey: sbKey, Authorization: `Bearer ${sbKey}` };
+      const priceResp = await fetch(
+        `${sbUrl}/rest/v1/prices?select=id,product_id,location_id,user_id,price,unit,created_at,is_verified,photo,coordinates,is_active&order=created_at.desc&limit=${limit}`,
+        { headers, signal: controller.signal }
+      );
+      if (!priceResp.ok) {
+        clearTimeout(tid);
+        console.warn('fetchRecentForExplore REST prices failed:', priceResp.status);
+      } else {
+        let rows: any[] = await priceResp.json().catch(() => []);
+        if (!Array.isArray(rows)) rows = [];
+        console.log('✅ fetchRecentForExplore REST prices:', rows.length);
+        if (rows.length > 0) {
+          const productIds = [...new Set(rows.map((r) => r.product_id).filter(Boolean))];
+          const locationIds = [...new Set(rows.map((r) => r.location_id).filter(Boolean))];
+          const [pResp, lResp] = await Promise.all([
+            productIds.length
+              ? fetch(`${sbUrl}/rest/v1/products?select=id,name,category,default_unit,image&id=in.(${productIds.join(',')})`, {
+                  headers,
+                  signal: controller.signal,
+                })
+              : null,
+            locationIds.length
+              ? fetch(`${sbUrl}/rest/v1/locations?select=id,name,type,city,district,coordinates&id=in.(${locationIds.join(',')})`, {
+                  headers,
+                  signal: controller.signal,
+                })
+              : null,
+          ]);
+          clearTimeout(tid);
+          const products: any[] = pResp?.ok ? await pResp.json().catch(() => []) : [];
+          const locations: any[] = lResp?.ok ? await lResp.json().catch(() => []) : [];
+          const pMap = new Map(products.map((p: any) => [p.id, p]));
+          const lMap = new Map(locations.map((l: any) => [l.id, l]));
+          return rows.map((r) => ({
+            ...r,
+            product: pMap.get(r.product_id) || null,
+            location: lMap.get(r.location_id) || null,
+          }));
+        }
+        clearTimeout(tid);
+        return rows;
+      }
+      clearTimeout(tid);
+    } catch (e) {
+      console.warn('fetchRecentForExplore REST failed:', e);
+    }
+
+    const client = getAnonReadClient();
+    if (!client) return [];
     try {
       const { data, error } = await client
         .from('prices')
@@ -1539,7 +1608,7 @@ export const pricesAPI = {
   }) => {
     // Add overall timeout for the entire operation
     const overallTimeout = new Promise((_, reject) => {
-      setTimeout(() => reject(new Error('İşlem zaman aşımına uğradı. Lütfen tekrar deneyin.')), 70000); // 70 second timeout
+      setTimeout(() => reject(new Error('İşlem zaman aşımına uğradı. Lütfen tekrar deneyin.')), 35000); // 35s — fotoğraflı hızlı yol için yeterli
     });
 
     const createOperation = async () => {
@@ -1548,8 +1617,8 @@ export const pricesAPI = {
         const isUUIDValue = (value: string) =>
           /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value || '');
 
-        // Fast path: selected product+location IDs, no photo upload.
-        if (isUUIDValue(data.product) && isUUIDValue(data.location) && !data.photo) {
+        // Fast path: selected product+location IDs (with optional photo via REST storage).
+        if (isUUIDValue(data.product) && isUUIDValue(data.location)) {
           const extractAccessTokenFromUnknownShape = (value: any): string | null => {
             try {
               if (!value) return null;
@@ -1660,6 +1729,47 @@ export const pricesAPI = {
           }
           fastPriceData.user_id = fastUserId;
 
+          let photoUploadError: string | undefined;
+          if (data.photo && sbUrl && sbKey && authToken) {
+            try {
+              console.log('📸 Fast-path photo upload...', {
+                name: data.photo.name,
+                size: data.photo.size,
+                type: data.photo.type,
+              });
+              const fileExt = (data.photo.name.split('.').pop() || 'jpg').toLowerCase().replace(/[^a-z0-9]/g, '') || 'jpg';
+              const objectPath = `${fastUserId}/${uuidv4()}.${fileExt}`;
+              const controller = new AbortController();
+              const timer = setTimeout(() => controller.abort(), 18000);
+              const uploadResp = await fetch(`${sbUrl}/storage/v1/object/price-photos/${objectPath}`, {
+                method: 'POST',
+                headers: {
+                  apikey: sbKey,
+                  Authorization: `Bearer ${authToken}`,
+                  'Content-Type': data.photo.type || 'image/jpeg',
+                  'x-upsert': 'false',
+                },
+                body: data.photo,
+                signal: controller.signal,
+              });
+              clearTimeout(timer);
+              if (uploadResp.ok) {
+                fastPriceData.photo = `${sbUrl}/storage/v1/object/public/price-photos/${objectPath}`;
+                console.log('✅ Fast-path photo uploaded:', fastPriceData.photo);
+              } else {
+                const errText = await uploadResp.text().catch(() => '');
+                photoUploadError = `Fotoğraf yüklenemedi (HTTP ${uploadResp.status})`;
+                console.warn('⚠️ Fast-path photo upload failed:', uploadResp.status, errText.slice(0, 200));
+              }
+            } catch (photoErr: any) {
+              photoUploadError =
+                photoErr?.name === 'AbortError'
+                  ? 'Fotoğraf yükleme zaman aşımına uğradı'
+                  : photoErr?.message || 'Fotoğraf yüklenemedi';
+              console.warn('⚠️ Fast-path photo upload exception:', photoErr);
+            }
+          }
+
           // Try direct REST insert first to bypass supabase-js auth/session delays.
           if (sbUrl && sbKey && authToken) {
             try {
@@ -1686,20 +1796,25 @@ export const pricesAPI = {
             }
           }
 
-          // Fallback: supabase-js insert
+          // Fallback: supabase-js insert (timed — can hang on Android WebView)
           if (!fastRecord) {
-            const { data: fallbackRecord, error: fallbackError } = await supabase
-              .from('prices')
-              .insert(fastPriceData)
-              .select(`
+            const insertResult = await Promise.race([
+              supabase
+                .from('prices')
+                .insert(fastPriceData)
+                .select(`
                 *,
                 product:products(id, name, category, default_unit, image),
                 location:locations(id, name, type, address, coordinates, city, district),
                 user:users(id, name, avatar, level)
               `)
-              .single();
-            if (fallbackError) throw fallbackError;
-            fastRecord = fallbackRecord;
+                .single(),
+              new Promise<{ data: null; error: { message: string } }>((resolve) =>
+                setTimeout(() => resolve({ data: null, error: { message: 'Fiyat kaydı zaman aşımı' } }), 12000)
+              ),
+            ]);
+            if (insertResult.error) throw insertResult.error;
+            fastRecord = insertResult.data;
           }
 
           if (!fastRecord) throw new Error('Fiyat kaydi olusturulamadi');
@@ -1771,23 +1886,76 @@ export const pricesAPI = {
             console.warn('⚠️ Could not update contributions cache in fast-path:', cacheError);
           }
 
-          return fastRecord;
+          return {
+            ...fastRecord,
+            photoUploadError: photoUploadError || undefined,
+          };
         }
 
         const resolveAuthenticatedUser = async () => {
-          // Primary path: validate token with server.
-          const { data: getUserData, error: getUserError } = await supabase.auth.getUser();
-          if (!getUserError && getUserData?.user) {
-            return getUserData.user;
+          // Prefer JWT from storage — auth.getUser() can hang forever on Android WebView.
+          try {
+            const token =
+              data.accessToken ||
+              localStorage.getItem('authToken') ||
+              '';
+            const fromJwt = (() => {
+              const t = String(token || '');
+              if (!t.includes('.')) return null;
+              try {
+                const payload = JSON.parse(
+                  atob(t.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'))
+                );
+                if (payload?.sub) return { id: payload.sub, email: payload.email };
+              } catch {
+                return null;
+              }
+              return null;
+            })();
+            if (fromJwt?.id) return fromJwt as any;
+
+            for (let i = 0; i < localStorage.length; i++) {
+              const key = localStorage.key(i) || '';
+              if (!(key.startsWith('sb-') && key.endsWith('-auth-token'))) continue;
+              const raw = localStorage.getItem(key);
+              if (!raw) continue;
+              try {
+                const parsed = JSON.parse(raw);
+                const access = parsed?.access_token || parsed?.currentSession?.access_token;
+                const user = parsed?.user || parsed?.currentSession?.user;
+                if (user?.id) return user;
+                if (typeof access === 'string' && access.includes('.')) {
+                  const payload = JSON.parse(
+                    atob(access.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'))
+                  );
+                  if (payload?.sub) return { id: payload.sub, email: payload.email };
+                }
+              } catch {
+                /* continue */
+              }
+            }
+          } catch {
+            /* fall through */
           }
 
-          if (getUserError) {
-            console.warn('⚠️ getUser failed, trying session fallback:', getUserError.message);
+          try {
+            const getUserResult = await Promise.race([
+              supabase.auth.getUser(),
+              new Promise<null>((resolve) => setTimeout(() => resolve(null), 5000)),
+            ]);
+            const user = (getUserResult as any)?.data?.user;
+            if (user) return user;
+          } catch (getUserError: any) {
+            console.warn('⚠️ getUser failed/timed out:', getUserError?.message || getUserError);
           }
 
           const { session: fallbackSession } = await safeGetSession();
           if (fallbackSession?.user) {
             return fallbackSession.user;
+          }
+
+          if (data.userId) {
+            return { id: data.userId } as any;
           }
 
           return null;
@@ -1947,13 +2115,18 @@ export const pricesAPI = {
           const fileName = `${userId}/${uuidv4()}.${fileExt}`;
           
           console.log('📤 Uploading to:', fileName);
-          
-          const { data: uploadData, error: uploadError } = await supabase.storage
-            .from('price-photos')
-            .upload(fileName, data.photo, {
+
+          const uploadResult = await Promise.race([
+            supabase.storage.from('price-photos').upload(fileName, data.photo, {
               cacheControl: '3600',
-              upsert: false
-            });
+              upsert: false,
+            }),
+            new Promise<{ data: null; error: { message: string } }>((resolve) =>
+              setTimeout(() => resolve({ data: null, error: { message: 'Fotoğraf yükleme zaman aşımı' } }), 18000)
+            ),
+          ]);
+          const uploadData = uploadResult.data;
+          const uploadError = uploadResult.error;
 
           if (uploadError) {
             console.error('❌ Photo upload error:', uploadError);
@@ -1994,21 +2167,14 @@ export const pricesAPI = {
         console.log('ℹ️ No photo provided, skipping photo upload');
       }
 
-      // Verify user_id matches auth.uid() for RLS policy
-      const currentAuthUser = await resolveAuthenticatedUser();
-      if (!currentAuthUser) {
+      // Verify user_id for RLS — reuse earlier authUser (avoid second getUser hang on Android).
+      if (!authUser?.id) {
         console.error('❌ No authenticated user found');
         throw new Error('Oturum bulunamadı. Lütfen tekrar giriş yapın.');
       }
-      
-      // Always use current auth user ID
-      userId = currentAuthUser.id;
+
+      userId = authUser.id;
       console.log('✅ Using authenticated user ID:', userId);
-      
-      if (currentAuthUser.id !== userId) {
-        console.warn('⚠️ User ID mismatch - using auth user ID instead');
-        userId = currentAuthUser.id;
-      }
 
       // Create price
       const priceData: any = {
@@ -2029,23 +2195,13 @@ export const pricesAPI = {
         product_id: priceData.product_id,
         location_id: priceData.location_id,
         user_id: priceData.user_id,
-        auth_uid: currentAuthUser?.id,
-        user_id_match: currentAuthUser?.id === priceData.user_id,
+        auth_uid: authUser?.id,
+        user_id_match: authUser?.id === priceData.user_id,
         price: priceData.price,
         hasPhoto: !!priceData.photo,
         photoUrl: priceData.photo || 'null',
         hasCoordinates: !!(priceData.coordinates),
       });
-
-      // Double-check auth.uid() before insert
-      if (!currentAuthUser) {
-        throw new Error('Oturum bulunamadı. Lütfen tekrar giriş yapın.');
-      }
-      
-      if (currentAuthUser.id !== priceData.user_id) {
-        console.warn('⚠️ User ID mismatch - correcting user_id');
-        priceData.user_id = currentAuthUser.id;
-      }
 
       console.log('💾 Inserting price into database...');
       const { data: priceRecord, error: priceError } = await supabase
@@ -2074,9 +2230,9 @@ export const pricesAPI = {
         console.error('❌ Error details:', priceError.details);
         console.error('❌ Error hint:', priceError.hint);
         console.error('❌ Price data:', priceData);
-        console.error('❌ Current auth user:', currentAuthUser?.id);
+        console.error('❌ Current auth user:', authUser?.id);
         console.error('❌ User ID in price data:', priceData.user_id);
-        console.error('❌ User ID match:', currentAuthUser?.id === priceData.user_id);
+        console.error('❌ User ID match:', authUser?.id === priceData.user_id);
         
         // Provide more helpful error message
         let errorMessage = 'Fiyat oluşturulamadı';
@@ -2109,38 +2265,40 @@ export const pricesAPI = {
       
       console.log('Price created successfully:', priceRecord.id);
 
-      // Server-side fallback dispatcher:
-      // re-computes price-drop recipients and dispatches remote push even if DB webhook chain lags.
-      try {
-        await supabase.functions.invoke('notify-price-drop', {
-          body: { price_id: priceRecord.id },
-        });
-      } catch (notifyError) {
+      // Server-side fallback dispatcher (non-blocking — do not stall submit UX).
+      supabase.functions.invoke('notify-price-drop', {
+        body: { price_id: priceRecord.id },
+      }).catch((notifyError) => {
         console.warn('⚠️ notify-price-drop invoke failed (non-blocking):', notifyError);
-      }
+      });
 
-      // Update user points
-      const { data: userProfile } = await supabase
-        .from('users')
-        .select('points, contributions')
-        .eq('id', userId)
-        .single();
+      // Update user points (non-blocking)
+      void (async () => {
+        try {
+          const { data: userProfile } = await supabase
+            .from('users')
+            .select('points, contributions')
+            .eq('id', userId)
+            .single();
 
-      if (userProfile) {
-        const newPoints = (userProfile.points || 0) + 10;
-        const contributions = userProfile.contributions || { shares: 0, verifications: 0 };
-        
-        await supabase
-          .from('users')
-          .update({
-            points: newPoints,
-            contributions: {
-              ...contributions,
-              shares: (contributions.shares || 0) + 1,
-            },
-          })
-          .eq('id', userId);
-      }
+          if (userProfile) {
+            const newPoints = (userProfile.points || 0) + 10;
+            const contributions = userProfile.contributions || { shares: 0, verifications: 0 };
+            await supabase
+              .from('users')
+              .update({
+                points: newPoints,
+                contributions: {
+                  ...contributions,
+                  shares: (contributions.shares || 0) + 1,
+                },
+              })
+              .eq('id', userId);
+          }
+        } catch (pointsError) {
+          console.warn('⚠️ Points update skipped:', pointsError);
+        }
+      })();
 
         // Keep "Katkılarım" usable even when network/profile queries are flaky.
         try {

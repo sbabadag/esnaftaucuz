@@ -166,7 +166,7 @@ export default function ExploreScreen() {
   const [currentLocation, setCurrentLocation] = useState<string>('Konya / Selçuklu');
   const [isGettingLocation, setIsGettingLocation] = useState(false);
   const [userLocation, setUserLocation] = useState<{ lat: number; lng: number } | null>(null);
-  const exploreCacheKey = `explore-cache:${user?.id || 'anon'}`;
+  const exploreCacheKey = `explore-cache:v2:${user?.id || 'anon'}`;
   const productsIndexCacheKey = `products-search-index:${user?.id || 'anon'}`;
   const [filters, setFilters] = useState({
     pazar: false,
@@ -522,35 +522,51 @@ export default function ExploreScreen() {
     }, loadDataHardCapMs);
 
     try {
+      // Önce fiyat bootstrap — user_favorites RLS/ağ takılırsa Keşfet boş kalmasın.
+      let bootstrapRecent: Price[] = [];
+      try {
+        const rawBootstrap = await pricesAPI.fetchRecentForExplore(30);
+        console.log('✅ explore bootstrap rows:', rawBootstrap.length);
+        if (rawBootstrap.length > 0) {
+          bootstrapRecent = rawBootstrap as Price[];
+          setRecentPrices(bootstrapRecent);
+          setNearbyCheapest(bootstrapRecent.slice(0, 8));
+        }
+      } catch (bootstrapErr) {
+        console.warn('⚠️ explore bootstrap fetchRecentForExplore failed:', bootstrapErr);
+      }
+
       let favoriteProductIds = new Set<string>();
       if (user?.id) {
         try {
-          const { data: favRows, error: favErr } = await supabase
+          const favQuery = supabase
             .from('user_favorites')
             .select('product_id')
             .eq('user_id', user.id);
+          const favResult = await Promise.race([
+            favQuery,
+            new Promise<{ data: null; error: { message: string } }>((resolve) =>
+              setTimeout(() => resolve({ data: null, error: { message: 'favorites timeout' } }), 4000)
+            ),
+          ]);
+          const favRows = favResult?.data;
+          const favErr = favResult?.error;
           if (!favErr && favRows) {
             favoriteProductIds = new Set(
               favRows.map((r: { product_id?: string }) => String(r.product_id || '').trim()).filter(Boolean)
             );
+          } else if (favErr) {
+            console.warn('⚠️ user_favorites skipped:', favErr.message);
           }
         } catch {
           /* ignore */
         }
       }
       favoriteProductIdsRef.current = favoriteProductIds;
-
-      // Hemen anon REST: feed yavaş/eksik olsa da liste dolmaya başlar; legacy ile nextRecentPrices uyumu için.
-      let bootstrapRecent: Price[] = [];
-      try {
-        const rawBootstrap = await pricesAPI.fetchRecentForExplore(30);
-        if (rawBootstrap.length > 0) {
-          bootstrapRecent = sortRecentPricesFavoritesFirst(rawBootstrap as Price[], favoriteProductIds) as Price[];
-          setRecentPrices(bootstrapRecent);
-          setNearbyCheapest(bootstrapRecent.slice(0, 8));
-        }
-      } catch (bootstrapErr) {
-        console.warn('⚠️ explore bootstrap fetchRecentForExplore failed:', bootstrapErr);
+      if (bootstrapRecent.length > 0 && favoriteProductIds.size > 0) {
+        bootstrapRecent = sortRecentPricesFavoritesFirst(bootstrapRecent, favoriteProductIds) as Price[];
+        setRecentPrices(bootstrapRecent);
+        setNearbyCheapest(bootstrapRecent.slice(0, 8));
       }
 
       // Primary source: server-side feed (service-role) to avoid client-side RLS/join issues.
@@ -1795,7 +1811,7 @@ export default function ExploreScreen() {
         {/* Trend Products - En üste taşındı */}
         {!searchResults && (
           <section className="mt-0 pt-0">
-            <h2 className="mt-0 pt-0 text-base sm:text-lg mb-0 sm:mb-0 text-gray-900 font-semibold">Bugun En Cok Bakilanlar</h2>
+            <h2 className="mt-0 pt-0 text-base sm:text-lg mb-0 sm:mb-0 text-gray-900 font-semibold">{t('TREND_TITLE')}</h2>
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-2 sm:gap-3">
               {trendProducts.length > 0 ? (
                 trendProducts.slice(0, 6).map((product) => (
@@ -1827,7 +1843,7 @@ export default function ExploreScreen() {
                   </div>
                 ))
               ) : (
-                <p className="text-sm text-gray-500 col-span-full">Henüz trend ürün yok</p>
+                <p className="text-sm text-gray-500 col-span-full">{t('NO_TREND')}</p>
               )}
             </div>
           </section>
@@ -1838,7 +1854,7 @@ export default function ExploreScreen() {
           <div className="space-y-4">
             <div className="flex items-center justify-between">
               <h2 className="text-lg font-semibold">
-                {lang === 'tr' ? `Arama Sonuçları: "${searchQuery}"` : `Search results: "${searchQuery}"`}
+                {t('SEARCH_RESULTS', { q: searchQuery })}
               </h2>
               <Button
                 variant="outline"
@@ -2138,10 +2154,10 @@ export default function ExploreScreen() {
                         </Avatar>
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2 mb-1">
-                            <h3 className="font-semibold text-lg truncate">{shop.name || 'Esnaf'}</h3>
-                            <Badge className="bg-blue-600 text-white text-xs">Dükkan</Badge>
+                            <h3 className="font-semibold text-lg truncate">{shop.name || t('MERCHANT_FALLBACK')}</h3>
+                            <Badge className="bg-blue-600 text-white text-xs">{t('SHOP_BADGE')}</Badge>
                           </div>
-                          <p className="text-sm text-gray-500">Esnaf ürünlerini görüntüle</p>
+                          <p className="text-sm text-gray-500">{t('VIEW_MERCHANT_PRODUCTS')}</p>
                         </div>
                       </div>
                     </button>
@@ -2153,7 +2169,7 @@ export default function ExploreScreen() {
 
             {/* Recent Prices - always visible even without location permission */}
             <section>
-              <h2 className="text-base sm:text-lg mb-2 sm:mb-3 text-gray-900 font-semibold">Son Eklenen Fiyatlar</h2>
+              <h2 className="text-base sm:text-lg mb-2 sm:mb-3 text-gray-900 font-semibold">{t('RECENT_PRICES_TITLE')}</h2>
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
                 {mainRecentPrices.length > 0 ? (
                   mainRecentPrices.slice(0, 6).map((item) => {
@@ -2163,7 +2179,7 @@ export default function ExploreScreen() {
                       (item as any).product_name ||
                       (item as any).productName ||
                       (item as any).name ||
-                      'Urun';
+                      t('PRODUCT_FALLBACK');
                     return (
                       <div
                         key={item.id || item._id}
@@ -2183,13 +2199,13 @@ export default function ExploreScreen() {
                             </p>
                           </div>
                           {isToday(item.created_at || item.createdAt || '') && (
-                            <Badge className="bg-green-600 ml-2 flex-shrink-0 text-xs">BUGÜN</Badge>
+                            <Badge className="bg-green-600 ml-2 flex-shrink-0 text-xs">{t('TODAY')}</Badge>
                           )}
                         </div>
                         <div className="flex items-center gap-3 sm:gap-4 text-xs sm:text-sm text-gray-500">
                           <span className="flex items-center gap-1 min-w-0 flex-1">
                             <MapPin className="w-3 h-3 sm:w-4 sm:h-4 flex-shrink-0" />
-                            <span className="truncate">{item.location?.name || 'Konum bilgisi yok'}</span>
+                            <span className="truncate">{item.location?.name || t('LOCATION_MISSING')}</span>
                           </span>
                           <span className="flex items-center gap-1 flex-shrink-0">
                             <Clock className="w-3 h-3 sm:w-4 sm:h-4" />
@@ -2200,7 +2216,7 @@ export default function ExploreScreen() {
                     );
                   })
                 ) : (
-                  <p className="text-sm text-gray-500 col-span-full">Henuz fiyat verisi bulunamadi</p>
+                  <p className="text-sm text-gray-500 col-span-full">{t('NO_RECENT_PRICES')}</p>
                 )}
               </div>
             </section>
@@ -2208,7 +2224,7 @@ export default function ExploreScreen() {
             {/* Nearby Cheap - Only show if user location is available */}
             {userLocation && (
             <section>
-              <h2 className="text-base sm:text-lg mb-2 sm:mb-3 text-gray-900 font-semibold">Sana Yakın En Ucuz</h2>
+              <h2 className="text-base sm:text-lg mb-2 sm:mb-3 text-gray-900 font-semibold">{t('NEARBY_CHEAPEST_TITLE')}</h2>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 {(nearbyCheapest.length > 0 ? nearbyCheapest : recentPrices).length > 0 ? (
                   (nearbyCheapest.length > 0 ? nearbyCheapest : recentPrices).slice(0, 4).map((item) => {
@@ -2218,7 +2234,7 @@ export default function ExploreScreen() {
                       (item as any).product_name ||
                       (item as any).productName ||
                       (item as any).name ||
-                      'Urun';
+                      t('PRODUCT_FALLBACK');
                     return (
                       <div
                         key={item.id || item._id}
@@ -2254,14 +2270,14 @@ export default function ExploreScreen() {
                                 </p>
                               </div>
                               {isToday(item.created_at || item.createdAt || '') && (
-                                <Badge className="bg-green-600 ml-2 flex-shrink-0 text-xs">BUGÜN</Badge>
+                                <Badge className="bg-green-600 ml-2 flex-shrink-0 text-xs">{t('TODAY')}</Badge>
                               )}
                             </div>
                             <div className="mb-1.5 sm:mb-2">
                               <div className="flex items-center gap-3 sm:gap-4 text-xs sm:text-sm text-gray-500 mb-1.5 sm:mb-2">
                                 <span className="flex items-center gap-1 min-w-0 flex-1">
                                   <MapPin className="w-3 h-3 sm:w-4 sm:h-4 flex-shrink-0" />
-                                  <span className="truncate">{item.location?.name || 'Konum bilgisi yok'}</span>
+                                  <span className="truncate">{item.location?.name || t('LOCATION_MISSING')}</span>
                                 </span>
                                 <span className="flex items-center gap-1 flex-shrink-0">
                                   <Clock className="w-3 h-3 sm:w-4 sm:h-4" />
@@ -2311,7 +2327,7 @@ export default function ExploreScreen() {
                                     }}
                                   >
                                     <Navigation className="w-3 h-3 mr-1" />
-                                    Konuma Git
+                                    {t('GO_TO_LOCATION')}
                                   </Button>
                                 ) : null;
                               })()}
@@ -2330,7 +2346,7 @@ export default function ExploreScreen() {
                             {(item.is_verified || item.isVerified) && (
                               <div className="flex items-center gap-1.5 sm:gap-2 mt-1.5 sm:mt-2 text-xs sm:text-sm text-green-600">
                                 <CheckCircle2 className="w-3 h-3 sm:w-4 sm:h-4" />
-                                <span>Doğrulanmış</span>
+                                <span>{t('VERIFIED')}</span>
                               </div>
                             )}
                           </div>
@@ -2339,7 +2355,7 @@ export default function ExploreScreen() {
                     );
                   }).filter(Boolean)
                 ) : (
-                  <p className="text-sm text-gray-500">Henüz fiyat girilmemiş</p>
+                  <p className="text-sm text-gray-500">{t('NO_CONTRIBUTIONS_TITLE')}</p>
                 )}
               </div>
             </section>

@@ -81,7 +81,7 @@ function AppRoutes() {
     const hasExplicitOAuthCallback = hashParams.has('access_token') || hashParams.has('code');
     const isOAuthCallback = hasExplicitOAuthCallback || hasRecentOAuthPending;
     
-    if (isOAuthCallback && isLoading) {
+    if (isOAuthCallback && (isLoading || !user)) {
       console.log('🔐 OAuth callback detected, waiting for user to load...');
       // Don't navigate yet, wait for user to be loaded
       return;
@@ -106,8 +106,8 @@ function AppRoutes() {
   const hasExplicitOAuthCallback = hashParams.has('access_token') || hashParams.has('code');
   const isOAuthCallback = hasExplicitOAuthCallback || hasRecentOAuthPending;
   
-  // If OAuth callback is in progress, show loading
-  if (isOAuthCallback && isLoading) {
+  // If OAuth callback is in progress, show loading (even if isLoading briefly flipped false)
+  if (isOAuthCallback && (isLoading || !user)) {
     console.log('🔐 OAuth callback in progress, showing loading...');
     return <LoadingScreenWithVersion message="Giriş yapılıyor..." />;
   }
@@ -180,6 +180,7 @@ function App() {
 
   useEffect(() => {
     const OAUTH_PENDING_KEY = 'oauth-pending-ts';
+    const OAUTH_PENDING_CODE_KEY = 'oauth-pending-code';
     const MERCHANT_SIGNUP_INTENT_KEY = 'merchant-signup-intent';
     const MERCHANT_SUBSCRIPTION_ONBOARDING_KEY = 'merchant-subscription-onboarding-user';
     const getAppRootPath = () => {
@@ -307,6 +308,11 @@ function App() {
     const handleOAuthCode = async (code: string, source: string, merchantIntentHint: boolean = false) => {
       const normalizedCode = String(code || '').trim();
       if (!normalizedCode) return;
+      try {
+        localStorage.setItem(OAUTH_PENDING_CODE_KEY, normalizedCode);
+      } catch {
+        // best effort
+      }
       const now = Date.now();
       const isRecentDuplicate =
         lastHandledOAuthCodeRef.current === normalizedCode &&
@@ -376,28 +382,60 @@ function App() {
               console.log('📋 localStorage keys:', allKeys.join(', '));
             }
 
-            const result = await GooglePlayBilling.exchangeOAuthCode({
-              supabaseUrl,
-              code: normalizedCode,
-              codeVerifier,
-              redirectUri: 'com.esnaftaucuz.app://auth/callback',
-              apiKey,
-            });
-
-            console.log('✅ Native code exchange response status:', result.status);
-            const tokenData = JSON.parse(result.body);
-
-            if (tokenData.access_token && tokenData.refresh_token) {
-              const { error: setErr } = await supabase.auth.setSession({
-                access_token: tokenData.access_token,
-                refresh_token: tokenData.refresh_token,
-              });
-              if (setErr) {
-                throw setErr;
+            const storedRedirectUri = (() => {
+              try {
+                return String(localStorage.getItem('oauth-redirect-uri') || '').trim();
+              } catch {
+                return '';
               }
-              exchangeResult = { data: { session: tokenData }, error: null };
-            } else {
-              throw new Error(tokenData.error_description || tokenData.error || 'No tokens in response');
+            })();
+            const redirectCandidates = Array.from(
+              new Set(
+                [
+                  storedRedirectUri,
+                  'com.esnaftaucuz.app://auth/callback',
+                  'com.esnaftaucuz.app://',
+                ].filter(Boolean)
+              )
+            );
+
+            let nativeExchangeOk = false;
+            let lastNativeError: any = null;
+            for (const redirectUri of redirectCandidates) {
+              console.log('🔄 Native OAuth exchange with redirect_uri:', redirectUri);
+              const result = await GooglePlayBilling.exchangeOAuthCode({
+                supabaseUrl,
+                code: normalizedCode,
+                codeVerifier,
+                redirectUri,
+                apiKey,
+              });
+              console.log('✅ Native code exchange response status:', result.status);
+              const tokenData = JSON.parse(result.body || '{}');
+              if (tokenData.access_token && tokenData.refresh_token) {
+                const { error: setErr } = await supabase.auth.setSession({
+                  access_token: tokenData.access_token,
+                  refresh_token: tokenData.refresh_token,
+                });
+                if (setErr) {
+                  lastNativeError = setErr;
+                  continue;
+                }
+                exchangeResult = { data: { session: tokenData }, error: null };
+                nativeExchangeOk = true;
+                try {
+                  localStorage.setItem('oauth-redirect-uri', redirectUri);
+                } catch {
+                  // best effort
+                }
+                break;
+              }
+              lastNativeError = new Error(
+                tokenData.error_description || tokenData.error || `HTTP ${result.status}`
+              );
+            }
+            if (!nativeExchangeOk) {
+              throw lastNativeError || new Error('Native OAuth exchange failed');
             }
           } catch (nativeErr: any) {
             console.error('❌ Native code exchange failed:', nativeErr);
@@ -467,18 +505,18 @@ function App() {
           }
         }
         
-        // Clean up PKCE verifier keys so they don't interfere with future logins
+        // Keep oauth-pending until AuthContext finishes profile load.
+        // Navigate to explore so AppRoutes does not flash onboarding/login.
         try {
-          for (let i = localStorage.length - 1; i >= 0; i--) {
-            const k = localStorage.key(i);
-            if (k && (k.includes('code-verifier') || k.includes('code_verifier'))) {
-              localStorage.removeItem(k);
-            }
-          }
-        } catch { /* best effort */ }
-
-        clearOAuthPending();
-        window.history.replaceState({}, document.title, getAppRootPath());
+          localStorage.removeItem(OAUTH_PENDING_CODE_KEY);
+        } catch {
+          // best effort
+        }
+        try {
+          window.history.replaceState({}, document.title, '/app/explore');
+        } catch {
+          window.history.replaceState({}, document.title, getAppRootPath());
+        }
         window.dispatchEvent(new PopStateEvent('popstate'));
       } catch (err: any) {
         console.error('❌ Error exchanging code for session:', err);
@@ -488,7 +526,29 @@ function App() {
             ? 'Google giriş isteği zaman aşımına uğradı. Lütfen tekrar deneyin.'
             : rawMessage;
         clearOAuthPending();
-        window.location.hash = `error=${encodeURIComponent(normalizedMessage)}`;
+        try {
+          localStorage.removeItem(OAUTH_PENDING_CODE_KEY);
+        } catch {
+          // best effort
+        }
+        // Stale code / missing verifier: do not leave a sticky #error hash that re-triggers auth noise.
+        const alreadyHasSession = (() => {
+          try {
+            const raw = localStorage.getItem('sb-xmskjcdwmwlcmjexnnxw-auth-token');
+            return !!(raw && JSON.parse(raw)?.access_token);
+          } catch {
+            return false;
+          }
+        })();
+        if (alreadyHasSession) {
+          try {
+            window.history.replaceState({}, document.title, '/app/explore');
+          } catch {
+            /* ignore */
+          }
+        } else {
+          window.location.hash = `error=${encodeURIComponent(normalizedMessage)}`;
+        }
       } finally {
         oauthExchangeInFlightRef.current = false;
       }
@@ -556,6 +616,27 @@ function App() {
     // Check immediately on mount (in case we're already on callback page)
     if (isMobile) {
       checkCurrentUrlForOAuth();
+      // Recover if a previous deep-link stored the code before JS remounted
+      try {
+        const pendingCode = String(localStorage.getItem(OAUTH_PENDING_CODE_KEY) || '').trim();
+        const alreadyHasSession = (() => {
+          try {
+            const raw = localStorage.getItem('sb-xmskjcdwmwlcmjexnnxw-auth-token');
+            return !!(raw && JSON.parse(raw)?.access_token);
+          } catch {
+            return false;
+          }
+        })();
+        if (pendingCode && !alreadyHasSession) {
+          console.log('🔐 Recovering pending OAuth code from storage');
+          handleOAuthCode(pendingCode, 'pending-storage');
+        } else if (pendingCode && alreadyHasSession) {
+          localStorage.removeItem(OAUTH_PENDING_CODE_KEY);
+          console.log('🧹 Dropped stale pending OAuth code (session already present)');
+        }
+      } catch {
+        // best effort
+      }
     }
     
     if (isMobile) {
@@ -613,6 +694,16 @@ function App() {
           // Some devices can emit stale callback URLs without query params.
           if (hasActionableParams) {
             Browser.close().catch(() => {});
+          }
+
+          if (code || hashCode) {
+            const pending = String(code || hashCode || '').trim();
+            try {
+              localStorage.setItem(OAUTH_PENDING_CODE_KEY, pending);
+              markOAuthPending();
+            } catch {
+              // best effort
+            }
           }
 
           if (accessToken) {
@@ -705,8 +796,12 @@ function App() {
               window.dispatchEvent(new CustomEvent('oauth-fallback-login', { detail: { user: fallbackUser, token: accessToken } }));
             }
 
-            clearOAuthPending();
-            window.history.replaceState({}, document.title, getAppRootPath());
+            // Keep oauth-pending until AuthContext confirms user; go to explore not root.
+            try {
+              window.history.replaceState({}, document.title, '/app/explore');
+            } catch {
+              window.history.replaceState({}, document.title, getAppRootPath());
+            }
             window.dispatchEvent(new PopStateEvent('popstate'));
           } else if (code) {
             handleOAuthCode(code, `${source} deep link`, merchantIntent);
@@ -754,15 +849,57 @@ function App() {
       const listener = CapacitorApp.addListener('appUrlOpen', (event) => {
         handleIncomingDeepLink(event.url, 'appUrlOpen');
       });
+
+      // When Custom Tabs closes after Google login, recover deep link / pending code.
+      let browserFinishedHandle: { remove: () => void } | null = null;
+      Browser.addListener('browserFinished', () => {
+        console.log('📱 OAuth browser finished — probing callback');
+        probeLaunchUrl('browserFinished');
+        try {
+          const pendingCode = String(localStorage.getItem(OAUTH_PENDING_CODE_KEY) || '').trim();
+          if (pendingCode) {
+            handleOAuthCode(pendingCode, 'browserFinished-pending');
+          }
+        } catch {
+          // best effort
+        }
+      }).then((h) => {
+        browserFinishedHandle = h;
+      }).catch(() => {});
       
       // Also listen for when the app comes back to foreground
       // This helps catch cases where OAuth redirect happens but deep link isn't triggered
       const appStateListener = CapacitorApp.addListener('appStateChange', (state) => {
         console.log('📱 App state changed:', state.isActive ? 'active' : 'inactive');
         if (state.isActive) {
+          // Returning from camera/gallery also triggers resume — do not re-run OAuth
+          // against a stale pending code (that kicks the user out of Add Price).
+          const alreadyHasSession = (() => {
+            try {
+              const raw = localStorage.getItem('sb-xmskjcdwmwlcmjexnnxw-auth-token');
+              return !!(raw && JSON.parse(raw)?.access_token);
+            } catch {
+              return false;
+            }
+          })();
+          if (alreadyHasSession) {
+            try {
+              localStorage.removeItem(OAUTH_PENDING_CODE_KEY);
+            } catch {
+              /* ignore */
+            }
+            return;
+          }
           probeLaunchUrl('resume');
-          // Check if we're on a Supabase callback page
           checkCurrentUrlForOAuth();
+          try {
+            const pendingCode = String(localStorage.getItem(OAUTH_PENDING_CODE_KEY) || '').trim();
+            if (pendingCode) {
+              handleOAuthCode(pendingCode, 'resume-pending');
+            }
+          } catch {
+            // best effort
+          }
         }
       });
       
@@ -772,7 +909,32 @@ function App() {
       const intervalId = setInterval(() => {
         intervalChecks += 1;
         if (document.visibilityState === 'visible') {
+          const alreadyHasSession = (() => {
+            try {
+              const raw = localStorage.getItem('sb-xmskjcdwmwlcmjexnnxw-auth-token');
+              return !!(raw && JSON.parse(raw)?.access_token);
+            } catch {
+              return false;
+            }
+          })();
+          if (alreadyHasSession) {
+            try {
+              localStorage.removeItem(OAUTH_PENDING_CODE_KEY);
+            } catch {
+              /* ignore */
+            }
+            clearInterval(intervalId);
+            return;
+          }
           const relevant = checkCurrentUrlForOAuth();
+          try {
+            const pendingCode = String(localStorage.getItem(OAUTH_PENDING_CODE_KEY) || '').trim();
+            if (pendingCode) {
+              handleOAuthCode(pendingCode, 'interval-pending');
+            }
+          } catch {
+            // best effort
+          }
           if (!relevant || intervalChecks >= 6) {
             clearInterval(intervalId);
           }
@@ -787,6 +949,11 @@ function App() {
         }
         listener.remove();
         appStateListener.remove();
+        try {
+          browserFinishedHandle?.remove?.();
+        } catch {
+          // ignore
+        }
         clearInterval(intervalId);
         clearInterval(launchProbeTimer);
       };

@@ -12,6 +12,7 @@ import { useGeolocation } from '../../../../src/hooks/useGeolocation';
 import { forwardGeocode } from '../../../utils/geocoding';
 import { supabase, safeGetSession } from '../../../lib/supabase';
 import { resolveMerchantRoleFromProfile } from '../../../lib/merchant-role';
+import { pickSingleImage } from '../../../lib/native-image-picker';
 
 const steps = ['product', 'price', 'location', 'photo', 'confirm'];
 
@@ -97,6 +98,7 @@ export default function AddPriceScreen() {
     lng: null as number | null,
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isPickingPhoto, setIsPickingPhoto] = useState(false);
   const productsIndexCacheKey = `add-price-products-index:${user?.id || 'anon'}`;
   const locationsCacheKey = `add-price-locations-index:${user?.id || 'anon'}`;
   const withTimeout = async <T,>(promise: Promise<T>, ms: number, timeoutMessage: string): Promise<T> => {
@@ -308,6 +310,25 @@ export default function AddPriceScreen() {
     }
   };
 
+  const handlePhotoFromSource = async (source: 'camera' | 'gallery') => {
+    if (isPickingPhoto) return;
+    setIsPickingPhoto(true);
+    try {
+      const file = await pickSingleImage(source);
+      if (!file) {
+        toast.message(source === 'camera' ? 'Kamera iptal edildi' : 'Galeri seçimi iptal edildi');
+        return;
+      }
+      handlePhotoSelect(file);
+      toast.success('Fotoğraf eklendi');
+    } catch (error: any) {
+      console.error('Photo pick error:', error);
+      toast.error(error?.message || 'Fotoğraf seçilemedi');
+    } finally {
+      setIsPickingPhoto(false);
+    }
+  };
+
   const handleNext = async () => {
     if (currentStep < steps.length - 1) {
       setCurrentStep(currentStep + 1);
@@ -376,8 +397,7 @@ export default function AddPriceScreen() {
         });
         })(),
         new Promise((_, reject) =>
-          // On slower web networks/db load, 15s was too aggressive and produced false timeout errors.
-          setTimeout(() => reject(new Error('price-submit-timeout')), 75000)
+          setTimeout(() => reject(new Error('price-submit-timeout')), 40000)
         ),
       ]) as any;
 
@@ -450,7 +470,7 @@ export default function AddPriceScreen() {
       console.warn('AddPrice submit exceeded safety threshold, resetting submit state.');
       setIsSubmitting(false);
       toast.warning('Islem beklenenden uzun surdu. Lutfen tekrar deneyin.');
-    }, 90000);
+    }, 45000);
     return () => clearTimeout(timer);
   }, [isSubmitting]);
 
@@ -1021,37 +1041,20 @@ export default function AddPriceScreen() {
                 type="button"
                 variant="outline"
                 className="h-32 flex-col gap-2"
-                onClick={() => {
-                  const input = document.createElement('input');
-                  input.type = 'file';
-                  input.accept = 'image/*';
-                  input.capture = 'environment';
-                  input.onchange = (e) => {
-                    const file = (e.target as HTMLInputElement).files?.[0];
-                    if (file) handlePhotoSelect(file);
-                  };
-                  input.click();
-                }}
+                disabled={isPickingPhoto}
+                onClick={() => handlePhotoFromSource('camera')}
               >
-                <Camera className="w-8 h-8" />
+                {isPickingPhoto ? <Loader2 className="w-8 h-8 animate-spin" /> : <Camera className="w-8 h-8" />}
                 <span>Kamera</span>
               </Button>
               <Button
                 type="button"
                 variant="outline"
                 className="h-32 flex-col gap-2"
-                onClick={() => {
-                  const input = document.createElement('input');
-                  input.type = 'file';
-                  input.accept = 'image/*';
-                  input.onchange = (e) => {
-                    const file = (e.target as HTMLInputElement).files?.[0];
-                    if (file) handlePhotoSelect(file);
-                  };
-                  input.click();
-                }}
+                disabled={isPickingPhoto}
+                onClick={() => handlePhotoFromSource('gallery')}
               >
-                <ImageIcon className="w-8 h-8" />
+                {isPickingPhoto ? <Loader2 className="w-8 h-8 animate-spin" /> : <ImageIcon className="w-8 h-8" />}
                 <span>Galeri</span>
               </Button>
             </div>

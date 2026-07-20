@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, MapPin, Clock, CheckCircle2, ThumbsUp, Flag, Package, Navigation, Heart, Plus, Camera, X } from 'lucide-react';
+import { ArrowLeft, MapPin, Clock, CheckCircle2, ThumbsUp, Flag, Package, Navigation, Heart, Plus, Camera, X, Image as ImageIcon } from 'lucide-react';
 import { Button } from '../../ui/button';
 import { Badge } from '../../ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../ui/select';
@@ -14,6 +14,7 @@ import { useGeolocation } from '../../../../src/hooks/useGeolocation';
 import { forwardGeocode } from '../../../utils/geocoding';
 import { supabase, safeGetSession } from '../../../lib/supabase';
 import { resolveMerchantRoleFromProfile } from '../../../lib/merchant-role';
+import { pickSingleImage } from '../../../lib/native-image-picker';
 import { toast } from 'sonner';
 
 interface Price {
@@ -467,6 +468,17 @@ export default function ProductDetailScreen() {
         photo: file,
         photoPreview: URL.createObjectURL(file),
       });
+    }
+  };
+
+  const handlePhotoFromSource = async (source: 'camera' | 'gallery') => {
+    try {
+      const file = await pickSingleImage(source);
+      if (!file) return;
+      handlePhotoSelect(file);
+    } catch (error: any) {
+      console.error('Photo pick error:', error);
+      toast.error(error?.message || 'Fotoğraf seçilemedi');
     }
   };
 
@@ -1038,42 +1050,43 @@ export default function ProductDetailScreen() {
               </div>
               <div>
                 <Label>Fotoğraf (Opsiyonel)</Label>
-                <div className="flex gap-2">
-                  <label className="flex-1">
-                    <input
-                      type="file"
-                      accept="image/*"
-                      className="hidden"
-                      onChange={(e) => handlePhotoSelect(e.target.files?.[0] || null)}
+                {priceFormData.photoPreview ? (
+                  <div className="relative mt-2">
+                    <img
+                      src={priceFormData.photoPreview}
+                      alt="Preview"
+                      className="w-full h-32 object-cover rounded"
                     />
-                    <div className="border-2 border-dashed border-gray-300 rounded-lg p-4 text-center cursor-pointer hover:border-green-600">
-                      {priceFormData.photoPreview ? (
-                        <div className="relative">
-                          <img
-                            src={priceFormData.photoPreview}
-                            alt="Preview"
-                            className="w-full h-32 object-cover rounded"
-                          />
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setPriceFormData({ ...priceFormData, photo: null, photoPreview: null });
-                            }}
-                            className="absolute top-1 right-1 bg-red-500 text-white rounded-full p-1"
-                          >
-                            <X className="w-4 h-4" />
-                          </button>
-                        </div>
-                      ) : (
-                        <div>
-                          <Camera className="w-8 h-8 mx-auto text-gray-400 mb-2" />
-                          <span className="text-sm text-gray-600">Fotoğraf Ekle</span>
-                        </div>
-                      )}
-                    </div>
-                  </label>
-                </div>
+                    <button
+                      type="button"
+                      onClick={() => setPriceFormData({ ...priceFormData, photo: null, photoPreview: null })}
+                      className="absolute top-1 right-1 bg-red-500 text-white rounded-full p-1"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-2 gap-2 mt-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="h-24 flex-col gap-1"
+                      onClick={() => handlePhotoFromSource('camera')}
+                    >
+                      <Camera className="w-6 h-6 text-gray-500" />
+                      <span className="text-xs">Kamera</span>
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="h-24 flex-col gap-1"
+                      onClick={() => handlePhotoFromSource('gallery')}
+                    >
+                      <ImageIcon className="w-6 h-6 text-gray-500" />
+                      <span className="text-xs">Galeri</span>
+                    </Button>
+                  </div>
+                )}
               </div>
               <div className="flex gap-2 pt-4">
                 <Button

@@ -14,6 +14,7 @@ import { forwardGeocode, reverseGeocode } from '../../utils/geocoding';
 import { supabase, safeGetSession } from '../../lib/supabase';
 import { v4 as uuidv4 } from 'uuid';
 import { Capacitor } from '@capacitor/core';
+import { pickImages } from '../../lib/native-image-picker';
 
 interface MerchantProduct {
   id: string;
@@ -428,6 +429,25 @@ export default function MerchantShopScreen() {
       images: [...formData.images, ...newFiles],
       imagePreviews: [...formData.imagePreviews, ...newPreviews],
     });
+  };
+
+  const handleNativeImagePick = async (source: 'camera' | 'gallery') => {
+    try {
+      const files = await pickImages({
+        source,
+        multiple: source === 'gallery',
+      });
+      if (!files.length) return;
+      const newPreviews = files.map((file) => URL.createObjectURL(file));
+      setFormData({
+        ...formData,
+        images: [...formData.images, ...files],
+        imagePreviews: [...formData.imagePreviews, ...newPreviews],
+      });
+    } catch (error: any) {
+      console.error('Image pick error:', error);
+      toast.error(error?.message || 'Fotoğraf seçilemedi');
+    }
   };
 
   const removeImage = (index: number) => {
@@ -1056,21 +1076,41 @@ export default function MerchantShopScreen() {
                           </div>
                         ))}
                       </div>
-                      <label className="flex items-center justify-center w-full h-32 border-2 border-dashed border-gray-300 rounded-lg cursor-pointer hover:border-green-600">
-                        <input
-                          type="file"
-                          multiple
-                          accept="image/*"
-                          onChange={(e) => handleImageSelect(e.target.files)}
-                          className="hidden"
-                        />
-                        <div className="text-center">
-                          <ImageIcon className="w-8 h-8 mx-auto text-gray-400" />
-                          <span className="text-sm text-gray-600 mt-2 block">
-                            Resim Ekle
-                          </span>
-                        </div>
-                      </label>
+                      <div className="grid grid-cols-2 gap-2">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          className="h-24 flex-col gap-1"
+                          onClick={() => handleNativeImagePick('camera')}
+                        >
+                          <Camera className="w-6 h-6 text-gray-500" />
+                          <span className="text-xs text-gray-600">Kamera</span>
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          className="h-24 flex-col gap-1"
+                          onClick={() => handleNativeImagePick('gallery')}
+                        >
+                          <ImageIcon className="w-6 h-6 text-gray-500" />
+                          <span className="text-xs text-gray-600">Galeri</span>
+                        </Button>
+                      </div>
+                      {!Capacitor.isNativePlatform() && (
+                        <label className="flex items-center justify-center w-full h-20 border-2 border-dashed border-gray-300 rounded-lg cursor-pointer hover:border-green-600">
+                          <input
+                            type="file"
+                            multiple
+                            accept="image/*"
+                            onChange={(e) => handleImageSelect(e.target.files)}
+                            className="hidden"
+                          />
+                          <div className="text-center">
+                            <ImageIcon className="w-6 h-6 mx-auto text-gray-400" />
+                            <span className="text-xs text-gray-600 mt-1 block">Dosyadan ekle</span>
+                          </div>
+                        </label>
+                      )}
                     </div>
                   </div>
 

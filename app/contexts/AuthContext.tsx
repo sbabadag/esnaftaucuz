@@ -1072,19 +1072,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               // Clear OAuth callback flag
               setIsOAuthCallback(false);
               isOAuthCallbackRef.current = false;
-              // Clean up hash fragments first
-              if (window.location.hash) {
-                window.history.replaceState({}, document.title, window.location.pathname + window.location.search);
-                console.log('🧹 OAuth callback hash cleaned from URL');
+              try {
+                localStorage.removeItem('oauth-pending-ts');
+                localStorage.removeItem('oauth-redirect-uri');
+              } catch {
+                // best effort
               }
-              // Clean up URL to root path to trigger AppRoutes navigation
-              const appRootPath = getAppRootPath();
-              if (window.location.pathname !== appRootPath) {
-                window.history.replaceState({}, document.title, appRootPath);
+              // Go straight to app — never dump to "/" (onboarding/login flash)
+              try {
+                window.history.replaceState({}, document.title, '/app/explore');
+              } catch {
+                // best effort
               }
-              // Minimal delay for state update (reduced from 200ms to 50ms)
               await new Promise(resolve => setTimeout(resolve, 50));
-              // Force a re-render by updating state
               setIsLoading(false);
             }
           } else {
@@ -1178,10 +1178,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         try {
           localStorage.setItem('authToken', detail.token);
           localStorage.setItem('user', JSON.stringify(detail.user));
+          localStorage.removeItem('oauth-pending-ts');
+          localStorage.removeItem('oauth-redirect-uri');
         } catch { /* best effort */ }
         setIsLoading(false);
         setIsOAuthCallback(false);
         isOAuthCallbackRef.current = false;
+        try {
+          window.history.replaceState({}, document.title, '/app/explore');
+        } catch { /* best effort */ }
         if (detail.user.id) {
           startBackgroundProfilePoller(detail.user.id);
         }

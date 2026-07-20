@@ -7,17 +7,30 @@ const translations: Record<Lang, Record<string, string>> = {
     HERO_SUB: 'En iyi fiyatları keşfet',
     SEARCH_PLACEHOLDER: 'ara...',
     TREND_TITLE: 'Bugün en çok bakılanlar',
+    NO_TREND: 'Henüz trend ürün yok',
+    RECENT_PRICES_TITLE: 'Son eklenen fiyatlar',
+    NO_RECENT_PRICES: 'Henüz fiyat verisi bulunamadı',
+    NEARBY_CHEAPEST_TITLE: 'Sana yakın en ucuz',
     EXPLORE: 'Keşfet',
     MAP: 'Harita',
     ADD: 'Ekle',
     PROFILE: 'Profil',
     MY_SHOP: 'Dükkanım',
-    STORES_TITLE: 'Esnaf Dükkanları',
+    REPORTS: 'Raporlar',
+    STORES_TITLE: 'Esnaf dükkanları',
+    SHOP_BADGE: 'Dükkan',
+    VIEW_MERCHANT_PRODUCTS: 'Esnaf ürünlerini görüntüle',
+    MERCHANT_FALLBACK: 'Esnaf',
+    PRODUCT_FALLBACK: 'Ürün',
+    LOCATION_MISSING: 'Konum bilgisi yok',
+    GO_TO_LOCATION: 'Konuma git',
+    VERIFIED: 'Doğrulanmış',
     LOADING: 'Yükleniyor...',
     REFRESHED: 'Yenilendi',
     FILTER_APPLY: 'Filtreyi Uygula',
     CLEAR: 'Temizle',
     SEARCHING: 'Aranıyor...',
+    SEARCH_RESULTS: 'Arama sonuçları: "{q}"',
     NO_RESULTS_TITLE: 'Sonuç bulunamadı',
     NO_RESULTS_DESC: '"{q}" için arama sonucu bulunamadı. Farklı bir terim deneyin.',
     FAVORITES_TITLE: 'Favorilerim',
@@ -57,22 +70,38 @@ const translations: Record<Lang, Record<string, string>> = {
     NO_CONTRIBUTIONS_TITLE: 'Henüz fiyat girilmemiş',
     NO_CONTRIBUTIONS_DESC: 'İlk fiyatınızı eklemek için "Ekle" sekmesine gidin',
     TODAY: 'BUGÜN',
+    SYSTEM: 'Sistem',
+    THEME_SAVED: 'Tema kaydedildi',
+    SAVE: 'Kaydet',
   },
   en: {
     HERO_SUB: 'Discover the best prices',
     SEARCH_PLACEHOLDER: 'search...',
     TREND_TITLE: 'Most viewed today',
+    NO_TREND: 'No trending products yet',
+    RECENT_PRICES_TITLE: 'Recently added prices',
+    NO_RECENT_PRICES: 'No price data found yet',
+    NEARBY_CHEAPEST_TITLE: 'Cheapest near you',
     EXPLORE: 'Explore',
     MAP: 'Map',
     ADD: 'Add',
     PROFILE: 'Profile',
     MY_SHOP: 'My shop',
-    STORES_TITLE: 'Shops',
+    REPORTS: 'Reports',
+    STORES_TITLE: 'Merchant shops',
+    SHOP_BADGE: 'Shop',
+    VIEW_MERCHANT_PRODUCTS: 'View merchant products',
+    MERCHANT_FALLBACK: 'Merchant',
+    PRODUCT_FALLBACK: 'Product',
+    LOCATION_MISSING: 'No location info',
+    GO_TO_LOCATION: 'Go to location',
+    VERIFIED: 'Verified',
     LOADING: 'Loading...',
     REFRESHED: 'Refreshed',
     FILTER_APPLY: 'Apply filter',
     CLEAR: 'Clear',
     SEARCHING: 'Searching...',
+    SEARCH_RESULTS: 'Search results: "{q}"',
     NO_RESULTS_TITLE: 'No results',
     NO_RESULTS_DESC: 'No results found for "{q}". Try a different term.',
     FAVORITES_TITLE: 'My favorites',
@@ -104,9 +133,9 @@ const translations: Record<Lang, Record<string, string>> = {
     LANG_CHANGED: 'Language changed',
     LOGIN: 'Log in',
     CONTRIBUTIONS: 'Contributions',
-    SYSTEM: 'Sistem',
-    THEME_SAVED: 'Tema kaydedildi',
-    SAVE: 'Kaydet',
+    SYSTEM: 'System',
+    THEME_SAVED: 'Theme saved',
+    SAVE: 'Save',
     CONTRIBUTIONS_TITLE: 'Contributions',
     CONTRIBUTIONS_LOAD_ERROR: 'Failed to load contributions',
     UNKNOWN_PRODUCT: 'Unknown product',
@@ -124,21 +153,28 @@ const LanguageContext = createContext<{
   t: (key: string, vars?: Record<string, string>) => string;
 } | undefined>(undefined);
 
+const LANG_USER_SET_KEY = 'lang-user-set';
+
 export function LanguageProvider({ children }: { children: ReactNode }) {
   const getInitial = (): Lang => {
     try {
+      const userSet = localStorage.getItem(LANG_USER_SET_KEY) === '1';
       const stored = localStorage.getItem('lang');
-      if (stored === 'en' || stored === 'tr') return stored;
+      // Only honor saved language after an explicit user choice (TR/EN toggle).
+      // Device locale (often en-US on emulators) must not mix the UI.
+      if (userSet && (stored === 'en' || stored === 'tr')) return stored;
+      localStorage.setItem('lang', 'tr');
     } catch (e) {
       // ignore
     }
-    return (navigator.language || 'tr').startsWith('en') ? 'en' : 'tr';
+    return 'tr';
   };
 
   const [lang, setLangState] = useState<Lang>(getInitial);
 
   const setLang = (l: Lang) => {
     try {
+      localStorage.setItem(LANG_USER_SET_KEY, '1');
       localStorage.setItem('lang', l);
     } catch (e) {
       // ignore
@@ -148,7 +184,7 @@ export function LanguageProvider({ children }: { children: ReactNode }) {
 
   const t = (key: string, vars?: Record<string, string>) => {
     const dict = translations[lang] || translations.tr;
-    let str = dict[key] || key;
+    let str = dict[key] || translations.tr[key] || key;
     if (vars) {
       for (const k of Object.keys(vars)) {
         str = str.replace(`{${k}}`, vars[k]);
