@@ -1,5 +1,6 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.49.8';
 import { corsHeaders, jsonResponse } from '../_shared/cors.ts';
+import { assertDebugAccess } from '../_shared/debug-guard.ts';
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL') || '';
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || '';
@@ -14,6 +15,9 @@ const getServiceClient = () => {
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
   if (req.method !== 'POST') return jsonResponse(405, { error: 'Method not allowed' });
+
+  const denied = assertDebugAccess(req);
+  if (denied) return denied;
 
   try {
     const client = getServiceClient();

@@ -36,6 +36,7 @@ jobs:
         env:
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL || '' }}
           VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY || '' }}
+          VITE_GOOGLE_MAPS_API_KEY: ${{ secrets.VITE_GOOGLE_MAPS_API_KEY || '' }}
           NODE_ENV: production
           # www... kök yayın varsayılan: /. github.io/username/repo/ için VITE_SITE_BASE=/esnaftaucuz/
           CUSTOM_DOMAIN: ${{ vars.CUSTOM_DOMAIN || 'true' }}

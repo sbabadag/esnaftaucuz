@@ -1,5 +1,6 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.49.8';
 import { corsHeaders, jsonResponse } from '../_shared/cors.ts';
+import { assertDebugAccess } from '../_shared/debug-guard.ts';
 
 type Body = {
   user_id?: string;
@@ -19,6 +20,9 @@ const getServiceClient = () => {
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
   if (req.method !== 'POST') return jsonResponse(405, { error: 'Method not allowed' });
+
+  const denied = assertDebugAccess(req);
+  if (denied) return denied;
 
   try {
     const body = (await req.json().catch(() => ({}))) as Body;

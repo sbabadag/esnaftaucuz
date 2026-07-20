@@ -22,47 +22,34 @@ const USER_FRIENDLY_GEOCODE_UNAVAILABLE =
 
 /**
  * Reverse geocoding using Google Maps API ONLY
- * OpenStreetMap fallback removed - Google Maps API key is required
+ * OpenStreetMap fallback removed - Google Maps API key is required via VITE_GOOGLE_MAPS_API_KEY
  */
-// Fallback API key ONLY for development (never in production builds)
-const FALLBACK_API_KEY = import.meta.env.DEV ? 'AIzaSyCGRGdSA0IZHxgGI4PCv00kQ8xJ5dpx7Gc' : undefined;
+function getGoogleMapsApiKey(): string | undefined {
+  try {
+    const key = String(import.meta.env?.VITE_GOOGLE_MAPS_API_KEY || '').trim();
+    return key || undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 export async function reverseGeocode(
   latitude: number,
   longitude: number
 ): Promise<GeocodingResult> {
-  // Try to get API key from environment
-  let googleApiKey: string | undefined;
-  
-  try {
-    googleApiKey = import.meta.env?.VITE_GOOGLE_MAPS_API_KEY;
-  } catch (e) {
-    console.warn('⚠️ import.meta.env not available');
-  }
-  
-  // Use fallback ONLY in development mode
-  if ((!googleApiKey || googleApiKey.trim() === '') && import.meta.env.DEV && FALLBACK_API_KEY) {
-    console.warn('⚠️ VITE_GOOGLE_MAPS_API_KEY not found in env, using fallback key (DEV ONLY)');
-    googleApiKey = FALLBACK_API_KEY;
-  }
-  
-  // Debug: Log API key status (only in development)
+  const googleApiKey = getGoogleMapsApiKey();
+
   if (import.meta.env.DEV) {
     console.log('🔑 Google Maps API Key Check:', {
       exists: !!googleApiKey,
       length: googleApiKey?.length || 0,
-      firstChars: googleApiKey?.substring(0, 10) || 'N/A',
-      source: import.meta.env?.VITE_GOOGLE_MAPS_API_KEY ? 'env' : (FALLBACK_API_KEY ? 'fallback (DEV)' : 'missing'),
+      source: googleApiKey ? 'env' : 'missing',
     });
   }
-  
-  // Final check - API key must exist
-  if (!googleApiKey || googleApiKey.trim() === '') {
+
+  if (!googleApiKey) {
     if (import.meta.env.DEV) {
-      console.error('❌ Google Maps API key not found!', {
-        googleApiKey,
-        env: import.meta.env,
-      });
+      console.error('❌ VITE_GOOGLE_MAPS_API_KEY is missing — set it in .env');
     }
     return {
       success: false,
@@ -261,25 +248,11 @@ async function reverseGeocodeGoogle(
 export async function forwardGeocode(
   address: string
 ): Promise<ForwardGeocodingResult> {
-  // Try to get API key from environment
-  let googleApiKey: string | undefined;
-  
-  try {
-    googleApiKey = import.meta.env?.VITE_GOOGLE_MAPS_API_KEY;
-  } catch (e) {
-    console.warn('⚠️ import.meta.env not available');
-  }
-  
-  // Use fallback ONLY in development mode
-  if ((!googleApiKey || googleApiKey.trim() === '') && import.meta.env.DEV && FALLBACK_API_KEY) {
-    console.warn('⚠️ VITE_GOOGLE_MAPS_API_KEY not found in env, using fallback key (DEV ONLY)');
-    googleApiKey = FALLBACK_API_KEY;
-  }
-  
-  // Final check - API key must exist
-  if (!googleApiKey || googleApiKey.trim() === '') {
+  const googleApiKey = getGoogleMapsApiKey();
+
+  if (!googleApiKey) {
     if (import.meta.env.DEV) {
-      console.error('❌ Google Maps API key not found!');
+      console.error('❌ VITE_GOOGLE_MAPS_API_KEY is missing — set it in .env');
     }
     return {
       success: false,

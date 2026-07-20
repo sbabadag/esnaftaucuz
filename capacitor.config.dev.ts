@@ -27,6 +27,9 @@ const config: CapacitorConfig = {
       },
     },
   },
+  android: {
+    webContentsDebuggingEnabled: true,
+  },
 };
 
 export default config;

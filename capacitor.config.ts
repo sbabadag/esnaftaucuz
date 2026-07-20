@@ -17,7 +17,8 @@ const config: CapacitorConfig = {
   version,
   android: {
     versionCode: androidVersionCode,
-    webContentsDebuggingEnabled: true,
+    // Chrome remote debugging only in local/dev builds — never in store releases
+    webContentsDebuggingEnabled: isDevelopment || !!capacitorServerUrl,
   },
   webDir: 'dist',
   // Production: No server.url = use bundled files from assets/public

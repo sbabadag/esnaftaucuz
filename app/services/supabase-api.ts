@@ -1586,9 +1586,13 @@ export const pricesAPI = {
             }
           };
 
+          const isJwtAccessToken = (value: string | null | undefined): value is string =>
+            !!value && value.split('.').length >= 3;
+
           const resolveAccessTokenQuick = async (): Promise<string | null> => {
+            // Prefer real JWTs only — guest UUIDs in authToken must not be sent as Bearer.
             const direct = data.accessToken || localStorage.getItem('authToken');
-            if (direct) return direct;
+            if (isJwtAccessToken(direct)) return direct;
 
             // Supabase JS stores session under sb-...-auth-token; scan quickly.
             try {
@@ -1597,7 +1601,7 @@ export const pricesAPI = {
                 if (!key.includes('auth-token') && !key.startsWith('sb-')) continue;
                 const raw = localStorage.getItem(key);
                 const token = extractAccessTokenFromUnknownShape(raw);
-                if (token) return token;
+                if (isJwtAccessToken(token)) return token;
               }
             } catch {
               // ignore
@@ -1605,7 +1609,7 @@ export const pricesAPI = {
 
             try {
               const safe = await safeGetSession();
-              return safe.accessToken || null;
+              return isJwtAccessToken(safe.accessToken) ? safe.accessToken : null;
             } catch {
               return null;
             }
@@ -3378,19 +3382,28 @@ export const pushTokensAPI = {
         }
       };
 
+      const isJwtAccessToken = (value: string | null | undefined): value is string =>
+        !!value && value.split('.').length >= 3;
+
       const resolveAccessTokenQuick = async (): Promise<string | null> => {
+        // Prefer real JWTs only — guest UUIDs in authToken must not be sent as Bearer.
         const direct = localStorage.getItem('authToken');
-        if (direct) return direct;
+        if (isJwtAccessToken(direct)) return direct;
         try {
           for (let i = 0; i < localStorage.length; i++) {
             const key = localStorage.key(i) || '';
             if (!key.includes('auth-token') && !key.startsWith('sb-')) continue;
             const raw = localStorage.getItem(key);
             const parsedToken = extractAccessTokenFromUnknownShape(raw);
-            if (parsedToken) return parsedToken;
+            if (isJwtAccessToken(parsedToken)) return parsedToken;
           }
         } catch {}
-        return null;
+        try {
+          const safe = await safeGetSession();
+          return isJwtAccessToken(safe.accessToken) ? safe.accessToken : null;
+        } catch {
+          return null;
+        }
       };
 
       const payload = {

@@ -9,7 +9,6 @@ type Body = {
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL') || '';
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || '';
-const SUPABASE_ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY') || '';
 
 const getServiceClient = () => {
   if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
@@ -18,61 +17,38 @@ const getServiceClient = () => {
   return createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 };
 
-const getUserClientFromRequest = (req: Request) => {
-  const authHeader = req.headers.get('Authorization') || '';
-  if (!authHeader.startsWith('Bearer ')) {
-    throw new Error('Missing bearer token');
-  }
-  const jwt = authHeader.slice('Bearer '.length);
-  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
-    throw new Error('Missing SUPABASE_URL or SUPABASE_ANON_KEY');
-  }
-  return createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-    global: {
-      headers: {
-        Authorization: `Bearer ${jwt}`,
-      },
-    },
-  });
-};
-
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
   if (req.method !== 'POST') return jsonResponse(405, { error: 'Method not allowed' });
 
   try {
+    const authHeader = req.headers.get('Authorization') || '';
+    const jwt = authHeader.startsWith('Bearer ') ? authHeader.slice('Bearer '.length).trim() : '';
+    if (!jwt || jwt.split('.').length < 3) {
+      return jsonResponse(401, { error: 'Missing or invalid bearer token' });
+    }
+
+    const service = getServiceClient();
+    const { data: authData, error: authError } = await service.auth.getUser(jwt);
+    if (authError || !authData?.user?.id) {
+      return jsonResponse(401, { error: 'Unauthorized user token' });
+    }
+    const resolvedUserId = authData.user.id;
+
     const body = (await req.json().catch(() => ({}))) as Body;
     const token = String(body?.token || '').trim();
     const platform = String(body?.platform || '').trim().toLowerCase();
     const bodyUserId = String(body?.user_id || '').trim();
+
     if (!token) return jsonResponse(400, { error: 'Missing token' });
     if (!['ios', 'android', 'web'].includes(platform)) {
       return jsonResponse(400, { error: 'Invalid platform' });
     }
-
-    let resolvedUserId = '';
-    try {
-      const userClient = getUserClientFromRequest(req);
-      const {
-        data: { user },
-        error: userError,
-      } = await userClient.auth.getUser();
-      if (!userError && user?.id) {
-        resolvedUserId = user.id;
-      }
-    } catch {
-      // Continue with body user_id fallback for native/session edge cases.
+    // Never trust client-supplied user_id for another account
+    if (bodyUserId && bodyUserId !== resolvedUserId) {
+      return jsonResponse(403, { error: 'user_id does not match authenticated user' });
     }
 
-    if (!resolvedUserId && bodyUserId) {
-      resolvedUserId = bodyUserId;
-    }
-
-    if (!resolvedUserId) {
-      return jsonResponse(401, { error: 'Unauthorized user' });
-    }
-
-    const service = getServiceClient();
     const payload = {
       user_id: resolvedUserId,
       token,

@@ -62,3 +62,9 @@ backend/node_modules/
 .env.production
 .env.development
 
+# Local signing keys / service accounts (never commit)
+keys/
+*.jks
+*.keystore
+**/key.properties
+
