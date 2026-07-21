@@ -29,7 +29,8 @@ workflows:
         XCODE_SCHEME: "App"
         BUNDLE_ID: "com.esnaftaucuz.app"
       node: "20"
-      xcode: "16.4"
+      # App Store Connect requires iOS 26 SDK (Xcode 26+). Keep altool --use-old-altool below.
+      xcode: "26.4"
       cocoapods: "default"
     scripts:
       - name: Install npm dependencies
