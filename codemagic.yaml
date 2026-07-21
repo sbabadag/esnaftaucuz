@@ -29,7 +29,7 @@ workflows:
         XCODE_SCHEME: "App"
         BUNDLE_ID: "com.esnaftaucuz.app"
       node: "20"
-      xcode: "latest"
+      xcode: "16.4"
       cocoapods: "default"
     scripts:
       - name: Install npm dependencies
@@ -159,7 +159,15 @@ workflows:
       - name: Upload IPA to App Store Connect
         script: |
           set +e
-          PUBLISH_OUTPUT=$(app-store-connect publish --path "build/ios/ipa/*.ipa" --apple-id 6760316835 --max-find-build-wait 1 --max-build-processing-wait 1 2>&1)
+          # NOTE: Codemagic --apple-id is an Apple login email, NOT the ASC app id.
+          # Pass the numeric App Store Connect Apple ID to altool instead.
+          # --use-old-altool avoids Xcode 26 "Cannot determine the Apple ID from Bundle ID" failures.
+          PUBLISH_OUTPUT=$(app-store-connect publish \
+            --path "build/ios/ipa/*.ipa" \
+            --altool-additional-arguments "--apple-id 6760316835 --use-old-altool" \
+            --max-find-build-wait 10 \
+            --max-build-processing-wait 1 \
+            2>&1)
           PUBLISH_STATUS=$?
           set -e
 
