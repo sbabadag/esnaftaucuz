@@ -165,13 +165,16 @@ export const usePushRegistration = ({
 
           await ensureNativeStartupPermissions();
 
-          await FirebaseMessaging.createChannel({
-            id: 'price_alerts',
-            name: 'Fiyat Bildirimleri',
-            description: 'Fiyat dususleri ve onemli bildirimler',
-            importance: Importance.High,
-            vibration: true,
-          });
+          // createChannel is Android-only; calling it on iOS can throw and break push setup.
+          if (platform === 'android') {
+            await FirebaseMessaging.createChannel({
+              id: 'price_alerts',
+              name: 'Fiyat Bildirimleri',
+              description: 'Fiyat dususleri ve onemli bildirimler',
+              importance: Importance.High,
+              vibration: true,
+            }).catch(() => undefined);
+          }
 
           const permissions = await Promise.race([
             FirebaseMessaging.checkPermissions(),

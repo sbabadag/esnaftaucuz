@@ -106,6 +106,16 @@ workflows:
           fi
 
           python3 scripts/patch_ios_appdelegate.py
+
+          # Critical: add GoogleService-Info.plist to the Xcode App target Resources.
+          # Without this, the file is on disk but missing from the IPA bundle and Firebase
+          # often crashes immediately on launch.
+          gem install xcodeproj --no-document >/dev/null 2>&1 || true
+          ruby scripts/ensure_ios_firebase_resources.rb
+
+          # Sanity: confirm plist looks like a Firebase config
+          /usr/libexec/PlistBuddy -c 'Print :BUNDLE_ID' ios/App/App/GoogleService-Info.plist
+          /usr/libexec/PlistBuddy -c 'Print :GOOGLE_APP_ID' ios/App/App/GoogleService-Info.plist
       - name: Set iOS privacy usage descriptions
         script: |
           PLIST_PATH="ios/App/App/Info.plist"
@@ -157,6 +167,14 @@ workflows:
           IOS_BUILD_NUMBER=$(date +%s)
           echo "Using iOS build number: $IOS_BUILD_NUMBER"
           xcode-project build-ipa --workspace "$XCODE_WORKSPACE" --scheme "$XCODE_SCHEME" --archive-xcargs "CURRENT_PROJECT_VERSION=$IOS_BUILD_NUMBER"
+          # Fail fast if Firebase plist never made it into the IPA (common launch-crash cause).
+          IPA_PATH=$(ls build/ios/ipa/*.ipa | head -n 1)
+          if ! unzip -l "$IPA_PATH" | grep -q 'GoogleService-Info.plist'; then
+            echo "FATAL: GoogleService-Info.plist missing from IPA bundle — iOS will crash on launch."
+            unzip -l "$IPA_PATH" | head -n 80
+            exit 1
+          fi
+          echo "Verified GoogleService-Info.plist is inside IPA."
       - name: Upload IPA to App Store Connect
         script: |
           set +e

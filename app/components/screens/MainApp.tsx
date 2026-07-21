@@ -210,13 +210,15 @@ export default function MainApp() {
       try {
         const platform = Capacitor.getPlatform();
         await ensureNativeStartupPermissions();
-        await FirebaseMessaging.createChannel({
-          id: 'price_alerts',
-          name: 'Fiyat Bildirimleri',
-          description: 'Fiyat dususleri ve onemli bildirimler',
-          importance: Importance.High,
-          vibration: true,
-        }).catch(() => undefined);
+        if (platform === 'android') {
+          await FirebaseMessaging.createChannel({
+            id: 'price_alerts',
+            name: 'Fiyat Bildirimleri',
+            description: 'Fiyat dususleri ve onemli bildirimler',
+            importance: Importance.High,
+            vibration: true,
+          }).catch(() => undefined);
+        }
 
         let token: string | null = null;
         for (let i = 0; i < 4 && !token && !cancelled; i++) {

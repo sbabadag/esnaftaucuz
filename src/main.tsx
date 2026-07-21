@@ -20,19 +20,15 @@ if (Capacitor.isNativePlatform()) {
 
   // Keep WebView below status bar to prevent content bleed into
   // the top dead zone during aggressive overscroll.
-  StatusBar.setOverlaysWebView({ overlay: false }).catch((err) => {
-    console.warn('StatusBar.setOverlaysWebView failed:', err);
-  });
+  StatusBar.setOverlaysWebView({ overlay: false }).catch(() => undefined);
 
   // Set status bar style
-  StatusBar.setStyle({ style: Style.Light }).catch((err) => {
-    console.warn('StatusBar.setStyle failed:', err);
-  });
+  StatusBar.setStyle({ style: Style.Light }).catch(() => undefined);
   
-  // Handle keyboard
-  Keyboard.setAccessoryBarVisible({ isVisible: true }).catch((err) => {
-    console.warn('Keyboard.setAccessoryBarVisible failed:', err);
-  });
+  // Keyboard accessory bar is iOS-only; never block startup on plugin errors.
+  if (Capacitor.getPlatform() === 'ios') {
+    Keyboard.setAccessoryBarVisible({ isVisible: true }).catch(() => undefined);
+  }
 
 }
 
