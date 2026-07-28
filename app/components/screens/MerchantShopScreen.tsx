@@ -11,6 +11,7 @@ import { merchantProductsAPI, productsAPI, locationsAPI } from '../../services/s
 import { useAuth } from '../../contexts/AuthContext';
 import { useGeolocation } from '../../../src/hooks/useGeolocation';
 import { forwardGeocode, reverseGeocode } from '../../utils/geocoding';
+import { resolveCatalogProduct } from '../../lib/product-name';
 import { supabase, safeGetSession } from '../../lib/supabase';
 import { v4 as uuidv4 } from 'uuid';
 import { Capacitor } from '@capacitor/core';
@@ -567,7 +568,8 @@ export default function MerchantShopScreen() {
   const saveMerchantProductViaRest = async (
     imageUrls: string[],
     resolvedPrice: number,
-    resolvedLocationId: string | null
+    resolvedLocationId: string | null,
+    resolvedProductId: string
   ) => {
     const sbUrl = import.meta.env.VITE_SUPABASE_URL as string;
     const sbKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
@@ -596,7 +598,7 @@ export default function MerchantShopScreen() {
     };
     if (!editingProduct) {
       payload.merchant_id = user.id;
-      payload.product_id = formData.productId;
+      payload.product_id = resolvedProductId;
     }
     if (formData.coordinates) {
       payload.coordinates = `(${formData.coordinates.lng},${formData.coordinates.lat})`;
@@ -629,7 +631,8 @@ export default function MerchantShopScreen() {
       return;
     }
 
-    if (!formData.productId || !formData.price) {
+    const typedProductName = productSearchQuery.trim();
+    if ((!editingProduct && !formData.productId && !typedProductName) || !formData.price) {
       toast.error('Lütfen ürün ve fiyat bilgilerini girin');
       return;
     }
@@ -653,6 +656,40 @@ export default function MerchantShopScreen() {
         }
       } catch (sessionErr) {
         console.warn('⚠️ Session refresh before submit:', sessionErr);
+      }
+
+      // A merchant may submit a name that is not in the catalog yet. Resolve an
+      // exact existing row first; otherwise persist the typed name in products
+      // so it becomes available to every later product search.
+      let resolvedProductId = formData.productId;
+      if (!editingProduct) {
+        const catalogProducts = Array.from(
+          new Map(
+            [...availableProducts, ...(serverSearchResults || [])].map((product) => [product.id, product])
+          ).values()
+        );
+        const resolvedProduct = await resolveCatalogProduct({
+          productId: formData.productId,
+          productName: typedProductName,
+          products: catalogProducts,
+          defaultUnit: formData.unit,
+          createProduct: productsAPI.create,
+        });
+        resolvedProductId = resolvedProduct.id;
+
+        if (resolvedProduct.created) {
+          const catalogProduct = {
+            id: resolvedProduct.id,
+            name: resolvedProduct.name,
+            category: 'Diğer',
+          };
+          setAvailableProducts((current) => [catalogProduct, ...current]);
+          setServerSearchResults((current) =>
+            current ? [catalogProduct, ...current.filter((product) => product.id !== catalogProduct.id)] : current
+          );
+          setFormData((current) => ({ ...current, productId: resolvedProduct.id }));
+          toast.success(`"${resolvedProduct.name}" ürün kataloğuna eklendi`);
+        }
       }
 
       // Upload images with timeout
@@ -721,7 +758,7 @@ export default function MerchantShopScreen() {
 
       // Attempt 1: Direct REST (bypasses subscription check + Supabase client)
       try {
-        await saveMerchantProductViaRest(imageUrls, priceNum, resolvedLocationId);
+        await saveMerchantProductViaRest(imageUrls, priceNum, resolvedLocationId, resolvedProductId);
         saved = true;
         console.log('✅ Product saved via direct REST');
       } catch (restErr: any) {
@@ -743,7 +780,7 @@ export default function MerchantShopScreen() {
               })
             : merchantProductsAPI.create({
                 merchant_id: user.id,
-                product_id: formData.productId,
+                product_id: resolvedProductId,
                 price: priceNum,
                 unit: formData.unit,
                 images: imageUrls,
@@ -967,7 +1004,21 @@ export default function MerchantShopScreen() {
                         <Search className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
                         <Input
                           value={productSearchQuery}
-                          onChange={(e) => setProductSearchQuery(e.target.value)}
+                          onChange={(e) => {
+                            const nextName = e.target.value;
+                            setProductSearchQuery(nextName);
+                            if (!editingProduct && formData.productId) {
+                              const selected = availableProducts.find(
+                                (product) => product.id === formData.productId
+                              );
+                              if (
+                                !selected ||
+                                normalizeForSearch(selected.name) !== normalizeForSearch(nextName)
+                              ) {
+                                setFormData((current) => ({ ...current, productId: '' }));
+                              }
+                            }
+                          }}
                           placeholder={editingProduct ? 'Ürün adı' : 'Ürün ara (örn: domates)'}
                           className="pl-9"
                           disabled={!!editingProduct}
@@ -1023,6 +1074,16 @@ export default function MerchantShopScreen() {
                           </div>
                         )}
                       </div>
+                      {!editingProduct &&
+                        productSearchQuery.trim() &&
+                        !productsForList.some(
+                          (product) =>
+                            normalizeForSearch(product.name) === normalizeForSearch(productSearchQuery)
+                        ) && (
+                          <p className="text-sm text-green-700">
+                            Bu isim katalogda yok. Kaydettiğinizde yeni ürün olarak eklenecek ve sonraki aramalarda görünecek.
+                          </p>
+                        )}
                     </div>
                   </div>
 
@@ -1139,7 +1200,7 @@ export default function MerchantShopScreen() {
                   <div className="flex gap-2 pt-4">
                     <Button
                       onClick={handleSubmit}
-                      disabled={isSubmitting}
+                      disabled={isSubmitting || (!editingProduct && isServerSearching)}
                       className="flex-1"
                     >
                       {isSubmitting ? 'Kaydediliyor...' : editingProduct ? 'Güncelle' : 'Ekle'}
