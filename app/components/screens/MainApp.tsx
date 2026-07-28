@@ -1,5 +1,5 @@
 import { Routes, Route, Navigate, useLocation, useNavigate } from 'react-router';
-import { Compass, Map, Plus, User, ShoppingBag, ShoppingCart, X, Store, BarChart3 } from 'lucide-react';
+import { Compass, Map, Plus, User, ShoppingBag, ShoppingCart, X, Store, BarChart3, Heart } from 'lucide-react';
 import ExploreScreen from './tabs/ExploreScreen';
 import MapScreen from './tabs/MapScreen';
 import AddPriceScreen from './tabs/AddPriceScreen';
@@ -20,7 +20,7 @@ import TermsOfServiceScreen from './TermsOfServiceScreen';
 import AboutScreen from './AboutScreen';
 import DeliveryReturnPolicyScreen from './DeliveryReturnPolicyScreen';
 import DistanceSalesAgreementScreen from './DistanceSalesAgreementScreen';
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
 import { supabase, safeGetSession } from '../../lib/supabase';
 import { resolveMerchantRoleFromProfile } from '../../lib/merchant-role';
@@ -37,24 +37,18 @@ import {
 } from '../../hooks/usePushNotificationPipeline';
 import { ensureNativeStartupPermissions } from '../../lib/nativeStartupPermissions';
 import { useLanguage } from '../../contexts/LanguageContext';
+import { getMainTabConfigs, type MainTabIcon } from '../../lib/main-navigation';
 
-// Regular user tabs
-const regularTabs = [
-  { path: 'explore', labelKey: 'EXPLORE', icon: Compass },
-  { path: 'map', labelKey: 'MAP', icon: Map },
-  { path: 'shopping-list', labelKey: 'SHOPPING_LIST', icon: ShoppingCart },
-  { path: 'add', labelKey: 'ADD', icon: Plus },
-  { path: 'profile', labelKey: 'PROFILE', icon: User },
-];
-
-// Merchant tabs - include both shop and profile
-const merchantTabs = [
-  { path: 'explore', labelKey: 'EXPLORE', icon: Compass },
-  { path: 'map', labelKey: 'MAP', icon: Map },
-  { path: 'merchant-shop', labelKey: 'MY_SHOP', icon: Store },
-  { path: 'merchant-reports', labelKey: 'REPORTS', icon: BarChart3 },
-  { path: 'profile', labelKey: 'PROFILE', icon: User },
-];
+const mainTabIcons: Record<MainTabIcon, typeof Compass> = {
+  compass: Compass,
+  map: Map,
+  'shopping-cart': ShoppingCart,
+  heart: Heart,
+  plus: Plus,
+  user: User,
+  store: Store,
+  reports: BarChart3,
+};
 
 const resolveMerchantRole = resolveMerchantRoleFromProfile;
 
@@ -296,8 +290,12 @@ export default function MainApp() {
   const pathParts = location.pathname.split('/').filter(Boolean);
   const currentPath = pathParts[pathParts.length - 1] || 'explore';
 
-  // Get tabs based on user type
-  const tabs = isMerchant ? merchantTabs : regularTabs;
+  // Get tabs based on user type. Favorites is intentionally a first-class
+  // main-menu destination for both regular users and merchants.
+  const tabs = useMemo(
+    () => getMainTabConfigs(isMerchant).map((tab) => ({ ...tab, icon: mainTabIcons[tab.icon] })),
+    [isMerchant]
+  );
   const pendingQueueKey = 'pending_push_events_v1';
 
   const extractPushPayload = useCallback((raw: any) => normalizePushEvent(raw), []);
