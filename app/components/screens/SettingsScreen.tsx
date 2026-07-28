@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 import { ArrowLeft, MapPin, Bell, Lock, Globe, Info, ChevronRight, Search, Trash2, Settings, FileText, Truck } from 'lucide-react';
 import { Button } from '../ui/button';
 import { Label } from '../ui/label';

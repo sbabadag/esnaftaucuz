@@ -1,4 +1,4 @@
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 import { ArrowLeft } from 'lucide-react';
 import { ScrollArea } from '../ui/scroll-area';
 

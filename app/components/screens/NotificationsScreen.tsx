@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 import { ArrowLeft, TrendingDown, MapPin, CheckCircle2, Bell, X, Package } from 'lucide-react';
 import { Button } from '../ui/button';
 import { notificationsAPI } from '../../services/supabase-api';

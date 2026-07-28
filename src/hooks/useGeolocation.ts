@@ -90,20 +90,37 @@ export const useGeolocation = () => {
     try {
       if (isNative()) {
         // Use Capacitor watch position
-        const watchId = Geolocation.watchPosition(
+        let watchId: string | null = null;
+        let disposed = false;
+        const clearNativeWatch = (id: string) => {
+          void Geolocation.clearWatch({ id }).catch((error) => {
+            console.warn('Geolocation clear watch failed:', error);
+          });
+        };
+        void Geolocation.watchPosition(
           {
             enableHighAccuracy: true,
           },
           (position) => {
+            if (disposed || !position) return;
             callback({
               latitude: position.coords.latitude,
               longitude: position.coords.longitude,
             });
           }
-        );
+        ).then((id) => {
+          if (disposed) {
+            clearNativeWatch(id);
+          } else {
+            watchId = id;
+          }
+        }).catch((error) => {
+          console.error('Geolocation watch error:', error);
+        });
 
         return () => {
-          Geolocation.clearWatch({ id: watchId });
+          disposed = true;
+          if (watchId) clearNativeWatch(watchId);
         };
       } else {
         // Use HTML5 watch position

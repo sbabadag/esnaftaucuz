@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 import { ArrowLeft, Heart, Package, Trash2 } from 'lucide-react';
 import { Button } from '../ui/button';
 import { favoritesAPI } from '../../services/supabase-api';

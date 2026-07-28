@@ -5,8 +5,7 @@ This document explains how to prepare a new production release for Google Play a
 
 1) Versioning (already applied)
 - package.json version has been bumped to the next patch version.
-- capacitor.config.ts now reads the version from package.json and sets android.versionCode automatically using the formula:
-  versionCode = major*10000 + minor*100 + patch
+- Capacitor 8 no longer accepts app version fields in capacitor.config.ts. Set Android `versionName`/`versionCode` in the generated native Gradle project and iOS `MARKETING_VERSION`/`CURRENT_PROJECT_VERSION` in Xcode or CI.
 
 2) Build steps (local)
 - Build web assets:

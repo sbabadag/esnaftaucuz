@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 import { Button } from '../ui/button';
 import { toast } from 'sonner';
 import { feedbackAPI } from '../../services/supabase-api';

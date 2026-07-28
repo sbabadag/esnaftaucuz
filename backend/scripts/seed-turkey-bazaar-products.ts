@@ -17,6 +17,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { supabaseAdmin } from '../lib/supabase.js';
 import { fetchProductImage } from '../lib/product-image.js';
+import { extractCollectApiProductNames } from '../lib/external-api-response.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -367,22 +368,15 @@ async function fetchFromCollectAPI(): Promise<ProductEntry[]> {
       headers: { Authorization: `apikey ${apiKey}` },
     });
     if (!res.ok) return [];
-    const data = await res.json();
     const items: ProductEntry[] = [];
-    const arr = data.result ?? data.data ?? data.products ?? [];
-    if (Array.isArray(arr)) {
-      for (const item of arr) {
-        const name = item.name ?? item.urun ?? item.product ?? item.urunAdi ?? item.title ?? '';
-        if (typeof name === 'string' && name.trim().length > 0) {
-          const normalized = name.trim().replace(/\s+/g, ' ');
-          if (!items.some((i) => i.name.toLowerCase() === normalized.toLowerCase())) {
-            items.push({
-              name: normalized,
-              category: inferCategory(normalized),
-              default_unit: 'kg',
-            });
-          }
-        }
+    const names = extractCollectApiProductNames(await res.json());
+    for (const name of names) {
+      if (!items.some((item) => item.name.toLowerCase() === name.toLowerCase())) {
+        items.push({
+          name,
+          category: inferCategory(name),
+          default_unit: 'kg',
+        });
       }
     }
     if (items.length > 0) console.log(`📡 Fetched ${items.length} products from CollectAPI`);

@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef, useMemo } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams } from 'react-router';
 import { MapPin, Navigation } from 'lucide-react';
 import { Badge } from '../../ui/badge';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '../../ui/sheet';
@@ -652,19 +652,11 @@ export default function MapScreen() {
           </div>
         ) : (
           <MapContainer
+            ref={mapRef}
             center={mapCenter}
             zoom={mapZoom}
             style={{ height: '100%', width: '100%', zIndex: 1 }}
             scrollWheelZoom={true}
-            whenCreated={(mapInstance) => {
-              try {
-                mapRef.current = mapInstance;
-                console.log('✅ Map instance created successfully');
-              } catch (error: any) {
-                console.error('❌ Error creating map instance:', error);
-                setMapError('Harita oluşturulamadı');
-              }
-            }}
           >
             <TileLayer
               attribution='&copy; <a href="https://www.google.com/maps">Google Maps</a>'

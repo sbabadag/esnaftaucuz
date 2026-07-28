@@ -1,4 +1,4 @@
-import { useNavigate, useLocation } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router';
 import { useEffect, useCallback } from 'react';
 import { Settings, Heart, Award, Share2, LogOut, ChevronRight, Store, CreditCard, RefreshCw, Crown, User } from 'lucide-react';
 import { Avatar, AvatarFallback, AvatarImage } from '../../ui/avatar';

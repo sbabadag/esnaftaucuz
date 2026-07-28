@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 import { ArrowLeft, Search, Camera, Image as ImageIcon, Check, MapPin, Loader2, Package } from 'lucide-react';
 import { Button } from '../../ui/button';
 import { Input } from '../../ui/input';

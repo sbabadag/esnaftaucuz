@@ -1,9 +1,10 @@
-import { Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom';
-import { Compass, Map, Plus, User, ShoppingBag, X, Store, BarChart3 } from 'lucide-react';
+import { Routes, Route, Navigate, useLocation, useNavigate } from 'react-router';
+import { Compass, Map, Plus, User, ShoppingBag, ShoppingCart, X, Store, BarChart3 } from 'lucide-react';
 import ExploreScreen from './tabs/ExploreScreen';
 import MapScreen from './tabs/MapScreen';
 import AddPriceScreen from './tabs/AddPriceScreen';
 import ProfileScreen from './tabs/ProfileScreen';
+import ShoppingListScreen from './tabs/ShoppingListScreen';
 import ProductDetailScreen from './details/ProductDetailScreen';
 import LocationDetailScreen from './details/LocationDetailScreen';
 import FavoritesScreen from './FavoritesScreen';
@@ -41,6 +42,7 @@ import { useLanguage } from '../../contexts/LanguageContext';
 const regularTabs = [
   { path: 'explore', labelKey: 'EXPLORE', icon: Compass },
   { path: 'map', labelKey: 'MAP', icon: Map },
+  { path: 'shopping-list', labelKey: 'SHOPPING_LIST', icon: ShoppingCart },
   { path: 'add', labelKey: 'ADD', icon: Plus },
   { path: 'profile', labelKey: 'PROFILE', icon: User },
 ];
@@ -558,6 +560,7 @@ export default function MainApp() {
           <Route path="/" element={<Navigate to="/app/explore" replace />} />
           <Route path="explore" element={<ExploreScreen />} />
           <Route path="map" element={<MapScreen />} />
+          {!isMerchant && <Route path="shopping-list" element={<ShoppingListScreen />} />}
           {!isMerchant && <Route path="add" element={<AddPriceScreen />} />}
           <Route path="profile" element={<ProfileScreen />} />
           <Route path="product/:id" element={<ProductDetailScreen />} />

@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 import { ArrowLeft, MapPin, Clock, CheckCircle2, Package } from 'lucide-react';
 import { Badge } from '../ui/badge';
 import { useAuth } from '../../contexts/AuthContext';

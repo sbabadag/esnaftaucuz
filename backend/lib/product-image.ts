@@ -3,6 +3,8 @@
  * Uses Pexels API (with key) or Unsplash Source (fallback)
  */
 
+import { extractPexelsImageUrl } from './external-api-response.js';
+
 const TURKISH_TO_ENGLISH: Record<string, string> = {
   // Sebzeler
   Domates: 'tomato',
@@ -305,8 +307,8 @@ export async function fetchProductImage(productName: string, category: string): 
         { headers: { Authorization: PEXELS_API_KEY } }
       );
       if (response.ok) {
-        const data = await response.json();
-        if (data.photos?.length > 0) return data.photos[0].src.medium;
+        const imageUrl = extractPexelsImageUrl(await response.json());
+        if (imageUrl) return imageUrl;
       }
       searchQuery = encodeURIComponent(`${englishName} ${englishCategory}`);
       response = await fetch(
@@ -314,8 +316,8 @@ export async function fetchProductImage(productName: string, category: string): 
         { headers: { Authorization: PEXELS_API_KEY } }
       );
       if (response.ok) {
-        const data = await response.json();
-        if (data.photos?.length > 0) return data.photos[0].src.medium;
+        const imageUrl = extractPexelsImageUrl(await response.json());
+        if (imageUrl) return imageUrl;
       }
     }
 

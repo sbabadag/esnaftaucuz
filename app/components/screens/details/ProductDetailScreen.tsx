@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router';
 import { ArrowLeft, MapPin, Clock, CheckCircle2, ThumbsUp, Flag, Package, Navigation, Heart, Plus, Camera, X, Image as ImageIcon } from 'lucide-react';
 import { Button } from '../../ui/button';
 import { Badge } from '../../ui/badge';

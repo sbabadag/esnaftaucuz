@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 import { AnimatePresence, motion } from 'motion/react';
 import { CheckCircle2, MapPin, Search, ShoppingBag, Tag, Camera, Send, PlusCircle } from 'lucide-react';
 import { BuildVersionBadge } from '../BuildVersionBadge';

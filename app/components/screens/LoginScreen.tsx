@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 import { motion } from 'motion/react';
 import { ShoppingBag, Mail, Lock, Eye, EyeOff } from 'lucide-react';
 import { Button } from '../ui/button';

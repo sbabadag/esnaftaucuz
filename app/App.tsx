@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { BrowserRouter, Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate, useLocation, useNavigate } from 'react-router';
 import { MotionConfig } from 'motion/react';
 import { Toaster } from './components/ui/sonner';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
@@ -221,7 +221,13 @@ function App() {
       }
     } catch { /* best effort */ }
 
-    let pushActionListener: any = null;
+    let pushActionListener: Promise<{ remove: () => Promise<void> }> | null = null;
+    const removeAsyncListener = (
+      listenerPromise: Promise<{ remove: () => Promise<void> }> | null | undefined,
+    ) => {
+      if (!listenerPromise) return;
+      void listenerPromise.then((handle) => handle.remove()).catch(() => {});
+    };
     const pendingQueueKey = 'pending_push_events_v1';
     const trySyncPushImmediately = async (normalized: any) => {
       try {
@@ -279,7 +285,7 @@ function App() {
         (window as any).Capacitor.isNativePlatform();
       if (!isNative) return;
       try {
-        pushActionListener = await FirebaseMessaging.addListener('notificationActionPerformed', async (event: any) => {
+        pushActionListener = FirebaseMessaging.addListener('notificationActionPerformed', async (event: any) => {
           const normalized = normalizePushEvent(event);
           try {
             localStorage.setItem('pending_push_route', 'notifications');
@@ -294,6 +300,7 @@ function App() {
           }
           await trySyncPushImmediately(normalized);
         });
+        await pushActionListener;
       } catch (e) {
         console.warn('Global push action listener registration failed:', e);
       }
@@ -851,8 +858,7 @@ function App() {
       });
 
       // When Custom Tabs closes after Google login, recover deep link / pending code.
-      let browserFinishedHandle: { remove: () => void } | null = null;
-      Browser.addListener('browserFinished', () => {
+      const browserFinishedListener = Browser.addListener('browserFinished', () => {
         console.log('📱 OAuth browser finished — probing callback');
         probeLaunchUrl('browserFinished');
         try {
@@ -863,9 +869,7 @@ function App() {
         } catch {
           // best effort
         }
-      }).then((h) => {
-        browserFinishedHandle = h;
-      }).catch(() => {});
+      });
       
       // Also listen for when the app comes back to foreground
       // This helps catch cases where OAuth redirect happens but deep link isn't triggered
@@ -942,29 +946,17 @@ function App() {
       }, 5000);
       
       return () => {
-        try {
-          pushActionListener?.remove?.();
-        } catch {
-          // ignore
-        }
-        listener.remove();
-        appStateListener.remove();
-        try {
-          browserFinishedHandle?.remove?.();
-        } catch {
-          // ignore
-        }
+        removeAsyncListener(pushActionListener);
+        removeAsyncListener(listener);
+        removeAsyncListener(appStateListener);
+        removeAsyncListener(browserFinishedListener);
         clearInterval(intervalId);
         clearInterval(launchProbeTimer);
       };
     }
 
     return () => {
-      try {
-        pushActionListener?.remove?.();
-      } catch {
-        // ignore
-      }
+      removeAsyncListener(pushActionListener);
     };
   }, []);
     
