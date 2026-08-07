@@ -2,6 +2,18 @@ from pathlib import Path
 import re
 
 
+SAFE_CONFIGURE = """\
+        if FirebaseApp.app() == nil {
+            if let plistPath = Bundle.main.path(forResource: "GoogleService-Info", ofType: "plist"),
+               let options = FirebaseOptions(contentsOfFile: plistPath) {
+                FirebaseApp.configure(options: options)
+            } else {
+                print("GoogleService-Info.plist not found in bundle; skipping Firebase configure")
+            }
+        }
+"""
+
+
 def main() -> None:
     path = Path("ios/App/App/AppDelegate.swift")
     if not path.exists():
@@ -12,21 +24,26 @@ def main() -> None:
     if "import FirebaseCore" not in text:
         text = text.replace("import Capacitor", "import Capacitor\nimport FirebaseCore")
 
-    # Treat any FirebaseApp.configure(...) invocation as already configured.
-    if "FirebaseApp.configure(" not in text:
-        pattern = r"(func application\(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: \[UIApplication\.LaunchOptionsKey: Any\]\?\) -> Bool \{\n(?:\s*//.*\n)?)"
-        repl = (
-            "\\1"
-            "        if FirebaseApp.app() == nil {\n"
-            "            if let plistPath = Bundle.main.path(forResource: \"GoogleService-Info\", ofType: \"plist\"),\n"
-            "               let options = FirebaseOptions(contentsOfFile: plistPath) {\n"
-            "                FirebaseApp.configure(options: options)\n"
-            "            } else {\n"
-            "                print(\"GoogleService-Info.plist not found in bundle; skipping Firebase configure\")\n"
-            "            }\n"
-            "        }\n"
+    # Replace any bare FirebaseApp.configure() which crashes when plist is missing.
+    # Keep a single safe configure block.
+    text = re.sub(
+        r"[ \t]*FirebaseApp\.configure\([^\n]*\)\n?",
+        "",
+        text,
+    )
+
+    if "GoogleService-Info.plist not found in bundle" not in text:
+        pattern = (
+            r"(func application\(_ application: UIApplication, "
+            r"didFinishLaunchingWithOptions launchOptions: "
+            r"\[UIApplication\.LaunchOptionsKey: Any\]\?\) -> Bool \{\n"
+            r"(?:\s*//.*\n)?)"
         )
-        text = re.sub(pattern, repl, text, count=1)
+        repl = r"\1" + SAFE_CONFIGURE
+        text2, n = re.subn(pattern, repl, text, count=1)
+        if n == 0:
+            raise SystemExit("Could not locate didFinishLaunchingWithOptions to insert Firebase configure")
+        text = text2
 
     if "didRegisterForRemoteNotificationsWithDeviceToken" not in text:
         methods = "\n".join(
@@ -56,7 +73,7 @@ def main() -> None:
             text = text + methods
 
     path.write_text(text, encoding="utf-8")
-    print("AppDelegate.swift patched for Firebase Messaging")
+    print("AppDelegate.swift patched for crash-safe Firebase Messaging")
 
 
 if __name__ == "__main__":

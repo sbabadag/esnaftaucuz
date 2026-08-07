@@ -87,6 +87,31 @@ workflows:
             exit 1
           fi
           npx cap sync ios
+      - name: Generate final iOS app icons
+        script: |
+          # Apple rejected placeholder Capacitor icons (Guideline 2.3.8).
+          # Generate AppIcon set from branded assets/icon.png after cap sync.
+          if [ ! -f "assets/icon.png" ]; then
+            echo "FATAL: assets/icon.png missing — App Store requires a finalized icon."
+            exit 1
+          fi
+          npx --yes @capacitor/assets generate --ios \
+            --iconBackgroundColor '#16a34a' \
+            --iconBackgroundColorDark '#16a34a' \
+            --splashBackgroundColor '#16a34a' \
+            --splashBackgroundColorDark '#16a34a'
+          # Sanity: ensure AppIcon.appiconset exists and is non-empty
+          ICON_DIR="ios/App/App/Assets.xcassets/AppIcon.appiconset"
+          if [ ! -d "$ICON_DIR" ]; then
+            echo "FATAL: AppIcon.appiconset not generated at $ICON_DIR"
+            exit 1
+          fi
+          ICON_COUNT=$(find "$ICON_DIR" -type f -name '*.png' | wc -l | tr -d ' ')
+          echo "Generated $ICON_COUNT AppIcon PNGs"
+          if [ "$ICON_COUNT" -lt 1 ]; then
+            echo "FATAL: No PNG icons in AppIcon.appiconset"
+            exit 1
+          fi
       - name: Patch iOS Firebase messaging bootstrap
         script: |
           if [ -z "$FIREBASE_IOS_GOOGLESERVICE_INFO_PLIST_B64" ]; then
