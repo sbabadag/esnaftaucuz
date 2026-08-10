@@ -11,6 +11,8 @@ import { v4 as uuidv4 } from 'uuid';
 import { Browser } from '@capacitor/browser';
 import { Capacitor } from '@capacitor/core';
 import { getImmediateUnreadCount } from '../lib/notification-store';
+import { assertCreatableEntityName, formatLocationDisplayName } from '../utils/entity-name';
+import { normalizePriceCoordinates } from '../lib/price-coordinates';
 
 // In-memory merchant subscription cache — set once after login, avoids
 // repeated RPC/REST calls on every product operation.
@@ -27,6 +29,9 @@ export const clearMerchantSubscriptionCache = () => {
   _merchantSubActive = null;
   _merchantSubCheckedAt = 0;
 };
+
+export const MERCHANT_SUBSCRIPTION_MONTHLY_FEE_TL = 900;
+export const MERCHANT_BASIC_MONTHLY_PLAN = 'merchant_basic_monthly';
 
 const getMerchantSubscriptionCache = (): boolean | null => {
   if (_merchantSubActive === null) return null;
@@ -81,6 +86,9 @@ const cachedQuery = async <T,>(key: string, ttlMs: number, fetcher: () => Promis
       if (key.startsWith('prices:getAll') && Array.isArray(value) && value.length === 0) {
         effectiveTtl = 0;
       }
+      if (key.startsWith('merchant:getAllShops') && Array.isArray(value) && value.length === 0) {
+        effectiveTtl = 0;
+      }
       apiQueryCache.set(key, {
         value,
         expiresAt: Date.now() + effectiveTtl,
@@ -112,6 +120,10 @@ const invalidateCachedQueries = (prefix: string) => {
 export const invalidateExploreListCaches = () => {
   invalidateCachedQueries('prices:getAll');
   invalidateCachedQueries('products:getTrending');
+};
+
+export const invalidateMerchantCaches = () => {
+  invalidateCachedQueries('merchant:');
 };
 
 const withHardTimeout = async <T,>(promise: Promise<T>, timeoutMs: number, timeoutMessage: string): Promise<T> => {
@@ -181,15 +193,15 @@ const getAccessTokenFromStorageFallback = (): string | null => {
 
 const getRestAuthHeaders = async () => {
   const sbKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
-  let accessToken: string | null = null;
-  try {
-    const safe = await safeGetSession();
-    accessToken = safe.accessToken || null;
-  } catch {
-    accessToken = null;
-  }
+  // Prefer local token first — avoid waiting on hung getSession() on Android WebView.
+  let accessToken: string | null = getAccessTokenFromStorageFallback();
   if (!accessToken) {
-    accessToken = getAccessTokenFromStorageFallback();
+    try {
+      const safe = await safeGetSession();
+      accessToken = safe.accessToken || null;
+    } catch {
+      accessToken = null;
+    }
   }
   const headers: Record<string, string> = {
     apikey: sbKey,
@@ -570,6 +582,42 @@ export const authAPI = {
 
       if (profileError) {
         console.error('Profile fetch error:', profileError);
+        // Google/email users may exist in auth.users before public.users row is created.
+        if (profileError.code === 'PGRST116' || /0 rows|not found|no rows/i.test(String(profileError.message || ''))) {
+          const meta = data.user.user_metadata || {};
+          const fallbackName =
+            String(meta.name || meta.full_name || '').trim() ||
+            String(data.user.email || '').split('@')[0] ||
+            'Kullanıcı';
+          try {
+            await supabase.from('users').upsert(
+              {
+                id: data.user.id,
+                email: data.user.email,
+                name: fallbackName,
+                avatar: meta.avatar_url || meta.picture || null,
+                is_merchant: false,
+              },
+              { onConflict: 'id' }
+            );
+          } catch (createErr) {
+            console.warn('Profile auto-create failed:', createErr);
+          }
+          return {
+            user: {
+              id: data.user.id,
+              email: data.user.email || '',
+              name: fallbackName,
+              avatar: meta.avatar_url || meta.picture,
+              level: 1,
+              points: 0,
+              contributions: { shares: 0, verifications: 0 },
+              is_merchant: false,
+            },
+            token: data.session.access_token,
+            session: data.session,
+          };
+        }
         throw new Error('Kullanıcı profili bulunamadı');
       }
 
@@ -617,6 +665,8 @@ export const authAPI = {
       console.log('📍 Current origin:', window.location.origin);
       console.log('📍 Current href:', window.location.href);
       try {
+        // Fresh login must not replay a previous one-time auth code.
+        localStorage.removeItem('oauth-pending-code');
         localStorage.setItem('oauth-pending-ts', String(Date.now()));
       } catch {
         // best effort
@@ -822,6 +872,7 @@ export const authAPI = {
           points: guestUser.points,
           contributions: guestUser.contributions,
           isGuest: true,
+          is_guest: true,
           is_merchant: false, // Guest users are never merchants
         },
         token: guestUser.id, // Use guest ID as token
@@ -953,17 +1004,108 @@ export const productsAPI = {
 
         const controller = new AbortController();
         const tid = setTimeout(() => controller.abort(), 10000);
-        const resp = await fetch(
-          `${sbUrl}/rest/v1/products?select=id,name,category,image&order=search_count.desc&limit=6`,
-          { headers: { apikey: sbKey, Authorization: `Bearer ${sbKey}` }, signal: controller.signal }
-        );
+        // Rank by real detail views since Turkey midnight (RPC), not lifetime search_count.
+        const resp = await fetch(`${sbUrl}/rest/v1/rpc/get_trending_products_today`, {
+          method: 'POST',
+          headers: {
+            apikey: sbKey,
+            Authorization: `Bearer ${sbKey}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ p_limit: 6 }),
+          signal: controller.signal,
+        });
         clearTimeout(tid);
-        if (!resp.ok) return [];
-        return await resp.json().catch(() => []);
+        if (resp.ok) {
+          const rows = await resp.json().catch(() => []);
+          if (Array.isArray(rows) && rows.length > 0) {
+            const mapped = rows.map(({ view_count: _vc, ...product }: any) => product);
+            // If RPC returned empty images (older function), enrich from latest price photos.
+            const missingIds = mapped
+              .filter((p: any) => !String(p?.image || '').trim())
+              .map((p: any) => p.id)
+              .filter(Boolean);
+            if (missingIds.length > 0) {
+              try {
+                const enrichResp = await fetch(
+                  `${sbUrl}/rest/v1/prices?select=product_id,photo,created_at&product_id=in.(${missingIds.join(',')})&photo=not.is.null&order=created_at.desc`,
+                  { headers: { apikey: sbKey, Authorization: `Bearer ${sbKey}` } }
+                );
+                if (enrichResp.ok) {
+                  const priceRows = await enrichResp.json().catch(() => []);
+                  const photoByProduct = new Map<string, string>();
+                  for (const row of Array.isArray(priceRows) ? priceRows : []) {
+                    const pid = String(row?.product_id || '');
+                    const photo = String(row?.photo || '').trim();
+                    if (!pid || !photo || photoByProduct.has(pid)) continue;
+                    if (!/^https?:\/\//i.test(photo)) continue;
+                    if (/localhost|_capacitor_file_|127\.0\.0\.1/i.test(photo)) continue;
+                    photoByProduct.set(pid, photo);
+                  }
+                  return mapped.map((p: any) => ({
+                    ...p,
+                    image: p.image || photoByProduct.get(String(p.id)) || null,
+                  }));
+                }
+              } catch {
+                /* keep mapped as-is */
+              }
+            }
+            return mapped;
+          }
+        }
+
+        // Legacy fallback if RPC not deployed yet.
+        const legacy = await fetch(
+          `${sbUrl}/rest/v1/products?select=id,name,category,image,prices!inner(id)&order=search_count.desc&limit=6`,
+          { headers: { apikey: sbKey, Authorization: `Bearer ${sbKey}` } }
+        );
+        if (!legacy.ok) return [];
+        const legacyRows = await legacy.json().catch(() => []);
+        if (!Array.isArray(legacyRows)) return [];
+        return legacyRows.map(({ prices: _prices, ...product }: any) => product);
       } catch {
         return [];
       }
     });
+  },
+
+  /** Record a product detail view for "Bugün en çok bakılanlar" (debounced per device/day). */
+  recordView: async (productId: string) => {
+    try {
+      if (!productId) return;
+      const turkeyDay = new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'Europe/Istanbul',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+      }).format(new Date());
+      const dedupeKey = `product_view:${productId}:${turkeyDay}`;
+      try {
+        if (typeof localStorage !== 'undefined' && localStorage.getItem(dedupeKey)) {
+          return;
+        }
+        localStorage?.setItem(dedupeKey, '1');
+      } catch {
+        /* private mode etc. — still record */
+      }
+
+      const sbUrl = import.meta.env.VITE_SUPABASE_URL as string;
+      const sbKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
+      if (!sbUrl || !sbKey) return;
+
+      await fetch(`${sbUrl}/rest/v1/rpc/record_product_view`, {
+        method: 'POST',
+        headers: {
+          apikey: sbKey,
+          Authorization: `Bearer ${sbKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ p_product_id: productId }),
+      }).catch(() => {});
+    } catch {
+      /* non-blocking */
+    }
   },
 
   getById: async (id: string) => {
@@ -984,11 +1126,7 @@ export const productsAPI = {
         if (resp.ok) {
           const product = await resp.json();
           if (product?.id) {
-            fetch(`${sbUrl}/rest/v1/products?id=eq.${id}`, {
-              method: 'PATCH',
-              headers: { apikey: sbKey, Authorization: `Bearer ${sbKey}`, 'Content-Type': 'application/json', Prefer: 'return=minimal' },
-              body: JSON.stringify({ search_count: (product.search_count || 0) + 1 }),
-            }).catch(() => {});
+            void productsAPI.recordView(product.id);
             return product;
           }
         }
@@ -1000,6 +1138,7 @@ export const productsAPI = {
         .single();
       if (productError) throw productError;
       if (!product) throw new Error('Product not found');
+      void productsAPI.recordView(product.id);
       return product;
     } catch (error: any) {
       console.error('Get product error:', error);
@@ -1009,17 +1148,75 @@ export const productsAPI = {
 
   create: async (name: string, category?: string, defaultUnit?: string) => {
     try {
-      console.log('Creating product:', { name, category, defaultUnit });
-      const { data, error } = await supabase
-        .from('products')
-        .insert({
-          name: name.trim(),
-          category: category || 'Diğer',
-          default_unit: defaultUnit || 'adet',
-          is_active: true,
-        })
-        .select()
-        .single();
+      const safeName = assertCreatableEntityName(name, 'product');
+      const safeCategory = category || 'Diğer';
+      const safeUnit = defaultUnit || 'adet';
+      console.log('Creating product:', { name: safeName, category: safeCategory, defaultUnit: safeUnit });
+
+      // Prefer direct REST — supabase-js insert can hang on Capacitor Android
+      // when the GoTrue client is busy with profile/session work.
+      const sbUrl = import.meta.env.VITE_SUPABASE_URL as string;
+      const sbKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
+      if (sbUrl && sbKey) {
+        const headers = await getRestAuthHeaders();
+        const controller = new AbortController();
+        const tid = setTimeout(() => controller.abort(), 12000);
+        try {
+          const resp = await fetch(`${sbUrl}/rest/v1/products?select=*`, {
+            method: 'POST',
+            headers: {
+              ...headers,
+              Prefer: 'return=representation',
+            },
+            body: JSON.stringify({
+              name: safeName,
+              category: safeCategory,
+              default_unit: safeUnit,
+              is_active: true,
+            }),
+            signal: controller.signal,
+          });
+          clearTimeout(tid);
+          if (!resp.ok) {
+            const body = await resp.text().catch(() => '');
+            console.error('Product creation REST error:', resp.status, body);
+            throw new Error(
+              resp.status === 401 || resp.status === 403
+                ? 'Ürün eklemek için giriş yapmanız gerekiyor'
+                : `Ürün oluşturulamadı: ${body.substring(0, 180) || resp.status}`
+            );
+          }
+          const rows = await resp.json().catch(() => null);
+          const data = Array.isArray(rows) ? rows[0] : rows;
+          if (!data?.id) {
+            throw new Error('Ürün oluşturulamadı: Yeni ürün döndürülmedi');
+          }
+          console.log('Product created successfully (REST):', data.id);
+          invalidateCachedQueries('products:');
+          return data;
+        } catch (restErr: any) {
+          clearTimeout(tid);
+          if (restErr?.name === 'AbortError') {
+            throw new Error('Ürün oluşturma zaman aşımına uğradı. Lütfen tekrar deneyin.');
+          }
+          throw restErr;
+        }
+      }
+
+      const { data, error } = await withHardTimeout(
+        supabase
+          .from('products')
+          .insert({
+            name: safeName,
+            category: safeCategory,
+            default_unit: safeUnit,
+            is_active: true,
+          })
+          .select()
+          .single(),
+        12000,
+        'Ürün oluşturma zaman aşımına uğradı. Lütfen tekrar deneyin.'
+      );
 
       if (error) {
         console.error('Product creation error:', error);
@@ -1029,6 +1226,7 @@ export const productsAPI = {
         throw new Error('Ürün oluşturulamadı: Yeni ürün döndürülmedi');
       }
       console.log('Product created successfully:', data.id);
+      invalidateCachedQueries('products:');
       return data;
     } catch (error: any) {
       console.error('Create product error:', error);
@@ -1118,10 +1316,19 @@ export const locationsAPI = {
     district?: string;
   }) => {
     try {
+      let safeName: string;
+      try {
+        safeName = assertCreatableEntityName(data.name, 'location');
+      } catch {
+        safeName = formatLocationDisplayName(data.name, data.lat, data.lng);
+        if (!Number.isFinite(data.lat) || !Number.isFinite(data.lng)) {
+          throw new Error('Geçersiz konum adı');
+        }
+      }
       const { data: location, error } = await supabase
         .from('locations')
         .insert({
-          name: data.name,
+          name: safeName,
           type: data.type,
           address: data.address,
           coordinates: `(${data.lng},${data.lat})`, // PostgreSQL POINT format
@@ -1200,7 +1407,7 @@ export const pricesAPI = {
               const [pResp, lResp, uResp] = await Promise.all([
                 productIds.length ? fetch(`${sbUrl}/rest/v1/products?select=id,name,category,default_unit,image&id=in.(${productIds.join(',')})`, { headers, signal: ctrl2.signal }) : null,
                 locationIds.length ? fetch(`${sbUrl}/rest/v1/locations?select=id,name,type,address,coordinates,city,district&id=in.(${locationIds.join(',')})`, { headers, signal: ctrl2.signal }) : null,
-                userIds.length ? fetch(`${sbUrl}/rest/v1/users?select=id,name,avatar,level&id=in.(${userIds.join(',')})`, { headers, signal: ctrl2.signal }) : null,
+                userIds.length ? fetch(`${sbUrl}/rest/v1/users?select=id,name,avatar,level,is_merchant,shop_name,shop_address,shop_logo&id=in.(${userIds.join(',')})`, { headers, signal: ctrl2.signal }) : null,
               ]);
               clearTimeout(tid2);
 
@@ -1212,13 +1419,18 @@ export const pricesAPI = {
               const lMap = new Map(locations.map((l: any) => [l.id, l]));
               const uMap = new Map(users.map((u: any) => [u.id, u]));
 
-              rows = rows.map((r: any) => ({
-                ...r,
-                product: pMap.get(r.product_id) || null,
-                location: lMap.get(r.location_id) || null,
-                user: uMap.get(r.user_id) || null,
-              }));
+              rows = rows.map((r: any) =>
+                normalizePriceCoordinates({
+                  ...r,
+                  product: pMap.get(r.product_id) || null,
+                  location: lMap.get(r.location_id) || null,
+                  user: uMap.get(r.user_id) || null,
+                })
+              );
+            } else if (Array.isArray(rows)) {
+              rows = rows.map((r: any) => normalizePriceCoordinates(r));
             }
+            // MapScreen requires lat/lng; REST only returns PostgreSQL POINT strings.
             return rows;
           }
         } catch {
@@ -1234,7 +1446,7 @@ export const pricesAPI = {
           *,
           product:products(id, name, category, default_unit, image),
           location:locations(id, name, type, address, coordinates, city, district),
-          user:users(id, name, avatar, level)
+          user:users(id, name, avatar, level, is_merchant, shop_name, shop_address, shop_logo)
         `);
 
       if (filters?.product) {
@@ -1371,59 +1583,8 @@ export const pricesAPI = {
         }
       }
 
-      // Normalize coordinates for frontend consumption
-      const normalizedData = hydratedData.map((price: any) => {
-        let latVal: number | undefined;
-        let lngVal: number | undefined;
-
-        // First check if price has direct coordinates
-        if (price.coordinates) {
-          const coords = price.coordinates;
-          if (typeof coords === 'string') {
-            // PostgreSQL POINT string format: (lng,lat)
-            const match = coords.match(/\(([^,]+),([^)]+)\)/);
-            if (match) {
-              lngVal = parseFloat(match[1]);
-              latVal = parseFloat(match[2]);
-            }
-          } else if (typeof coords === 'object') {
-            if (typeof coords.lat === 'number' && typeof coords.lng === 'number') {
-              latVal = coords.lat;
-              lngVal = coords.lng;
-            } else if (typeof coords.x === 'number' && typeof coords.y === 'number') {
-              latVal = coords.y; // PostgreSQL POINT stores as (lng, lat)
-              lngVal = coords.x;
-            }
-          }
-        }
-
-        // Then check location coordinates
-        if ((!latVal || !lngVal) && price.location?.coordinates) {
-          const coords = price.location.coordinates;
-          if (typeof coords === 'string') {
-            // PostgreSQL POINT string format: (lng,lat)
-            const match = coords.match(/\(([^,]+),([^)]+)\)/);
-            if (match) {
-              lngVal = parseFloat(match[1]);
-              latVal = parseFloat(match[2]);
-            }
-          } else if (typeof coords === 'object') {
-            if (typeof coords.lat === 'number' && typeof coords.lng === 'number') {
-              latVal = coords.lat;
-              lngVal = coords.lng;
-            } else if (typeof coords.x === 'number' && typeof coords.y === 'number') {
-              latVal = coords.y; // PostgreSQL POINT stores as (lng, lat)
-              lngVal = coords.x;
-            }
-          }
-        }
-
-        // Add normalized coordinates to price object
-        if (typeof latVal === 'number' && typeof lngVal === 'number' && !isNaN(latVal) && !isNaN(lngVal)) {
-          return { ...price, lat: latVal, lng: lngVal };
-        }
-        return price;
-      });
+      // Normalize coordinates for frontend consumption (same helper as REST path)
+      const normalizedData = hydratedData.map((price: any) => normalizePriceCoordinates(price));
 
       console.log(`📍 Normalized ${normalizedData.filter((p: any) => p.lat && p.lng).length} prices with coordinates`);
 
@@ -2072,8 +2233,16 @@ export const pricesAPI = {
 
       if (!existingLocation) {
         console.log('Creating new location:', data.location);
-        const defaultLat = data.lat || 37.8667;
-        const defaultLng = data.lng || 32.4833;
+        if (
+          typeof data.lat !== 'number' ||
+          typeof data.lng !== 'number' ||
+          !Number.isFinite(data.lat) ||
+          !Number.isFinite(data.lng)
+        ) {
+          throw new Error('Konum koordinatı gerekli. Lütfen bir yer seçin veya mevcut konumu kullanın.');
+        }
+        const defaultLat = data.lat;
+        const defaultLng = data.lng;
         
         const { data: newLocation, error: createError } = await supabase
           .from('locations')
@@ -2580,64 +2749,187 @@ export const usersAPI = {
     }
   },
 
-  update: async (id: string, data: {
-    name?: string;
-    location?: {
-      city?: string;
-      district?: string;
-      coordinates?: { lat: number; lng: number };
-    };
-    preferences?: {
-      notifications?: boolean;
-      searchRadius?: number; // in kilometers
-    };
-  }) => {
+  update: async (
+    id: string,
+    data: {
+      name?: string;
+      avatar?: string | null;
+      shop_logo?: string | null;
+      shop_phone?: string | null;
+      shop_whatsapp?: string | null;
+      shop_address?: string | null;
+      shop_description?: string | null;
+      shop_opening_hours?: string | null;
+      location?: {
+        city?: string;
+        district?: string;
+        coordinates?: { lat: number; lng: number };
+      };
+      preferences?: {
+        notifications?: boolean;
+        searchRadius?: number;
+        phone?: string | null;
+        whatsapp?: string | null;
+        shopAddress?: string | null;
+        shopDescription?: string | null;
+        openingHours?: string | null;
+        shopLogo?: string | null;
+        city?: string | null;
+        district?: string | null;
+        [key: string]: unknown;
+      };
+    },
+    options?: {
+      /** Skip network prefetch when caller already has in-memory prefs/location. */
+      existingPreferences?: Record<string, unknown> | null;
+      existingLocation?: Record<string, unknown> | null;
+      skipPrefetch?: boolean;
+    }
+  ) => {
     try {
-      // First, get current user data to merge preferences
-      const { data: currentUser, error: fetchError } = await supabase
-        .from('users')
-        .select('preferences')
-        .eq('id', id)
-        .single();
+      const sbUrl = import.meta.env.VITE_SUPABASE_URL as string;
+      const sbKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
 
-      if (fetchError && fetchError.code !== 'PGRST116') { // PGRST116 = no rows returned
-        console.error('Error fetching current user:', fetchError);
-        // Continue anyway - might be first time setting preferences
+      let currentUser: { preferences?: any; location?: any } | null = null;
+      if (options?.existingPreferences !== undefined || options?.existingLocation !== undefined) {
+        currentUser = {
+          preferences: options.existingPreferences || {},
+          location: options.existingLocation || {},
+        };
+      } else if (!options?.skipPrefetch && sbUrl && sbKey) {
+        // Short prefetch only when needed — do not block saves for 8s.
+        try {
+          const headers = await getRestAuthHeaders();
+          const controller = new AbortController();
+          const tid = setTimeout(() => controller.abort(), 2000);
+          const resp = await fetch(
+            `${sbUrl}/rest/v1/users?id=eq.${encodeURIComponent(id)}&select=preferences,location`,
+            { headers, signal: controller.signal }
+          );
+          clearTimeout(tid);
+          if (resp.ok) {
+            const rows = await resp.json().catch(() => []);
+            currentUser = Array.isArray(rows) ? rows[0] : rows;
+          }
+        } catch (fetchErr) {
+          console.warn('Prefs prefetch skipped:', fetchErr);
+        }
       }
 
       const updateData: any = {};
-      if (data.name) updateData.name = data.name;
-      
+      if (data.name !== undefined) {
+        const trimmed = String(data.name || '').trim();
+        if (trimmed) updateData.name = trimmed;
+      }
+      if (data.avatar !== undefined) updateData.avatar = data.avatar;
+      if (data.shop_logo !== undefined) updateData.shop_logo = data.shop_logo;
+      if (data.shop_phone !== undefined) updateData.shop_phone = data.shop_phone;
+      if (data.shop_whatsapp !== undefined) updateData.shop_whatsapp = data.shop_whatsapp;
+      if (data.shop_address !== undefined) updateData.shop_address = data.shop_address;
+      if (data.shop_description !== undefined) updateData.shop_description = data.shop_description;
+      if (data.shop_opening_hours !== undefined) updateData.shop_opening_hours = data.shop_opening_hours;
+
       if (data.preferences) {
-        // Merge with existing preferences to avoid overwriting other settings
-        const existingPreferences = currentUser?.preferences || {};
         updateData.preferences = {
-          ...existingPreferences,
+          ...(currentUser?.preferences || {}),
           ...data.preferences,
         };
-        
-        // Also store searchRadius at root level for easier access
         if (data.preferences.searchRadius !== undefined) {
-          // Validate searchRadius is within allowed range (1-1000 km)
           const searchRadius = data.preferences.searchRadius;
           if (typeof searchRadius === 'number' && searchRadius >= 1 && searchRadius <= 1000) {
-            updateData.search_radius = Math.round(searchRadius); // Ensure integer
+            updateData.search_radius = Math.round(searchRadius);
           } else {
-            console.error('❌ Invalid searchRadius value:', searchRadius);
             throw new Error(`Geçersiz arama genişliği değeri: ${searchRadius}. Değer 1-1000 km arasında olmalıdır.`);
           }
         }
       }
-      
+
       if (data.location) {
-        if (data.location.city) updateData.city = data.location.city;
-        if (data.location.district) updateData.district = data.location.district;
-        if (data.location.coordinates) {
-          updateData.coordinates = `(${data.location.coordinates.lng},${data.location.coordinates.lat})`;
+        const existingLocation =
+          currentUser?.location && typeof currentUser.location === 'object'
+            ? currentUser.location
+            : {};
+        const nextLocation: Record<string, unknown> = { ...existingLocation };
+        if (data.location.city !== undefined) {
+          nextLocation.city = String(data.location.city || '').trim() || null;
         }
+        if (data.location.district !== undefined) {
+          nextLocation.district = String(data.location.district || '').trim() || null;
+        }
+        if (data.location.coordinates) {
+          nextLocation.coordinates = {
+            lat: data.location.coordinates.lat,
+            lng: data.location.coordinates.lng,
+          };
+        }
+        updateData.location = nextLocation;
       }
 
       console.log('📝 Updating user:', { id, updateData });
+
+      if (sbUrl && sbKey) {
+        const headers = await getRestAuthHeaders();
+        const controller = new AbortController();
+        const tid = setTimeout(() => controller.abort(), 8000);
+        try {
+          const resp = await fetch(`${sbUrl}/rest/v1/users?id=eq.${encodeURIComponent(id)}&select=*`, {
+            method: 'PATCH',
+            headers: {
+              ...headers,
+              Prefer: 'return=representation',
+            },
+            body: JSON.stringify(updateData),
+            signal: controller.signal,
+          });
+          clearTimeout(tid);
+          if (!resp.ok) {
+            const body = await resp.text().catch(() => '');
+            console.error('❌ User update REST error:', resp.status, body);
+            if (
+              resp.status === 400 &&
+              /shop_(logo|phone|whatsapp|address|description|opening_hours)/i.test(body)
+            ) {
+              const legacy = { ...updateData };
+              delete legacy.shop_logo;
+              delete legacy.shop_phone;
+              delete legacy.shop_whatsapp;
+              delete legacy.shop_address;
+              delete legacy.shop_description;
+              delete legacy.shop_opening_hours;
+              const retry = await fetch(`${sbUrl}/rest/v1/users?id=eq.${encodeURIComponent(id)}&select=*`, {
+                method: 'PATCH',
+                headers: {
+                  ...headers,
+                  Prefer: 'return=representation',
+                },
+                body: JSON.stringify(legacy),
+              });
+              if (!retry.ok) {
+                const retryBody = await retry.text().catch(() => '');
+                throw new Error(`Kullanıcı güncellenemedi: ${retryBody.substring(0, 180) || retry.status}`);
+              }
+              const retryRows = await retry.json().catch(() => null);
+              return Array.isArray(retryRows) ? retryRows[0] : retryRows;
+            }
+            throw new Error(
+              resp.status === 401 || resp.status === 403
+                ? 'Profil güncellemek için giriş yapmanız gerekiyor'
+                : `Kullanıcı güncellenemedi: ${body.substring(0, 180) || resp.status}`
+            );
+          }
+          const rows = await resp.json().catch(() => null);
+          const updated = Array.isArray(rows) ? rows[0] : rows;
+          if (!updated) throw new Error('Kullanıcı güncellenemedi: boş yanıt');
+          console.log('✅ User updated successfully (REST):', updated?.id || id);
+          return updated;
+        } catch (restErr: any) {
+          clearTimeout(tid);
+          if (restErr?.name === 'AbortError') {
+            throw new Error('Profil kaydı zaman aşımına uğradı. Tekrar deneyin.');
+          }
+          throw restErr;
+        }
+      }
 
       const { data: updated, error } = await supabase
         .from('users')
@@ -2648,16 +2940,8 @@ export const usersAPI = {
 
       if (error) {
         console.error('❌ Supabase update error:', error);
-        console.error('Error details:', {
-          code: error.code,
-          message: error.message,
-          details: error.details,
-          hint: error.hint,
-        });
         throw error;
       }
-      
-      console.log('✅ User updated successfully:', updated);
       return updated;
     } catch (error: any) {
       console.error('❌ Update user error:', error);
@@ -3640,8 +3924,6 @@ export const pushTokensAPI = {
 // MERCHANT PRODUCTS API
 // ============================================================================
 
-const MERCHANT_SUBSCRIPTION_MONTHLY_FEE_TL = 900;
-
 const getMerchantSubscriptionAccessError = () =>
   `Esnaf aboneliğiniz aktif değil. Dükkanınızı yönetmek için aylık ${MERCHANT_SUBSCRIPTION_MONTHLY_FEE_TL} TL abonelik gereklidir.`;
 
@@ -3658,15 +3940,17 @@ const isTransientSubscriptionCheckError = (error: unknown) => {
   );
 };
 
-const ensureMerchantSubscriptionActive = async (merchantId: string) => {
-  // Strategy 0: In-memory cache (instant, set after login)
+/** Exported so shop screens can enforce the same gate before direct REST writes. */
+export const ensureMerchantSubscriptionActive = async (merchantId: string) => {
+  // Strategy 0: In-memory cache
   const cached = getMerchantSubscriptionCache();
   if (cached === true) {
     console.log('✅ Subscription check: cache hit (active)');
     return;
   }
-  // cached === null or false → verify via API (don't trust negative cache
-  // because server-side RPC may have trial/grace-period logic)
+  if (cached === false) {
+    throw new Error(getMerchantSubscriptionAccessError());
+  }
 
   // Strategy 1: REST query (fast, avoids Supabase client session issues)
   const sbUrl = import.meta.env.VITE_SUPABASE_URL as string;
@@ -3693,6 +3977,7 @@ const ensureMerchantSubscriptionActive = async (merchantId: string) => {
           return;
         }
         if (result === false) {
+          setMerchantSubscriptionCache(false);
           throw new Error(getMerchantSubscriptionAccessError());
         }
       }
@@ -3715,8 +4000,8 @@ const ensureMerchantSubscriptionActive = async (merchantId: string) => {
 
     if (error) {
       if (isTransientSubscriptionCheckError(error)) {
-        console.warn('⚠️ Subscription check transient error, allowing operation:', error);
-        return;
+        console.warn('⚠️ Subscription check transient error, failing closed:', error);
+        throw new Error('Abonelik durumu kontrol edilemedi. Lütfen tekrar deneyin.');
       }
       console.error('❌ Subscription check RPC error:', error);
       throw new Error('Abonelik durumu kontrol edilemedi. Lütfen tekrar deneyin.');
@@ -3725,16 +4010,289 @@ const ensureMerchantSubscriptionActive = async (merchantId: string) => {
     if (data) {
       setMerchantSubscriptionCache(true);
     } else {
+      setMerchantSubscriptionCache(false);
       throw new Error(getMerchantSubscriptionAccessError());
     }
   } catch (error: any) {
+    if (error?.message?.includes('aboneliğiniz aktif değil')) throw error;
+    if (error?.message?.includes('kontrol edilemedi')) throw error;
     if (isTransientSubscriptionCheckError(error)) {
-      console.warn('⚠️ Subscription check timeout/network, allowing operation:', error);
-      return;
+      console.warn('⚠️ Subscription check timeout/network, failing closed:', error);
+      throw new Error('Abonelik durumu kontrol edilemedi. Lütfen tekrar deneyin.');
     }
     throw error;
   }
 };
+
+/**
+ * Mirror merchant shop prices into public.prices so Keşfet / Harita "fiyat akışı" shows them.
+ * Best-effort: never throws to the caller (merchant_products save already succeeded).
+ * Even when shop address cannot be geocoded/validated, still writes to the feed using
+ * fallback coordinates (city approx or Turkey centroid) so "son girilen" stays populated.
+ */
+const MERCHANT_FEED_FALLBACK_COORDS: { lat: number; lng: number } = { lat: 39.0, lng: 35.0 };
+
+const TURKEY_CITY_COORDS: Record<string, { lat: number; lng: number }> = {
+  adana: { lat: 37.0, lng: 35.3213 },
+  ankara: { lat: 39.9334, lng: 32.8597 },
+  antalya: { lat: 36.8969, lng: 30.7133 },
+  bursa: { lat: 40.1885, lng: 29.061 },
+  diyarbakir: { lat: 37.9144, lng: 40.2306 },
+  erzurum: { lat: 39.9043, lng: 41.2679 },
+  eskisehir: { lat: 39.7767, lng: 30.5206 },
+  gaziantep: { lat: 37.0662, lng: 37.3833 },
+  istanbul: { lat: 41.0082, lng: 28.9784 },
+  izmir: { lat: 38.4192, lng: 27.1287 },
+  kayseri: { lat: 38.7312, lng: 35.4787 },
+  kocaeli: { lat: 40.8533, lng: 29.8815 },
+  konya: { lat: 37.8746, lng: 32.4932 },
+  malatya: { lat: 38.3552, lng: 38.3095 },
+  mersin: { lat: 36.8121, lng: 34.6415 },
+  mugla: { lat: 37.2153, lng: 28.3636 },
+  sakarya: { lat: 40.7889, lng: 30.406 },
+  samsun: { lat: 41.2867, lng: 36.33 },
+  trabzon: { lat: 41.0015, lng: 39.7178 },
+  van: { lat: 38.4891, lng: 43.4089 },
+};
+
+function normalizeCityKey(city?: string | null): string {
+  return String(city || '')
+    .trim()
+    .toLocaleLowerCase('tr-TR')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/ı/g, 'i')
+    .replace(/ğ/g, 'g')
+    .replace(/ü/g, 'u')
+    .replace(/ş/g, 's')
+    .replace(/ö/g, 'o')
+    .replace(/ç/g, 'c');
+}
+
+function resolveMerchantFeedCoords(input: {
+  coordinates?: { lat: number; lng: number } | null;
+  city?: string | null;
+}): { lat: number; lng: number; approx: boolean } {
+  const c = input.coordinates;
+  if (c && Number.isFinite(c.lat) && Number.isFinite(c.lng)) {
+    return { lat: c.lat, lng: c.lng, approx: false };
+  }
+  const cityKey = normalizeCityKey(input.city);
+  if (cityKey && TURKEY_CITY_COORDS[cityKey]) {
+    return { ...TURKEY_CITY_COORDS[cityKey], approx: true };
+  }
+  return { ...MERCHANT_FEED_FALLBACK_COORDS, approx: true };
+}
+
+function sanitizePublicImageUrl(raw: unknown): string | null {
+  const value = String(raw || '').trim();
+  if (!value) return null;
+  if (!/^https?:\/\//i.test(value)) return null;
+  if (/localhost|_capacitor_file_|127\.0\.0\.1|^blob:|^data:/i.test(value)) return null;
+  return value;
+}
+
+export async function syncMerchantProductToPriceFeed(input: {
+  merchantId: string;
+  productId: string;
+  price: number;
+  unit: string;
+  locationId?: string | null;
+  coordinates?: { lat: number; lng: number } | null;
+  photoUrl?: string | null;
+  /** All public image URLs; first is also written to `photo` for feed thumbs. */
+  photoUrls?: string[] | null;
+  isActive?: boolean;
+  locationName?: string | null;
+  locationAddress?: string | null;
+  city?: string | null;
+  district?: string | null;
+}): Promise<{ synced: boolean; reason?: string }> {
+  try {
+    const sbUrl = import.meta.env.VITE_SUPABASE_URL as string;
+    const sbKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
+    if (!sbUrl || !sbKey) return { synced: false, reason: 'missing-supabase-env' };
+
+    const headers = await getRestAuthHeaders();
+    if (!headers.Authorization) {
+      return { synced: false, reason: 'missing-auth' };
+    }
+
+    let locationId = input.locationId || null;
+    const resolved = resolveMerchantFeedCoords({
+      coordinates: input.coordinates,
+      city: input.city,
+    });
+    const coords = { lat: resolved.lat, lng: resolved.lng };
+    const nowIso = new Date().toISOString();
+    const safePhotoUrls = Array.from(
+      new Set(
+        [
+          ...(Array.isArray(input.photoUrls) ? input.photoUrls : []),
+          input.photoUrl,
+        ]
+          .map(sanitizePublicImageUrl)
+          .filter((u): u is string => !!u)
+      )
+    ).slice(0, 6);
+    const safePhotoUrl = safePhotoUrls[0] || null;
+
+    // Reuse this merchant's previous feed location if we still don't have one.
+    if (!locationId) {
+      try {
+        const reuseCtrl = new AbortController();
+        const reuseTid = setTimeout(() => reuseCtrl.abort(), 4000);
+        const reuseResp = await fetch(
+          `${sbUrl}/rest/v1/prices?user_id=eq.${encodeURIComponent(input.merchantId)}&select=location_id&location_id=not.is.null&order=created_at.desc&limit=1`,
+          { headers, signal: reuseCtrl.signal }
+        );
+        clearTimeout(reuseTid);
+        if (reuseResp.ok) {
+          const rows = await reuseResp.json().catch(() => []);
+          if (Array.isArray(rows) && rows[0]?.location_id) {
+            locationId = String(rows[0].location_id);
+          }
+        }
+      } catch {
+        /* continue */
+      }
+    }
+
+    // prices.location_id is NOT NULL — always create a location when missing
+    // (even if address was not validated / geocoded).
+    if (!locationId) {
+      try {
+        const locCtrl = new AbortController();
+        const locTid = setTimeout(() => locCtrl.abort(), 8000);
+        const locName =
+          String(input.locationName || '').trim() ||
+          'Esnaf Dükkanı';
+        const locAddress =
+          String(input.locationAddress || '').trim() ||
+          [input.district, input.city].map((p) => String(p || '').trim()).filter(Boolean).join(', ') ||
+          (resolved.approx ? `${locName} (yaklaşık konum)` : locName);
+        const locResp = await fetch(`${sbUrl}/rest/v1/locations?select=id`, {
+          method: 'POST',
+          headers: {
+            ...headers,
+            Prefer: 'return=representation',
+          },
+          body: JSON.stringify({
+            name: locName,
+            type: 'market',
+            address: locAddress,
+            coordinates: `(${coords.lng},${coords.lat})`,
+            city: input.city || null,
+            district: input.district || null,
+          }),
+          signal: locCtrl.signal,
+        });
+        clearTimeout(locTid);
+        if (locResp.ok) {
+          const rows = await locResp.json().catch(() => []);
+          locationId = Array.isArray(rows) && rows[0]?.id ? String(rows[0].id) : null;
+        } else {
+          const body = await locResp.text().catch(() => '');
+          console.warn(
+            'syncMerchantProductToPriceFeed: location REST create failed',
+            locResp.status,
+            body.slice(0, 160)
+          );
+        }
+      } catch (locErr) {
+        console.warn('syncMerchantProductToPriceFeed: location create failed', locErr);
+      }
+    }
+
+    if (!locationId) {
+      return { synced: false, reason: 'missing-location' };
+    }
+
+    const payload: Record<string, unknown> = {
+      product_id: input.productId,
+      price: input.price,
+      unit: input.unit || 'adet',
+      location_id: locationId,
+      user_id: input.merchantId,
+      is_active: input.isActive !== false,
+      // Explore "son girilen" sorts by created_at — bump on every sync so updates surface.
+      created_at: nowIso,
+      updated_at: nowIso,
+      coordinates: `(${coords.lng},${coords.lat})`,
+    };
+    // Only set/clear photo when we have usable public URL(s).
+    // Never write null over an existing photo just because this sync had no image.
+    if (safePhotoUrl) {
+      payload.photo = safePhotoUrl;
+      payload.photos = safePhotoUrls;
+    }
+
+    // Find existing feed row for this merchant+product (update instead of flooding inserts).
+    let existingId: string | null = null;
+    try {
+      const findCtrl = new AbortController();
+      const findTid = setTimeout(() => findCtrl.abort(), 4000);
+      const findResp = await fetch(
+        `${sbUrl}/rest/v1/prices?user_id=eq.${encodeURIComponent(input.merchantId)}&product_id=eq.${encodeURIComponent(input.productId)}&select=id&order=created_at.desc&limit=1`,
+        { headers, signal: findCtrl.signal }
+      );
+      clearTimeout(findTid);
+      if (findResp.ok) {
+        const rows = await findResp.json().catch(() => []);
+        existingId = Array.isArray(rows) && rows[0]?.id ? String(rows[0].id) : null;
+      }
+    } catch {
+      /* continue with insert */
+    }
+
+    const writeCtrl = new AbortController();
+    const writeTid = setTimeout(() => writeCtrl.abort(), 8000);
+    const writeUrl = existingId
+      ? `${sbUrl}/rest/v1/prices?id=eq.${encodeURIComponent(existingId)}`
+      : `${sbUrl}/rest/v1/prices?select=id`;
+    let writeResp = await fetch(writeUrl, {
+      method: existingId ? 'PATCH' : 'POST',
+      headers: {
+        ...headers,
+        Prefer: 'return=minimal',
+      },
+      body: JSON.stringify(payload),
+      signal: writeCtrl.signal,
+    });
+    // Older DBs may not have prices.photos yet — retry without it.
+    if (!writeResp.ok && payload.photos !== undefined) {
+      const { photos: _omit, ...payloadWithoutPhotos } = payload;
+      writeResp = await fetch(writeUrl, {
+        method: existingId ? 'PATCH' : 'POST',
+        headers: {
+          ...headers,
+          Prefer: 'return=minimal',
+        },
+        body: JSON.stringify(payloadWithoutPhotos),
+        signal: writeCtrl.signal,
+      });
+    }
+    clearTimeout(writeTid);
+
+    if (!writeResp.ok) {
+      const body = await writeResp.text().catch(() => '');
+      console.warn('syncMerchantProductToPriceFeed write failed:', writeResp.status, body.slice(0, 200));
+      return { synced: false, reason: `write-${writeResp.status}` };
+    }
+
+    invalidateCachedQueries('prices:');
+    console.log('✅ Merchant price mirrored to feed:', {
+      productId: input.productId,
+      existingId,
+      locationId,
+      approxCoords: resolved.approx,
+    });
+    return { synced: true };
+  } catch (error) {
+    console.warn('syncMerchantProductToPriceFeed error:', error);
+    return { synced: false, reason: 'exception' };
+  }
+}
 
 export const merchantProductsAPI = {
   // Get all merchant products for a specific merchant
@@ -3935,7 +4493,18 @@ export const merchantProductsAPI = {
           if (restRes.ok) {
             const rows = await restRes.json().catch(() => []);
             invalidateCachedQueries('merchant:');
-            return Array.isArray(rows) ? rows[0] || null : null;
+            const row = Array.isArray(rows) ? rows[0] || null : null;
+            void syncMerchantProductToPriceFeed({
+              merchantId: data.merchant_id,
+              productId: data.product_id,
+              price: data.price,
+              unit: data.unit,
+              locationId: data.location_id || row?.location_id || null,
+              coordinates: data.coordinates || null,
+              photoUrl: Array.isArray(data.images) && data.images[0] ? data.images[0] : null,
+              photoUrls: Array.isArray(data.images) ? data.images : null,
+            });
+            return row;
           }
         } catch {
           // Fall back to Supabase client path
@@ -3963,6 +4532,16 @@ export const merchantProductsAPI = {
       }
 
       invalidateCachedQueries('merchant:');
+      void syncMerchantProductToPriceFeed({
+        merchantId: data.merchant_id,
+        productId: data.product_id,
+        price: data.price,
+        unit: data.unit,
+        locationId: data.location_id || result?.location_id || null,
+        coordinates: data.coordinates || null,
+        photoUrl: Array.isArray(data.images) && data.images[0] ? data.images[0] : null,
+        photoUrls: Array.isArray(data.images) ? data.images : null,
+      });
       return result;
     } catch (error: any) {
       console.error('❌ Create merchant product error:', error);
@@ -3983,7 +4562,7 @@ export const merchantProductsAPI = {
       const { data: currentProduct, error: currentProductError } = await withHardTimeout(
         supabase
           .from('merchant_products')
-          .select('merchant_id')
+          .select('merchant_id, product_id, location_id, images, price, unit')
           .eq('id', id)
           .single(),
         12000,
@@ -4029,7 +4608,20 @@ export const merchantProductsAPI = {
           if (restRes.ok) {
             const rows = await restRes.json().catch(() => []);
             invalidateCachedQueries('merchant:');
-            return Array.isArray(rows) ? rows[0] || null : null;
+            const row = Array.isArray(rows) ? rows[0] || null : null;
+            const images = data.images ?? currentProduct.images ?? [];
+            void syncMerchantProductToPriceFeed({
+              merchantId: currentProduct.merchant_id,
+              productId: currentProduct.product_id,
+              price: data.price ?? currentProduct.price,
+              unit: data.unit ?? currentProduct.unit,
+              locationId: data.location_id ?? currentProduct.location_id ?? row?.location_id,
+              coordinates: data.coordinates || null,
+              photoUrl: Array.isArray(images) && images[0] ? images[0] : null,
+              photoUrls: Array.isArray(images) ? images : null,
+              isActive: data.is_active,
+            });
+            return row;
           }
         } catch {
           // Fall back to Supabase client path
@@ -4053,6 +4645,18 @@ export const merchantProductsAPI = {
 
       if (error) throw error;
       invalidateCachedQueries('merchant:');
+      const images = data.images ?? currentProduct.images ?? [];
+      void syncMerchantProductToPriceFeed({
+        merchantId: currentProduct.merchant_id,
+        productId: currentProduct.product_id,
+        price: data.price ?? currentProduct.price,
+        unit: data.unit ?? currentProduct.unit,
+        locationId: data.location_id ?? currentProduct.location_id ?? result?.location_id,
+        coordinates: data.coordinates || null,
+        photoUrl: Array.isArray(images) && images[0] ? images[0] : null,
+        photoUrls: Array.isArray(images) ? images : null,
+        isActive: data.is_active,
+      });
       return result;
     } catch (error: any) {
       console.error('❌ Update merchant product error:', error);
@@ -4304,40 +4908,57 @@ export const merchantProductsAPI = {
         const controller = new AbortController();
         const tid = setTimeout(() => controller.abort(), 10000);
 
+        // Fetch enough product rows to discover unique shops (limit is shops, not rows).
+        const rowLimit = Math.min(Math.max(limit * 20, 200), 1000);
         const mpResp = await fetch(
-          `${sbUrl}/rest/v1/merchant_products?select=merchant_id,coordinates&or=(is_active.eq.true,is_active.is.null)&limit=${limit}`,
+          `${sbUrl}/rest/v1/merchant_products?select=merchant_id,coordinates&coordinates=not.is.null&or=(is_active.eq.true,is_active.is.null)&order=created_at.desc&limit=${rowLimit}`,
           { headers, signal: controller.signal }
         );
         if (!mpResp.ok) { clearTimeout(tid); throw new Error(`merchant_products ${mpResp.status}`); }
         const mpRows: any[] = await mpResp.json().catch(() => []);
 
-        const merchantIds = [...new Set((mpRows || []).map((r: any) => r.merchant_id).filter(Boolean))];
-        if (merchantIds.length === 0) { clearTimeout(tid); return []; }
+        const merchantIds: string[] = [];
+        const coordMap = new Map<string, any>();
+        const countMap = new Map<string, number>();
+        for (const r of mpRows || []) {
+          const mid = r?.merchant_id;
+          if (!mid) continue;
+          countMap.set(mid, (countMap.get(mid) || 0) + 1);
+          if (!coordMap.has(mid)) {
+            coordMap.set(mid, r.coordinates);
+            merchantIds.push(mid);
+          }
+        }
+        const limitedIds = merchantIds.slice(0, limit);
+        if (limitedIds.length === 0) { clearTimeout(tid); return []; }
 
-        const usersResp = await fetch(
-          `${sbUrl}/rest/v1/users?select=id,name,avatar,email,is_merchant&id=in.(${merchantIds.join(',')})`,
+        let usersResp = await fetch(
+          `${sbUrl}/rest/v1/users?select=id,name,avatar,shop_logo,shop_address,email,is_merchant&id=in.(${limitedIds.join(',')})`,
           { headers, signal: controller.signal }
         );
+        if (!usersResp.ok) {
+          usersResp = await fetch(
+            `${sbUrl}/rest/v1/users?select=id,name,avatar,email,is_merchant&id=in.(${limitedIds.join(',')})`,
+            { headers, signal: controller.signal }
+          );
+        }
         clearTimeout(tid);
         const users: any[] = usersResp.ok ? await usersResp.json().catch(() => []) : [];
         const userMap = new Map(users.map((u: any) => [u.id, u]));
 
-        const coordMap = new Map<string, any>();
-        for (const r of mpRows) {
-          if (r.merchant_id && !coordMap.has(r.merchant_id)) {
-            coordMap.set(r.merchant_id, r.coordinates);
-          }
-        }
-
-        return merchantIds.map((mid) => {
+        return limitedIds.map((mid) => {
           const u = userMap.get(mid);
+          const logo = u?.shop_logo || u?.avatar || null;
           return {
             id: mid,
             name: u?.name || 'Esnaf',
-            avatar: u?.avatar || null,
+            avatar: logo,
+            logoUrl: logo,
+            shop_address: u?.shop_address || null,
             email: u?.email || null,
             is_merchant: u?.is_merchant === true,
             coordinates: coordMap.get(mid) || null,
+            productCount: countMap.get(mid) || 0,
           };
         });
       } catch (error: any) {
@@ -4526,6 +5147,30 @@ export const merchantSubscriptionAPI = {
 
   startTrial: async (userId: string, trialDays: number = 10) => {
     try {
+      const { accessToken, session } = await safeGetSession();
+      const sessionUserId = session?.user?.id || null;
+      if (!accessToken || !sessionUserId || sessionUserId !== userId) {
+        throw new Error('Yetkisiz işlem');
+      }
+
+      const { data: profile, error: profileError } = await supabase
+        .from('users')
+        .select('id, is_merchant, merchant_subscription_status, merchant_subscription_plan, merchant_subscription_current_period_end')
+        .eq('id', userId)
+        .single();
+      if (profileError) throw profileError;
+      if (!normalizeMerchantFlag(profile?.is_merchant)) {
+        throw new Error('Deneme yalnızca esnaf hesapları için başlatılabilir');
+      }
+
+      const { data: alreadyActive, error: activeErr } = await supabase.rpc('has_active_merchant_subscription', {
+        p_user_id: userId,
+      });
+      if (activeErr) throw activeErr;
+      if (alreadyActive) {
+        throw new Error('Zaten aktif bir aboneliğiniz veya denemeniz var');
+      }
+
       const now = new Date();
       const periodEnd = new Date(now.getTime() + trialDays * 24 * 60 * 60 * 1000);
       const { data, error } = await supabase
@@ -4534,15 +5179,22 @@ export const merchantSubscriptionAPI = {
           is_merchant: true,
           merchant_subscription_status: 'active',
           merchant_subscription_plan: `merchant_trial_${trialDays}_days`,
-          merchant_subscription_fee_tl: 900,
+          merchant_subscription_fee_tl: MERCHANT_SUBSCRIPTION_MONTHLY_FEE_TL,
           merchant_subscription_current_period_start: now.toISOString(),
           merchant_subscription_current_period_end: periodEnd.toISOString(),
         })
         .eq('id', userId)
+        .or(
+          'merchant_subscription_status.is.null,merchant_subscription_status.eq.inactive,merchant_subscription_status.eq.canceled,merchant_subscription_status.eq.expired,merchant_subscription_status.eq.none'
+        )
         .select('*')
-        .single();
+        .maybeSingle();
 
       if (error) throw error;
+      if (!data) {
+        throw new Error('Deneme başlatılamadı (hesap uygun değil veya zaten aktif)');
+      }
+      setMerchantSubscriptionCache(true);
       return data;
     } catch (error: any) {
       console.error('❌ Start merchant trial error:', error);

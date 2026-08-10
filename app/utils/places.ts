@@ -50,7 +50,8 @@ export async function searchNearbyPlaces(
   const googleApiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
   
   if (!googleApiKey || googleApiKey.trim() === '') {
-    console.error('❌ Google Maps API key not found! Please check vite.config.ts');
+    // Leaflet map still works without Places; avoid alarming console.error spam.
+    console.warn('VITE_GOOGLE_MAPS_API_KEY missing — nearby business markers skipped');
     return {
       success: false,
       error: 'Google Maps API key bulunamadı. Lütfen yöneticiye bildirin.',
@@ -58,11 +59,12 @@ export async function searchNearbyPlaces(
   }
 
   try {
-    // Use Places API Nearby Search
-    const typesParam = types.join('|');
-    const url = `https://maps.googleapis.com/maps/api/place/nearbysearch/json?location=${latitude},${longitude}&radius=${radius}&type=${typesParam}&language=tr&key=${googleApiKey}`;
+    // Legacy Nearby Search accepts only ONE `type`. Extra values joined with "|"
+    // are invalid and can yield empty/denied results.
+    const primaryType = (types && types.length > 0 ? types[0] : 'store') || 'store';
+    const url = `https://maps.googleapis.com/maps/api/place/nearbysearch/json?location=${latitude},${longitude}&radius=${Math.min(Math.max(radius, 100), 50000)}&type=${encodeURIComponent(primaryType)}&language=tr&key=${googleApiKey}`;
     
-    console.log('🔍 Searching for nearby places...', { latitude, longitude, radius, types });
+    console.log('🔍 Searching for nearby places...', { latitude, longitude, radius, type: primaryType });
     
     // For Capacitor apps, use fetch with mode: 'no-cors' or handle CORS gracefully
     // CORS errors in Capacitor webview should be caught and handled
@@ -102,7 +104,7 @@ export async function searchNearbyPlaces(
       console.error('❌ Google Places API: REQUEST_DENIED', data.error_message);
       return {
         success: false,
-        error: `API key hatası: ${data.error_message || 'REQUEST_DENIED'}`,
+        error: 'Yakındaki işletmeler şu an yüklenemiyor.',
       };
     }
     
@@ -152,7 +154,7 @@ export async function getPlaceDetails(placeId: string): Promise<Place | null> {
   const googleApiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
   
   if (!googleApiKey || googleApiKey.trim() === '') {
-    console.error('❌ Google Maps API key not found!');
+    console.warn('VITE_GOOGLE_MAPS_API_KEY missing — place details skipped');
     return null;
   }
 

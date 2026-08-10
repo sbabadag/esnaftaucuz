@@ -47,6 +47,22 @@ function AppRoutes() {
     }
   })();
   const hasRecentOAuthPending = oauthPendingTs > 0 && (Date.now() - oauthPendingTs) < OAUTH_PENDING_MAX_AGE_MS;
+  const hasExplicitOAuthCallback = (() => {
+    try {
+      const hashParams = new URLSearchParams(window.location.hash.substring(1));
+      const searchParams = new URLSearchParams(window.location.search);
+      return (
+        hashParams.has('access_token') ||
+        hashParams.has('code') ||
+        searchParams.has('code') ||
+        searchParams.has('access_token')
+      );
+    } catch {
+      return false;
+    }
+  })();
+  // Pending alone must NOT block the whole app (aborted Google login).
+  const isBlockingOAuthCallback = hasExplicitOAuthCallback;
   const [hasSeenOnboarding, setHasSeenOnboarding] = useState<boolean>(() => {
     if (typeof window === 'undefined') return false;
     return localStorage.getItem('hasSeenOnboarding') === 'true';
@@ -72,16 +88,24 @@ function AppRoutes() {
     setLoggedInIntroShown(false);
   }, [user]);
 
+  // Clear stale oauth-pending when user is back on login without a real callback
+  useEffect(() => {
+    if (hasExplicitOAuthCallback || user) return;
+    if (!hasRecentOAuthPending) return;
+    if (location.pathname !== '/login' && location.pathname !== '/') return;
+    try {
+      localStorage.removeItem('oauth-pending-ts');
+    } catch {
+      // best effort
+    }
+  }, [hasExplicitOAuthCallback, hasRecentOAuthPending, location.pathname, user]);
+
   // Handle OAuth callback redirect - if user is logged in and on root, redirect to explore
   useEffect(() => {
     console.log('🔍 AppRoutes useEffect - user:', user ? user.email : 'null', 'isLoading:', isLoading, 'pathname:', location.pathname);
     
-    // Check if this is an OAuth callback (has hash fragments with access_token)
-    const hashParams = new URLSearchParams(window.location.hash.substring(1));
-    const hasExplicitOAuthCallback = hashParams.has('access_token') || hashParams.has('code');
-    const isOAuthCallback = hasExplicitOAuthCallback || hasRecentOAuthPending;
-    
-    if (isOAuthCallback && (isLoading || !user)) {
+    // Check if this is an OAuth callback (has hash/query with access_token or code)
+    if (isBlockingOAuthCallback && (isLoading || !user)) {
       console.log('🔐 OAuth callback detected, waiting for user to load...');
       // Don't navigate yet, wait for user to be loaded
       return;
@@ -96,18 +120,13 @@ function AppRoutes() {
       return;
     }
 
-    if (!user && !isLoading && location.pathname.startsWith('/app') && !hasExplicitOAuthCallback) {
+    if (!user && !isLoading && location.pathname.startsWith('/app') && !isBlockingOAuthCallback) {
       navigate('/login', { replace: true });
     }
-  }, [user, isLoading, location.pathname, hasRecentOAuthPending, navigate]);
+  }, [user, isLoading, location.pathname, isBlockingOAuthCallback, navigate]);
 
-  // Check if this is an OAuth callback - if so, keep loading until user is ready
-  const hashParams = new URLSearchParams(window.location.hash.substring(1));
-  const hasExplicitOAuthCallback = hashParams.has('access_token') || hashParams.has('code');
-  const isOAuthCallback = hasExplicitOAuthCallback || hasRecentOAuthPending;
-  
   // If OAuth callback is in progress, show loading (even if isLoading briefly flipped false)
-  if (isOAuthCallback && (isLoading || !user)) {
+  if (isBlockingOAuthCallback && (isLoading || !user)) {
     console.log('🔐 OAuth callback in progress, showing loading...');
     return <LoadingScreenWithVersion message="Giriş yapılıyor..." />;
   }
@@ -181,8 +200,43 @@ function App() {
   useEffect(() => {
     const OAUTH_PENDING_KEY = 'oauth-pending-ts';
     const OAUTH_PENDING_CODE_KEY = 'oauth-pending-code';
+    const OAUTH_PENDING_MAX_AGE_MS = 2 * 60 * 1000;
     const MERCHANT_SIGNUP_INTENT_KEY = 'merchant-signup-intent';
     const MERCHANT_SUBSCRIPTION_ONBOARDING_KEY = 'merchant-subscription-onboarding-user';
+    const isOAuthPendingFresh = () => {
+      try {
+        const pendingTs = Number(localStorage.getItem(OAUTH_PENDING_KEY) || '0');
+        return pendingTs > 0 && Date.now() - pendingTs < OAUTH_PENDING_MAX_AGE_MS;
+      } catch {
+        return false;
+      }
+    };
+    const clearPendingOAuthCode = () => {
+      try {
+        localStorage.removeItem(OAUTH_PENDING_CODE_KEY);
+      } catch {
+        /* best effort */
+      }
+    };
+    const getFreshPendingOAuthCode = (): string => {
+      try {
+        const pendingCode = String(localStorage.getItem(OAUTH_PENDING_CODE_KEY) || '').trim();
+        if (!pendingCode) return '';
+        if (!isOAuthPendingFresh()) {
+          clearPendingOAuthCode();
+          try {
+            localStorage.removeItem(OAUTH_PENDING_KEY);
+          } catch {
+            /* best effort */
+          }
+          console.log('🧹 Dropped stale pending OAuth code (older than 2 min)');
+          return '';
+        }
+        return pendingCode;
+      } catch {
+        return '';
+      }
+    };
     const getAppRootPath = () => {
       const normalize = (value: string) => {
         let out = String(value || '/').trim();
@@ -215,8 +269,9 @@ function App() {
     // Clean up stale OAuth pending state (>2 min old) to prevent blocking future logins
     try {
       const pendingTs = Number(localStorage.getItem(OAUTH_PENDING_KEY) || '0');
-      if (pendingTs && Date.now() - pendingTs > 120_000) {
+      if (pendingTs && Date.now() - pendingTs > OAUTH_PENDING_MAX_AGE_MS) {
         clearOAuthPending();
+        clearPendingOAuthCode();
         console.log('🧹 Cleared stale OAuth pending state');
       }
     } catch { /* best effort */ }
@@ -487,7 +542,16 @@ function App() {
             status: error.status,
           });
           clearOAuthPending();
-          window.location.hash = `error=${encodeURIComponent(error.message || 'Failed to exchange code')}`;
+          clearPendingOAuthCode();
+          try {
+            window.dispatchEvent(
+              new CustomEvent('oauth-exchange-failed', {
+                detail: { message: error.message || 'Failed to exchange code' },
+              })
+            );
+          } catch {
+            /* ignore */
+          }
           return;
         }
         
@@ -513,7 +577,7 @@ function App() {
           // best effort
         }
         try {
-          window.history.replaceState({}, document.title, '/app/explore');
+          window.history.replaceState({}, document.title, `${getAppRootPath()}app/explore`.replace(/([^:]\/)\/+/g, '$1'));
         } catch {
           window.history.replaceState({}, document.title, getAppRootPath());
         }
@@ -531,7 +595,7 @@ function App() {
         } catch {
           // best effort
         }
-        // Stale code / missing verifier: do not leave a sticky #error hash that re-triggers auth noise.
+        // Never leave a sticky #error hash — it used to abort AuthContext bootstrap.
         const alreadyHasSession = (() => {
           try {
             const raw = localStorage.getItem('sb-xmskjcdwmwlcmjexnnxw-auth-token');
@@ -542,12 +606,19 @@ function App() {
         })();
         if (alreadyHasSession) {
           try {
-            window.history.replaceState({}, document.title, '/app/explore');
+            window.history.replaceState({}, document.title, `${getAppRootPath()}app/explore`.replace(/([^:]\/)\/+/g, '$1'));
           } catch {
             /* ignore */
           }
         } else {
-          window.location.hash = `error=${encodeURIComponent(normalizedMessage)}`;
+          console.warn('❌ OAuth exchange failed (no sticky hash):', normalizedMessage);
+          try {
+            window.dispatchEvent(
+              new CustomEvent('oauth-exchange-failed', { detail: { message: normalizedMessage } })
+            );
+          } catch {
+            /* ignore */
+          }
         }
       } finally {
         oauthExchangeInFlightRef.current = false;
@@ -580,7 +651,17 @@ function App() {
             return true;
           } else if (error) {
             console.error('❌ OAuth error in current URL:', error);
-            window.location.hash = `error=${encodeURIComponent(error || 'Unknown error')}`;
+            clearOAuthPending();
+            clearPendingOAuthCode();
+            try {
+              window.dispatchEvent(
+                new CustomEvent('oauth-exchange-failed', {
+                  detail: { message: error || 'Unknown error' },
+                })
+              );
+            } catch {
+              /* ignore */
+            }
             return true;
           }
         } catch (e) {
@@ -618,7 +699,7 @@ function App() {
       checkCurrentUrlForOAuth();
       // Recover if a previous deep-link stored the code before JS remounted
       try {
-        const pendingCode = String(localStorage.getItem(OAUTH_PENDING_CODE_KEY) || '').trim();
+        const pendingCode = getFreshPendingOAuthCode();
         const alreadyHasSession = (() => {
           try {
             const raw = localStorage.getItem('sb-xmskjcdwmwlcmjexnnxw-auth-token');
@@ -631,7 +712,7 @@ function App() {
           console.log('🔐 Recovering pending OAuth code from storage');
           handleOAuthCode(pendingCode, 'pending-storage');
         } else if (pendingCode && alreadyHasSession) {
-          localStorage.removeItem(OAUTH_PENDING_CODE_KEY);
+          clearPendingOAuthCode();
           console.log('🧹 Dropped stale pending OAuth code (session already present)');
         }
       } catch {
@@ -798,7 +879,7 @@ function App() {
 
             // Keep oauth-pending until AuthContext confirms user; go to explore not root.
             try {
-              window.history.replaceState({}, document.title, '/app/explore');
+              window.history.replaceState({}, document.title, `${getAppRootPath()}app/explore`.replace(/([^:]\/)\/+/g, '$1'));
             } catch {
               window.history.replaceState({}, document.title, getAppRootPath());
             }
@@ -810,7 +891,16 @@ function App() {
           } else if (error || hashError) {
             console.error('❌ OAuth error in deep link:', error || hashError);
             clearOAuthPending();
-            window.location.hash = `error=${encodeURIComponent(error || hashError || 'Unknown error')}`;
+            clearPendingOAuthCode();
+            try {
+              window.dispatchEvent(
+                new CustomEvent('oauth-exchange-failed', {
+                  detail: { message: error || hashError || 'Unknown error' },
+                })
+              );
+            } catch {
+              /* ignore */
+            }
           } else {
             console.log('⚠️ No actionable OAuth parameters in deep link URL; ignoring stale callback');
           }
@@ -856,7 +946,7 @@ function App() {
         console.log('📱 OAuth browser finished — probing callback');
         probeLaunchUrl('browserFinished');
         try {
-          const pendingCode = String(localStorage.getItem(OAUTH_PENDING_CODE_KEY) || '').trim();
+          const pendingCode = getFreshPendingOAuthCode();
           if (pendingCode) {
             handleOAuthCode(pendingCode, 'browserFinished-pending');
           }
@@ -884,7 +974,7 @@ function App() {
           })();
           if (alreadyHasSession) {
             try {
-              localStorage.removeItem(OAUTH_PENDING_CODE_KEY);
+              clearPendingOAuthCode();
             } catch {
               /* ignore */
             }
@@ -893,7 +983,7 @@ function App() {
           probeLaunchUrl('resume');
           checkCurrentUrlForOAuth();
           try {
-            const pendingCode = String(localStorage.getItem(OAUTH_PENDING_CODE_KEY) || '').trim();
+            const pendingCode = getFreshPendingOAuthCode();
             if (pendingCode) {
               handleOAuthCode(pendingCode, 'resume-pending');
             }
@@ -919,7 +1009,7 @@ function App() {
           })();
           if (alreadyHasSession) {
             try {
-              localStorage.removeItem(OAUTH_PENDING_CODE_KEY);
+              clearPendingOAuthCode();
             } catch {
               /* ignore */
             }
@@ -928,7 +1018,7 @@ function App() {
           }
           const relevant = checkCurrentUrlForOAuth();
           try {
-            const pendingCode = String(localStorage.getItem(OAUTH_PENDING_CODE_KEY) || '').trim();
+            const pendingCode = getFreshPendingOAuthCode();
             if (pendingCode) {
               handleOAuthCode(pendingCode, 'interval-pending');
             }

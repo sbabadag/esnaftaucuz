@@ -1,9 +1,10 @@
 import { Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom';
-import { Compass, Map, Plus, User, ShoppingBag, X, Store, BarChart3 } from 'lucide-react';
+import { Compass, Map, Plus, User, ShoppingBag, ShoppingCart, X, Store, BarChart3 } from 'lucide-react';
 import ExploreScreen from './tabs/ExploreScreen';
 import MapScreen from './tabs/MapScreen';
 import AddPriceScreen from './tabs/AddPriceScreen';
 import ProfileScreen from './tabs/ProfileScreen';
+import ShoppingListScreen from './tabs/ShoppingListScreen';
 import ProductDetailScreen from './details/ProductDetailScreen';
 import LocationDetailScreen from './details/LocationDetailScreen';
 import FavoritesScreen from './FavoritesScreen';
@@ -13,6 +14,7 @@ import ContributionsScreen from './ContributionsScreen';
 import MerchantShopScreen from './MerchantShopScreen';
 import MerchantReportsScreen from './MerchantReportsScreen';
 import MerchantSubscriptionScreen from './MerchantSubscriptionScreen';
+import MerchantProfileScreen from './MerchantProfileScreen';
 import BadgesScreen from './BadgesScreen';
 import PrivacyPolicyScreen from './PrivacyPolicyScreen';
 import TermsOfServiceScreen from './TermsOfServiceScreen';
@@ -41,6 +43,7 @@ import { useLanguage } from '../../contexts/LanguageContext';
 const regularTabs = [
   { path: 'explore', labelKey: 'EXPLORE', icon: Compass },
   { path: 'map', labelKey: 'MAP', icon: Map },
+  { path: 'shopping-list', labelKey: 'SHOPPING_LIST', icon: ShoppingCart },
   { path: 'add', labelKey: 'ADD', icon: Plus },
   { path: 'profile', labelKey: 'PROFILE', icon: User },
 ];
@@ -442,6 +445,25 @@ export default function MainApp() {
     navigate(`/app/merchant-shop/${user.id}`, { replace: true });
   }, [isMerchant, location.pathname, navigate, user?.id]);
 
+  // Normal users must never be trapped on the merchant paywall.
+  useEffect(() => {
+    if (!user?.id) return;
+    if (!location.pathname.includes('/merchant-subscription')) return;
+    if (isMerchant) return;
+    try {
+      const onboarding =
+        localStorage.getItem('merchant-subscription-onboarding-user') === user.id ||
+        localStorage.getItem('merchant-signup-intent') === '1';
+      if (onboarding) {
+        localStorage.removeItem('merchant-subscription-onboarding-user');
+        localStorage.removeItem('merchant-signup-intent');
+        navigate('/app/explore', { replace: true });
+      }
+    } catch {
+      /* best effort */
+    }
+  }, [isMerchant, location.pathname, navigate, user?.id]);
+
   usePendingPushDrain({
     userId: user?.id,
     pendingQueueKey,
@@ -486,6 +508,7 @@ export default function MainApp() {
                      location.pathname.includes('/badges') ||
                      location.pathname.includes('/contributions') ||
                      location.pathname.includes('/merchant-subscription') ||
+                     location.pathname.includes('/merchant-profile') ||
                      location.pathname.includes('/add') ||
                      (isMerchant && location.pathname.includes('/merchant-shop/') && location.pathname !== `/app/merchant-shop/${user?.id}`);
   const lockMainViewport = location.pathname.includes('/merchant-subscription');
@@ -550,7 +573,7 @@ export default function MainApp() {
           lockMainViewport || hideTabBar
             ? undefined
             : {
-                paddingBottom: `calc(5rem + env(safe-area-inset-bottom, 0px) + ${nativeBottomLiftPx}px)`,
+                paddingBottom: `calc(5.25rem + env(safe-area-inset-bottom, 0px) + ${nativeBottomLiftPx}px)`,
               }
         }
       >
@@ -558,6 +581,7 @@ export default function MainApp() {
           <Route path="/" element={<Navigate to="/app/explore" replace />} />
           <Route path="explore" element={<ExploreScreen />} />
           <Route path="map" element={<MapScreen />} />
+          {!isMerchant && <Route path="shopping-list" element={<ShoppingListScreen />} />}
           {!isMerchant && <Route path="add" element={<AddPriceScreen />} />}
           <Route path="profile" element={<ProfileScreen />} />
           <Route path="product/:id" element={<ProductDetailScreen />} />
@@ -573,6 +597,7 @@ export default function MainApp() {
           <Route path="badges" element={<BadgesScreen />} />
           <Route path="contributions" element={<ContributionsScreen />} />
           <Route path="merchant-subscription" element={<MerchantSubscriptionScreen />} />
+          <Route path="merchant-profile" element={<MerchantProfileScreen />} />
           <Route path="merchant-shop/:merchantId" element={<MerchantShopScreen />} />
           <Route path="merchant-reports" element={<MerchantReportsScreen />} />
         </Routes>

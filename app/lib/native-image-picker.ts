@@ -3,6 +3,12 @@ import { Camera, CameraResultType, CameraSource, type Photo } from '@capacitor/c
 
 export type ImagePickSource = 'camera' | 'gallery';
 
+export type PickedImage = {
+  file: File;
+  /** Prefer Capacitor webPath / data URL — blob: often fails to paint in Android WebView. */
+  previewUrl: string;
+};
+
 const isUserCancel = (error: unknown) => {
   const msg = String((error as any)?.message || error || '').toLowerCase();
   return (
@@ -44,37 +50,49 @@ function blobToFile(blob: Blob, filename: string, mime: string): File {
   }
 }
 
-async function photoToFile(photo: Photo, filenamePrefix = 'photo'): Promise<File> {
+function blobToDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(reader.error || new Error('Önizleme oluşturulamadı'));
+    reader.readAsDataURL(blob);
+  });
+}
+
+async function photoToPicked(photo: Photo, filenamePrefix = 'photo'): Promise<PickedImage> {
   const format = (photo.format || 'jpeg').toLowerCase();
   const ext = format === 'jpeg' || format === 'jpg' ? 'jpg' : format;
   const mime = `image/${ext === 'jpg' ? 'jpeg' : format}`;
   const filename = `${filenamePrefix}-${Date.now()}.${ext}`;
 
+  let blob: Blob | null = null;
+
   if (photo.webPath) {
     const response = await fetch(photo.webPath);
     if (!response.ok) throw new Error(`Fotoğraf okunamadı (${response.status})`);
-    const blob = await response.blob();
+    blob = await response.blob();
     if (!blob.size) throw new Error('Fotoğraf boş geldi');
-    return blobToFile(blob, filename, mime);
-  }
-
-  if (photo.dataUrl) {
+  } else if (photo.dataUrl) {
     const response = await fetch(photo.dataUrl);
-    const blob = await response.blob();
-    return blobToFile(blob, filename, mime);
-  }
-
-  if (photo.base64String) {
+    blob = await response.blob();
+  } else if (photo.base64String) {
     const binary = atob(photo.base64String);
     const bytes = new Uint8Array(binary.length);
     for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-    return blobToFile(new Blob([bytes], { type: mime }), filename, mime);
+    blob = new Blob([bytes], { type: mime });
   }
 
-  throw new Error('Fotoğraf verisi alınamadı');
+  if (!blob) throw new Error('Fotoğraf verisi alınamadı');
+
+  const file = blobToFile(blob, filename, mime);
+  // Prefer data URL for form previews — Capacitor https://localhost/_capacitor_file_
+  // URLs must never be persisted to DB (they break feed/search on other clients).
+  const previewUrl = photo.dataUrl || (await blobToDataUrl(blob));
+
+  return { file, previewUrl };
 }
 
-function pickViaHtmlInput(source: ImagePickSource, multiple = false): Promise<File[]> {
+async function filesFromHtmlInput(source: ImagePickSource, multiple = false): Promise<PickedImage[]> {
   return new Promise((resolve) => {
     const input = document.createElement('input');
     input.type = 'file';
@@ -82,17 +100,25 @@ function pickViaHtmlInput(source: ImagePickSource, multiple = false): Promise<Fi
     if (multiple) input.multiple = true;
     if (source === 'camera') input.setAttribute('capture', 'environment');
     let settled = false;
-    const finish = (files: File[]) => {
+    const finish = (files: PickedImage[]) => {
       if (settled) return;
       settled = true;
       resolve(files);
     };
-    input.onchange = () => {
-      const files = input.files ? Array.from(input.files).filter((f) => f.type.startsWith('image/')) : [];
-      finish(files);
+    input.onchange = async () => {
+      const raw = input.files ? Array.from(input.files).filter((f) => f.type.startsWith('image/')) : [];
+      try {
+        const picked: PickedImage[] = [];
+        for (const file of raw) {
+          // Data URL is more reliable than blob: across WebViews / dialogs.
+          picked.push({ file, previewUrl: await blobToDataUrl(file) });
+        }
+        finish(picked);
+      } catch {
+        finish(raw.map((file) => ({ file, previewUrl: URL.createObjectURL(file) })));
+      }
     };
     input.oncancel = () => finish([]);
-    // Fallback if cancel does not fire
     window.setTimeout(() => {
       if (!settled && !input.files?.length) finish([]);
     }, 60_000);
@@ -109,11 +135,11 @@ export async function pickImages(options: {
   source: ImagePickSource;
   multiple?: boolean;
   quality?: number;
-}): Promise<File[]> {
+}): Promise<PickedImage[]> {
   const { source, multiple = false, quality = 70 } = options;
 
   if (!Capacitor.isNativePlatform()) {
-    return pickViaHtmlInput(source, multiple);
+    return filesFromHtmlInput(source, multiple);
   }
 
   if (source === 'camera') {
@@ -131,11 +157,15 @@ export async function pickImages(options: {
         width: 1280,
         height: 1280,
       });
-      const files: File[] = [];
+      const picked: PickedImage[] = [];
       for (let i = 0; i < (result.photos || []).length; i++) {
-        files.push(await photoToFile(result.photos[i] as Photo, `gallery-${i}`));
+        try {
+          picked.push(await photoToPicked(result.photos[i] as Photo, `gallery-${i}`));
+        } catch (photoErr) {
+          console.error(`Gallery photo #${i + 1} failed:`, photoErr);
+        }
       }
-      return files;
+      return picked;
     }
 
     const photo = await Camera.getPhoto({
@@ -154,14 +184,14 @@ export async function pickImages(options: {
       promptLabelCancel: 'İptal',
     });
 
-    return [await photoToFile(photo, source === 'camera' ? 'camera' : 'gallery')];
+    return [await photoToPicked(photo, source === 'camera' ? 'camera' : 'gallery')];
   } catch (error) {
     if (isUserCancel(error)) return [];
     throw error;
   }
 }
 
-export async function pickSingleImage(source: ImagePickSource): Promise<File | null> {
+export async function pickSingleImage(source: ImagePickSource): Promise<PickedImage | null> {
   const files = await pickImages({ source, multiple: false });
   return files[0] || null;
 }

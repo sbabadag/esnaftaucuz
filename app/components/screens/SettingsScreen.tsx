@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ArrowLeft, MapPin, Bell, Lock, Globe, Info, ChevronRight, Search, Trash2, Settings, FileText, Truck } from 'lucide-react';
+import { ArrowLeft, MapPin, Bell, Lock, Globe, Info, ChevronRight, Search, Trash2, Settings, FileText, Truck, IdCard } from 'lucide-react';
 import { Button } from '../ui/button';
 import { Label } from '../ui/label';
 import { Slider } from '../ui/slider';
@@ -37,7 +37,7 @@ const resolveMerchantRole = resolveMerchantRoleFromProfile;
 export default function SettingsScreen() {
   const navigate = useNavigate();
   const { user, refreshUser, logout } = useAuth();
-  const isGuest = (user as any)?.is_guest === true;
+  const isGuest = (user as any)?.is_guest === true || (user as any)?.isGuest === true;
   const { getCurrentPosition } = useGeolocation();
   const isMerchant = resolveMerchantRole(user);
   const [searchRadius, setSearchRadius] = useState<number>(15);
@@ -206,18 +206,21 @@ export default function SettingsScreen() {
     try {
       setIsSaving(true);
       console.log('💾 Saving search radius:', searchRadius);
-      await usersAPI.update(user.id, {
-        preferences: {
-          searchRadius: searchRadius,
+      await usersAPI.update(
+        user.id,
+        {
+          preferences: {
+            searchRadius: searchRadius,
+          },
         },
-      });
-      
-      // Refresh user data
-      if (refreshUser) {
-        await refreshUser();
-      }
-      
+        {
+          existingPreferences: (user as any)?.preferences || {},
+          existingLocation: (user as any)?.location || {},
+        }
+      );
+
       toast.success('Arama genişliği kaydedildi');
+      if (refreshUser) void refreshUser();
     } catch (error: any) {
       console.error('❌ Save search radius error:', error);
       console.error('Error details:', {
@@ -418,6 +421,24 @@ export default function SettingsScreen() {
         )}
         {/* Location Permission Setting */}
         <div className="px-4 pt-2" style={{ paddingTop: 'calc(0px + env(safe-area-inset-top, 0px))', scrollSnapAlign: 'start' }}>
+        {isMerchant && (
+          <button
+            type="button"
+            onClick={() => navigate('/app/merchant-profile')}
+            className="w-full bg-white rounded-lg p-4 border border-blue-200 mb-4 text-left hover:border-blue-400 transition"
+          >
+            <div className="flex items-center gap-3">
+              <IdCard className="w-5 h-5 text-blue-600" />
+              <div className="flex-1 min-w-0">
+                <h2 className="text-lg font-semibold text-gray-900">Esnaf Bilgileri</h2>
+                <p className="text-sm text-gray-500 truncate">
+                  Dükkan adı, telefon, adres ve çalışma saatleri
+                </p>
+              </div>
+              <ChevronRight className="w-5 h-5 text-gray-400" />
+            </div>
+          </button>
+        )}
         <div className="bg-white rounded-lg p-4 border border-gray-200 mb-4">
           <div className="flex items-center gap-3 mb-4">
             <MapPin className="w-5 h-5 text-gray-600" />
@@ -584,7 +605,7 @@ export default function SettingsScreen() {
               </div>
               
               <p className="text-xs text-gray-500 mt-3">
-                Bu ayar, yakındaki en ucuz fiyatları getirirken kullanılır. Varsayılan: 15 km.
+                Bu ayar, yakındaki en ucuz fiyatları getirirken kullanılır. Önerilen başlangıç: 15 km (hesabınızda kayıtlı değer farklı olabilir).
               </p>
             </div>
             {isGuest ? (
@@ -630,14 +651,20 @@ export default function SettingsScreen() {
                     return;
                   }
                   try {
-                    await usersAPI.update(user.id, {
-                      preferences: {
-                        ...(user as any).preferences,
-                        notifications: e.target.checked,
+                    await usersAPI.update(
+                      user.id,
+                      {
+                        preferences: {
+                          notifications: e.target.checked,
+                        },
                       },
-                    });
-                    if (refreshUser) await refreshUser();
+                      {
+                        existingPreferences: (user as any)?.preferences || {},
+                        existingLocation: (user as any)?.location || {},
+                      }
+                    );
                     toast.success('Bildirim ayarı kaydedildi');
+                    if (refreshUser) void refreshUser();
                   } catch (error: any) {
                     console.error('Save notification setting error:', error);
                     toast.error('Ayar kaydedilemedi');

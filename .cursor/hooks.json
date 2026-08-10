@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "hooks": {
+    "afterFileEdit": [
+      {
+        "command": "node .cursor/hooks/mark-android-install.mjs"
+      }
+    ],
+    "afterShellExecution": [
+      {
+        "command": "node .cursor/hooks/clear-android-install.mjs",
+        "matcher": "install-android-device|mobile:install|installDebug|cap sync android"
+      }
+    ],
+    "stop": [
+      {
+        "command": "node .cursor/hooks/android-install-on-stop.mjs",
+        "loop_limit": 2
+      }
+    ]
+  }
+}

@@ -194,15 +194,30 @@ export default function MerchantSubscriptionScreen() {
       if (cancelled) return;
 
       // Redirect only after we have an authoritative status snapshot.
+      // Normal (non-merchant) users are always free — never lock them on this paywall.
       if (!loaded) return;
       const status = loaded.status || {};
-      const resolvedMerchantByStatus =
+      const statusActive =
         String(status?.merchant_subscription_status || '').toLowerCase() === 'active' ||
         String(status?.merchant_subscription_status || '').toLowerCase() === 'past_due' ||
-        String(status?.merchant_subscription_plan || '').trim().length > 0;
-      if (!isMerchant && !resolvedMerchantByStatus && !onboardingRequired) {
-        toast.error('Bu sayfa sadece esnaf hesapları içindir');
-        navigate('/app/profile', { replace: true });
+        String(status?.merchant_subscription_status || '').toLowerCase() === 'trialing';
+      const isExplicitMerchant =
+        isMerchant ||
+        !!status?.is_merchant ||
+        statusActive;
+      if (!isExplicitMerchant) {
+        try {
+          localStorage.removeItem(MERCHANT_SIGNUP_INTENT_KEY);
+          localStorage.removeItem(MERCHANT_SUBSCRIPTION_ONBOARDING_KEY);
+        } catch {
+          /* best effort */
+        }
+        // Optional upgrade entry from profile is OK; forced onboarding is not.
+        if (onboardingRequired) {
+          toast.info('Normal kullanıcılar için uygulama ücretsizdir');
+          navigate('/app/explore', { replace: true });
+          return;
+        }
       }
     };
 
@@ -213,6 +228,10 @@ export default function MerchantSubscriptionScreen() {
   }, [isMerchant, onboardingRequired, user?.id]);
 
   useEffect(() => {
+    // Only lock the app chrome for forced merchant onboarding / active merchant billing.
+    // Optional "upgrade" visit by a free customer should not trap the UI.
+    if (!isMerchant && !onboardingRequired) return;
+
     const html = document.documentElement;
     const body = document.body;
     const root = document.getElementById('root');
@@ -226,7 +245,7 @@ export default function MerchantSubscriptionScreen() {
       body.classList.remove('merchant-subscription-lock');
       root?.classList.remove('merchant-subscription-lock');
     };
-  }, []);
+  }, [isMerchant, onboardingRequired]);
 
   const handleRefresh = async () => {
     if (!user?.id) return;

@@ -1,7 +1,7 @@
 {
   "name": "esnaftaucuz",
   "private": true,
-  "version": "1.1.4",
+  "version": "1.1.10",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -17,6 +17,7 @@
     "mobile:android": "npx cap open android",
     "mobile:build": "npm run build && npx cap sync",
     "mobile:build-sync": "npm run build && npx cap sync",
+    "mobile:install": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install-android-device.ps1",
     "mobile:publish:play:internal": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/publish-play-internal.ps1",
     "watch:sync": "npm run build && npx cap sync && echo 'Watching for changes...' && npm run build -- --watch",
     "dev:android": "node scripts/dev-android.js",

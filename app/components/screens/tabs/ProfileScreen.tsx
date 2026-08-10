@@ -1,6 +1,6 @@
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useEffect, useCallback } from 'react';
-import { Settings, Heart, Award, Share2, LogOut, ChevronRight, Store, CreditCard, RefreshCw, Crown, User } from 'lucide-react';
+import { Settings, Heart, Award, Share2, LogOut, ChevronRight, Store, CreditCard, RefreshCw, Crown, IdCard } from 'lucide-react';
 import { Avatar, AvatarFallback, AvatarImage } from '../../ui/avatar';
 import { Badge } from '../../ui/badge';
 import { Button } from '../../ui/button';
@@ -16,7 +16,7 @@ export default function ProfileScreen() {
   const navigate = useNavigate();
   const location = useLocation();
   const { logout, user, refreshUser } = useAuth();
-  const { theme, toggleTheme } = useTheme();
+  const { themeOption, setThemeOption } = useTheme();
   const { t, lang, setLang } = useLanguage();
   const [isRefreshing, setIsRefreshing] = useState(false);
   const isNativePlatform =
@@ -24,7 +24,7 @@ export default function ProfileScreen() {
     !!(window as any).Capacitor?.isNativePlatform &&
     (window as any).Capacitor.isNativePlatform();
   const bottomNativeOffset = isNativePlatform ? 10 : 0;
-  const bottomBandReserve = `calc(4.5rem + env(safe-area-inset-bottom, 0px) + ${bottomNativeOffset}px)`;
+  const bottomBandReserve = `calc(5.25rem + env(safe-area-inset-bottom, 0px) + ${bottomNativeOffset}px)`;
   const [dbStatus, setDbStatus] = useState<{
     is_merchant: boolean;
     merchant_subscription_status: string;
@@ -151,6 +151,7 @@ export default function ProfileScreen() {
     // Esnaf için özel menü öğesi
     ...(isMerchant ? [
       { icon: Store, label: t('MY_SHOP'), onClick: () => navigate(`/app/merchant-shop/${user?.id}`) },
+      { icon: IdCard, label: t('MERCHANT_PROFILE'), onClick: () => navigate('/app/merchant-profile') },
       { icon: CreditCard, label: 'Abonelik ve Ödeme', onClick: () => navigate('/app/merchant-subscription') },
     ] : []),
     { icon: Share2, label: t('CONTRIBUTIONS'), onClick: () => navigate('/app/contributions') },
@@ -159,7 +160,12 @@ export default function ProfileScreen() {
     { icon: Settings, label: t('SETTINGS'), onClick: () => navigate('/app/settings') },
     { icon: Share2, label: t('FEEDBACK_AND_SUPPORT'), onClick: () => navigate('/app/feedback') },
     // Theme toggle (not a navigation item)
-    { icon: Share2, label: `${t('THEME')}: ${theme === 'dark' ? t('DARK') : t('LIGHT')}`, onClick: () => toggleTheme() },
+    { icon: Share2, label: `${t('THEME')}: ${themeOption === 'system' ? t('SYSTEM') : themeOption === 'dark' ? t('DARK') : t('LIGHT')}`, onClick: () => {
+      const order: Array<'light' | 'dark' | 'system'> = ['light', 'dark', 'system'];
+      const idx = order.indexOf(themeOption);
+      setThemeOption(order[(idx + 1) % order.length]);
+      toast.success(t('THEME_SAVED'));
+    } },
     // Language selector entry (cycles en/tr)
     { icon: Share2, label: `${t('LANGUAGE')}: ${lang === 'tr' ? 'Türkçe' : 'English'}`, onClick: () => {
       const next = lang === 'tr' ? 'en' : 'tr';
@@ -217,15 +223,12 @@ export default function ProfileScreen() {
         </div>
       </div>
 
-      {/* Membership Status Card */}
+      {/* Membership Status Card — merchants only */}
+      {isMerchant && (
       <div className="mx-4 mt-4 rounded-xl border bg-white shadow-sm overflow-hidden">
         <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100">
           <div className="flex items-center gap-2">
-            {isMerchant ? (
-              <Crown className="w-5 h-5 text-blue-600" />
-            ) : (
-              <User className="w-5 h-5 text-gray-500" />
-            )}
+            <Crown className="w-5 h-5 text-blue-600" />
             <span className="font-semibold text-gray-800">Üyelik Durumu</span>
           </div>
           <button
@@ -239,8 +242,8 @@ export default function ProfileScreen() {
         <div className="px-4 py-3 space-y-2">
           <div className="flex items-center justify-between">
             <span className="text-sm text-gray-500">Hesap Tipi</span>
-            <span className={`text-sm font-semibold ${isMerchant ? 'text-blue-600' : 'text-gray-700'}`}>
-              {isMerchant ? 'Esnaf Hesabı' : 'Normal Kullanıcı'}
+            <span className="text-sm font-semibold text-blue-600">
+              Esnaf Hesabı
             </span>
           </div>
           <div className="flex items-center justify-between">
@@ -249,7 +252,7 @@ export default function ProfileScreen() {
               {getMerchantSubscriptionLabel()}
             </span>
           </div>
-          {isMerchant && merchantPlan && (
+          {merchantPlan && (
             <div className="flex items-center justify-between">
               <span className="text-sm text-gray-500">Plan</span>
               <span className="text-sm text-gray-700">
@@ -257,7 +260,7 @@ export default function ProfileScreen() {
               </span>
             </div>
           )}
-          {isMerchant && merchantSubscriptionPeriodEnd && (
+          {merchantSubscriptionPeriodEnd && (
             <div className="flex items-center justify-between">
               <span className="text-sm text-gray-500">Bitiş Tarihi</span>
               <span className="text-sm text-gray-700">
@@ -270,17 +273,7 @@ export default function ProfileScreen() {
             <span className="text-sm text-gray-700">{user?.email || '-'}</span>
           </div>
         </div>
-        {!isMerchant && (
-          <div className="px-4 py-3 border-t border-gray-100 bg-gray-50">
-            <button
-              onClick={() => navigate('/app/merchant-subscription')}
-              className="w-full text-center text-sm text-blue-600 font-medium hover:text-blue-700"
-            >
-              Esnaf hesabına yükselt →
-            </button>
-          </div>
-        )}
-        {isMerchant && merchantSubscriptionStatus !== 'active' && (
+        {merchantSubscriptionStatus !== 'active' && (
           <div className="px-4 py-3 border-t border-gray-100 bg-yellow-50">
             <button
               onClick={() => navigate('/app/merchant-subscription')}
@@ -291,6 +284,7 @@ export default function ProfileScreen() {
           </div>
         )}
       </div>
+      )}
 
       {/* Menu */}
         <div className="p-4 space-y-2">

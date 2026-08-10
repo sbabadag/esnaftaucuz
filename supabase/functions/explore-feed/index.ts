@@ -44,11 +44,7 @@ Deno.serve(async (req) => {
       locationIds.length
         ? client.from('locations').select('id, name, type, city, district, coordinates').in('id', locationIds)
         : Promise.resolve({ data: [] as any[] }),
-      client
-        .from('products')
-        .select('id, name, category, image')
-        .order('search_count', { ascending: false })
-        .limit(limitTrending),
+      client.rpc('get_trending_products_today', { p_limit: limitTrending }),
       client
         .from('merchant_products')
         .select(`
@@ -84,10 +80,17 @@ Deno.serve(async (req) => {
       });
     });
 
+    const trendProducts = (Array.isArray(trendingRows) ? trendingRows : []).map((row: any) => ({
+      id: row.id,
+      name: row.name,
+      category: row.category,
+      image: row.image,
+    }));
+
     return jsonResponse(200, {
       ok: true,
       recentPrices: recent,
-      trendProducts: trendingRows || [],
+      trendProducts,
       merchantShops: Array.from(merchantMap.values()),
     });
   } catch (error) {

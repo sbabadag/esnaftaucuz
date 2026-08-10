@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion } from 'motion/react';
 import { ShoppingBag, Mail, Lock, Eye, EyeOff } from 'lucide-react';
@@ -22,13 +22,40 @@ export default function LoginScreen({ onLogin }: { onLogin?: () => void }) {
     name: '',
   });
   const [isMerchant, setIsMerchant] = useState(false);
+  const [authError, setAuthError] = useState<string | null>(null);
   const MERCHANT_SIGNUP_INTENT_KEY = 'merchant-signup-intent';
   const MERCHANT_SUBSCRIPTION_ONBOARDING_KEY = 'merchant-subscription-onboarding-user';
+
+  useEffect(() => {
+    const onFail = (event: Event) => {
+      const detail = (event as CustomEvent)?.detail;
+      const message = String(detail?.message || 'Google giriş başarısız').trim();
+      if (/invalid_grant|already.?used|expired/i.test(message)) {
+        // Stale replay — ignore silently; user can tap Google again.
+        return;
+      }
+      setAuthError(message);
+      toast.error(message, { duration: 6000 });
+      setIsLoading(false);
+    };
+    window.addEventListener('oauth-exchange-failed', onFail as EventListener);
+    return () => window.removeEventListener('oauth-exchange-failed', onFail as EventListener);
+  }, []);
+
+  const showAuthError = (message: string, opts?: { duration?: number; description?: string }) => {
+    setAuthError(message);
+    toast.error(message, {
+      duration: opts?.duration ?? 6000,
+      description: opts?.description,
+    });
+  };
 
   const handleGoogleLogin = async (forceMerchantIntent: boolean = false) => {
     try {
       setIsLoading(true);
+      setAuthError(null);
       try {
+        localStorage.removeItem('oauth-pending-code');
         localStorage.setItem('oauth-pending-ts', String(Date.now()));
       } catch {
         // best effort
@@ -37,6 +64,7 @@ export default function LoginScreen({ onLogin }: { onLogin?: () => void }) {
         localStorage.setItem(MERCHANT_SIGNUP_INTENT_KEY, '1');
       } else {
         localStorage.removeItem(MERCHANT_SIGNUP_INTENT_KEY);
+        localStorage.removeItem(MERCHANT_SUBSCRIPTION_ONBOARDING_KEY);
       }
       const loginHint = formData.email.trim();
       await googleLogin({
@@ -47,7 +75,8 @@ export default function LoginScreen({ onLogin }: { onLogin?: () => void }) {
       // Final navigation is handled after session is created.
       toast.info('Google giriş sayfası açılıyor...');
     } catch (error: any) {
-      toast.error(error.message || 'Google ile giriş başarısız');
+      toast.error(error.message || 'Google ile giriş başarısız', { duration: 6000 });
+      setAuthError(error.message || 'Google ile giriş başarısız');
       console.error('Google login error:', error);
     } finally {
       setIsLoading(false);
@@ -56,28 +85,29 @@ export default function LoginScreen({ onLogin }: { onLogin?: () => void }) {
 
   const handleEmailAuth = async (e: React.FormEvent) => {
     e.preventDefault();
+    setAuthError(null);
     
     if (mode === 'register') {
       if (!formData.name.trim()) {
-        toast.error('Lütfen adınızı girin');
+        showAuthError('Lütfen adınızı girin');
         return;
       }
     }
 
     if (!formData.email.trim() || !formData.password.trim()) {
-      toast.error('Lütfen email ve şifre girin');
+      showAuthError('Lütfen email ve şifre girin');
       return;
     }
 
     // Basic email validation
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailRegex.test(formData.email)) {
-      toast.error('Geçerli bir email adresi girin');
+      showAuthError('Geçerli bir email adresi girin');
       return;
     }
 
     if (formData.password.length < 6) {
-      toast.error('Şifre en az 6 karakter olmalı');
+      showAuthError('Şifre en az 6 karakter olmalı');
       return;
     }
 
@@ -117,12 +147,12 @@ export default function LoginScreen({ onLogin }: { onLogin?: () => void }) {
         normalizedErrorMessage.includes('failed to fetch') ||
         normalizedErrorMessage.includes('fetch')
       ) {
-        toast.error('Sunucuya ulaşılamıyor. İnternet bağlantınızı kontrol edip tekrar deneyin.', {
-          duration: 5000,
+        showAuthError('Sunucuya ulaşılamıyor. İnternet bağlantınızı kontrol edip tekrar deneyin.', {
+          duration: 7000,
           description: 'Wi-Fi bağlı olsa bile internet erişimi kapalı olabilir.',
         });
       } else {
-        toast.error(errorMessage);
+        showAuthError(errorMessage);
       }
     } finally {
       setIsLoading(false);
@@ -258,6 +288,15 @@ export default function LoginScreen({ onLogin }: { onLogin?: () => void }) {
               </p>
             )}
 
+            {authError && (
+              <div
+                role="alert"
+                className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-md px-3 py-2"
+              >
+                {authError}
+              </div>
+            )}
+
             <Button
               type="submit"
               disabled={isLoading}
@@ -302,6 +341,7 @@ export default function LoginScreen({ onLogin }: { onLogin?: () => void }) {
                 setMode(mode === 'login' ? 'register' : 'login');
                 setFormData({ email: '', password: '', name: '' });
                 setIsMerchant(false);
+                setAuthError(null);
               }}
               className="text-sm text-green-600 hover:text-green-700 underline"
             >
@@ -328,7 +368,25 @@ export default function LoginScreen({ onLogin }: { onLogin?: () => void }) {
         transition={{ delay: 0.6 }}
         className="text-center text-sm text-gray-500 mt-8"
       >
-        Giriş yaparak kullanım şartlarını kabul etmiş olursun.
+        Giriş yaparak{' '}
+        <a
+          href="/terms-of-service.html"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-green-700 underline hover:text-green-800"
+        >
+          kullanım şartlarını
+        </a>
+        {' '}ve{' '}
+        <a
+          href="/privacy-policy.html"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-green-700 underline hover:text-green-800"
+        >
+          gizlilik politikasını
+        </a>
+        {' '}kabul etmiş olursun.
       </motion.p>
     </div>
   );

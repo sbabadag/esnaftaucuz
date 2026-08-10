@@ -89,8 +89,9 @@ export const useGeolocation = () => {
   const watchPosition = (callback: (position: Position) => void): (() => void) | null => {
     try {
       if (isNative()) {
-        // Use Capacitor watch position
-        const watchId = Geolocation.watchPosition(
+        let cleared = false;
+        let resolvedId: string | null = null;
+        const watchPromise = Geolocation.watchPosition(
           {
             enableHighAccuracy: true,
           },
@@ -102,8 +103,22 @@ export const useGeolocation = () => {
           }
         );
 
+        watchPromise
+          .then((id) => {
+            resolvedId = id;
+            if (cleared && id != null) {
+              Geolocation.clearWatch({ id }).catch(() => {});
+            }
+          })
+          .catch((error) => {
+            console.error('Geolocation watch error:', error);
+          });
+
         return () => {
-          Geolocation.clearWatch({ id: watchId });
+          cleared = true;
+          if (resolvedId != null) {
+            Geolocation.clearWatch({ id: resolvedId }).catch(() => {});
+          }
         };
       } else {
         // Use HTML5 watch position

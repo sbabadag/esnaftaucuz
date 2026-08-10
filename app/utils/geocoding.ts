@@ -136,7 +136,7 @@ async function reverseGeocodeGoogle(
     console.error('❌ Google Maps API: REQUEST_DENIED', data.error_message);
     return {
       success: false,
-      error: `API key hatası: ${data.error_message || 'REQUEST_DENIED'}`,
+      error: 'Adres bilgisi şu an alınamıyor. Konumunuz yine de kullanılacak.',
     };
   }
   
@@ -339,7 +339,7 @@ async function forwardGeocodeGoogle(
     console.error('❌ Google Maps API: REQUEST_DENIED', data.error_message);
     return {
       success: false,
-      error: `API key hatası: ${data.error_message || 'REQUEST_DENIED'}`,
+      error: 'Adres bilgisi şu an alınamıyor. Konumunuz yine de kullanılacak.',
     };
   }
   

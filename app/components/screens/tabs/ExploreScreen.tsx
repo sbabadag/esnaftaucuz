@@ -24,6 +24,7 @@ import { reverseGeocode } from '../../../utils/geocoding';
 import { supabase, getAnonReadClient } from '../../../lib/supabase';
 import { toast } from 'sonner';
 import { getImmediateUnreadCount, LOCAL_NOTIFICATIONS_UPDATED_EVENT } from '../../../lib/notification-store';
+import { formatLocationDisplayName } from '../../../utils/entity-name';
 
 interface Price {
   id: string;
@@ -166,7 +167,7 @@ export default function ExploreScreen() {
   const [currentLocation, setCurrentLocation] = useState<string>('Konya / Selçuklu');
   const [isGettingLocation, setIsGettingLocation] = useState(false);
   const [userLocation, setUserLocation] = useState<{ lat: number; lng: number } | null>(null);
-  const exploreCacheKey = `explore-cache:v2:${user?.id || 'anon'}`;
+  const exploreCacheKey = `explore-cache:v4:${user?.id || 'anon'}`;
   const productsIndexCacheKey = `products-search-index:${user?.id || 'anon'}`;
   const [filters, setFilters] = useState({
     pazar: false,
@@ -179,7 +180,15 @@ export default function ExploreScreen() {
   });
   const isBenignAddressUnavailableError = (value: unknown) => {
     const msg = String(value || '').toLowerCase();
-    return msg.includes('adres bilgisi şu an alınamıyor') || msg.includes('konumunuz yine de kullanılacak');
+    return (
+      msg.includes('adres bilgisi şu an alınamıyor') ||
+      msg.includes('konumunuz yine de kullanılacak') ||
+      msg.includes('api key') ||
+      msg.includes('request_denied') ||
+      msg.includes('not activated') ||
+      msg.includes('geocoding') ||
+      msg.includes('maps api')
+    );
   };
   const hasAnyData =
     trendProducts.length > 0 ||
@@ -207,7 +216,8 @@ export default function ExploreScreen() {
   // Bu nedenle native tarafta sabit bir üst inset ekleyerek bandı dead area altına iteriz.
   const heroNativeTopOffset = isNativePlatform ? 34 : 0;
   const bottomNativeOffset = isNativePlatform ? 10 : 0;
-  const bottomBandReserve = `calc(4.5rem + env(safe-area-inset-bottom, 0px) + ${bottomNativeOffset}px)`;
+  // Match MainApp tab bar: h-16 (4rem) + padding/shadow cushion ≈ 5rem + safe + lift
+  const bottomBandReserve = `calc(5.25rem + env(safe-area-inset-bottom, 0px) + ${bottomNativeOffset}px)`;
   /** Fixed hero does not reserve layout space; spacer uses this height so search sits below the blue band. */
   const heroBodyPx = Math.max(heroHeight || 0, 64);
   const heroSpacerHeight = `calc(env(safe-area-inset-top, 0px) + ${heroNativeTopOffset + heroBodyPx + HEADER_GAP}px)`;
@@ -435,7 +445,7 @@ export default function ExploreScreen() {
                   !isBenignAddressUnavailableError(result.error)
                 ) {
                   toast.info('Konum tespit edildi', {
-                    description: result.error || 'Adres bilgisi yüklenemedi. Konumunuz kaydedildi.',
+                    description: 'Adres bilgisi yüklenemedi. Konumunuz kaydedildi.',
                   });
                 }
               }
@@ -1800,6 +1810,7 @@ export default function ExploreScreen() {
         className="min-h-0 flex-1 px-3 sm:px-4 md:px-6 space-y-3 sm:space-y-4 overflow-y-auto max-w-7xl mx-auto w-full"
           style={{ 
           paddingTop: pullDistance > 0 ? `${Math.min(pullDistance, 60)}px` : '0px',
+          paddingBottom: '1.25rem',
           transition: pullDistance === 0 ? 'padding-top 0.2s' : 'none',
           overscrollBehaviorY: 'contain',
           WebkitOverflowScrolling: 'touch',
@@ -1808,8 +1819,8 @@ export default function ExploreScreen() {
           zIndex: 1
         }}
       >
-        {/* Trend Products - En üste taşındı */}
-        {!searchResults && (
+        {/* Trend Products - hide while searching (match recent/merchant gates) */}
+        {!searchQuery.trim() && !searchResults && (
           <section className="mt-0 pt-0">
             <h2 className="mt-0 pt-0 text-base sm:text-lg mb-0 sm:mb-0 text-gray-900 font-semibold">{t('TREND_TITLE')}</h2>
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-2 sm:gap-3">
@@ -1945,6 +1956,7 @@ export default function ExploreScreen() {
                                     src={previewImage} 
                                     alt={`${productDisplayName} - Gorsel`}
                                     className="w-full h-full object-cover"
+                                    referrerPolicy="no-referrer"
                                     title={item.photo ? 'Kullanici tarafindan yuklenen fotograf' : 'Urun gorseli'}
                                     onError={(e) => {
                                       console.error('Card image failed to load:', previewImage);
@@ -1978,7 +1990,7 @@ export default function ExploreScreen() {
                                 <div className="flex items-center gap-3 sm:gap-4 text-xs sm:text-sm text-gray-500 mb-1.5 sm:mb-2">
                                   <span className="flex items-center gap-1 min-w-0 flex-1">
                                     <MapPin className="w-3 h-3 sm:w-4 sm:h-4 flex-shrink-0" />
-                                    <span className="truncate">{item.location?.name || 'Konum bilgisi yok'}</span>
+                                    <span className="truncate">{formatLocationDisplayName(item.location?.name) || 'Konum bilgisi yok'}</span>
                                   </span>
                                   <span className="flex items-center gap-1 flex-shrink-0">
                                     <Clock className="w-3 h-3 sm:w-4 sm:h-4" />
@@ -2091,7 +2103,7 @@ export default function ExploreScreen() {
                           <div className="flex items-start gap-3">
                             <MapPin className="w-5 h-5 text-green-600 flex-shrink-0 mt-0.5" />
                             <div className="flex-1 min-w-0">
-                              <h3 className="text-base sm:text-lg font-semibold text-gray-900 mb-1">{location.name}</h3>
+                              <h3 className="text-base sm:text-lg font-semibold text-gray-900 mb-1">{formatLocationDisplayName(location.name)}</h3>
                               <p className="text-sm text-gray-600 mb-1 capitalize">{location.type}</p>
                               {location.address && (
                                 <p className="text-xs text-gray-500">{location.address}</p>
@@ -2180,6 +2192,7 @@ export default function ExploreScreen() {
                       (item as any).productName ||
                       (item as any).name ||
                       t('PRODUCT_FALLBACK');
+                    const previewImage = item.photo || item.product?.image || null;
                     return (
                       <div
                         key={item.id || item._id}
@@ -2190,27 +2203,46 @@ export default function ExploreScreen() {
                         }}
                         className="bg-white rounded-lg p-3 sm:p-4 border border-gray-200 hover:border-green-600 hover:shadow-md cursor-pointer transition-all"
                       >
-                        <div className="flex justify-between items-start mb-1.5 sm:mb-2">
-                          <div className="flex-1 min-w-0">
-                            <h3 className="text-base sm:text-lg text-gray-900 font-medium truncate">{productName}</h3>
-                            <p className="text-xl sm:text-2xl text-green-600 font-semibold mt-1">
-                              {formatPrice(item.price)} TL{' '}
-                              <span className="text-xs sm:text-sm text-gray-500 font-normal">/ {item.unit}</span>
-                            </p>
+                        <div className="flex gap-3">
+                          <div className="relative w-14 h-14 sm:w-16 sm:h-16 rounded-lg bg-gray-100 flex items-center justify-center flex-shrink-0 overflow-hidden">
+                            {previewImage ? (
+                              <img
+                                src={previewImage}
+                                alt={productName}
+                                className="w-full h-full object-cover"
+                                referrerPolicy="no-referrer"
+                                onError={(e) => {
+                                  (e.target as HTMLImageElement).style.display = 'none';
+                                  (e.target as HTMLImageElement).nextElementSibling?.classList.remove('hidden');
+                                }}
+                              />
+                            ) : null}
+                            <Package className={`w-6 h-6 sm:w-8 sm:h-8 text-gray-400 ${previewImage ? 'hidden' : ''}`} />
                           </div>
-                          {isToday(item.created_at || item.createdAt || '') && (
-                            <Badge className="bg-green-600 ml-2 flex-shrink-0 text-xs">{t('TODAY')}</Badge>
-                          )}
-                        </div>
-                        <div className="flex items-center gap-3 sm:gap-4 text-xs sm:text-sm text-gray-500">
-                          <span className="flex items-center gap-1 min-w-0 flex-1">
-                            <MapPin className="w-3 h-3 sm:w-4 sm:h-4 flex-shrink-0" />
-                            <span className="truncate">{item.location?.name || t('LOCATION_MISSING')}</span>
-                          </span>
-                          <span className="flex items-center gap-1 flex-shrink-0">
-                            <Clock className="w-3 h-3 sm:w-4 sm:h-4" />
-                            {formatTimeAgo(item.created_at || item.createdAt || '')}
-                          </span>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex justify-between items-start mb-1.5 sm:mb-2">
+                              <div className="flex-1 min-w-0">
+                                <h3 className="text-base sm:text-lg text-gray-900 font-medium truncate">{productName}</h3>
+                                <p className="text-xl sm:text-2xl text-green-600 font-semibold mt-1">
+                                  {formatPrice(item.price)} TL{' '}
+                                  <span className="text-xs sm:text-sm text-gray-500 font-normal">/ {item.unit}</span>
+                                </p>
+                              </div>
+                              {isToday(item.created_at || item.createdAt || '') && (
+                                <Badge className="bg-green-600 ml-2 flex-shrink-0 text-xs">{t('TODAY')}</Badge>
+                              )}
+                            </div>
+                            <div className="flex items-center gap-3 sm:gap-4 text-xs sm:text-sm text-gray-500">
+                              <span className="flex items-center gap-1 min-w-0 flex-1">
+                                <MapPin className="w-3 h-3 sm:w-4 sm:h-4 flex-shrink-0" />
+                                <span className="truncate">{formatLocationDisplayName(item.location?.name) || t('LOCATION_MISSING')}</span>
+                              </span>
+                              <span className="flex items-center gap-1 flex-shrink-0">
+                                <Clock className="w-3 h-3 sm:w-4 sm:h-4" />
+                                {formatTimeAgo(item.created_at || item.createdAt || '')}
+                              </span>
+                            </div>
+                          </div>
                         </div>
                       </div>
                     );
@@ -2247,18 +2279,19 @@ export default function ExploreScreen() {
                       >
                         <div className="flex gap-3 sm:gap-4">
                           <div className="w-14 h-14 sm:w-16 sm:h-16 rounded-lg bg-gray-100 flex items-center justify-center flex-shrink-0 overflow-hidden">
-                            {item.product?.image ? (
+                            {(item.photo || item.product?.image) ? (
                               <img 
-                                src={item.product.image} 
+                                src={item.photo || item.product?.image} 
                                 alt={fallbackProductName}
                                 className="w-full h-full object-cover"
+                                referrerPolicy="no-referrer"
                                 onError={(e) => {
                                   (e.target as HTMLImageElement).style.display = 'none';
                                   (e.target as HTMLImageElement).nextElementSibling?.classList.remove('hidden');
                                 }}
                               />
                             ) : null}
-                            <Package className={`w-6 h-6 sm:w-8 sm:h-8 text-gray-400 ${item.product?.image ? 'hidden' : ''}`} />
+                            <Package className={`w-6 h-6 sm:w-8 sm:h-8 text-gray-400 ${(item.photo || item.product?.image) ? 'hidden' : ''}`} />
                           </div>
                           <div className="flex-1 min-w-0">
                             <div className="flex justify-between items-start mb-1.5 sm:mb-2">
@@ -2277,7 +2310,7 @@ export default function ExploreScreen() {
                               <div className="flex items-center gap-3 sm:gap-4 text-xs sm:text-sm text-gray-500 mb-1.5 sm:mb-2">
                                 <span className="flex items-center gap-1 min-w-0 flex-1">
                                   <MapPin className="w-3 h-3 sm:w-4 sm:h-4 flex-shrink-0" />
-                                  <span className="truncate">{item.location?.name || t('LOCATION_MISSING')}</span>
+                                  <span className="truncate">{formatLocationDisplayName(item.location?.name) || t('LOCATION_MISSING')}</span>
                                 </span>
                                 <span className="flex items-center gap-1 flex-shrink-0">
                                   <Clock className="w-3 h-3 sm:w-4 sm:h-4" />

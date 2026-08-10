@@ -1,17 +1,30 @@
 import { useEffect, useState, useRef, useMemo } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { MapPin, Navigation } from 'lucide-react';
 import { Badge } from '../../ui/badge';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '../../ui/sheet';
 import { Button } from '../../ui/button';
-import { MapContainer, TileLayer, Marker, Popup, useMap, Circle } from 'react-leaflet';
+import { MapContainer, TileLayer, Marker, Popup, useMap, Circle, ZoomControl } from 'react-leaflet';
 import L from 'leaflet';
-import { pricesAPI } from '../../../services/supabase-api';
+import { merchantProductsAPI, pricesAPI } from '../../../services/supabase-api';
 import { useGeolocation } from '../../../../src/hooks/useGeolocation';
 import { useAuth } from '../../../contexts/AuthContext';
 import { toast } from 'sonner';
 import { searchNearbyPlaces } from '../../../utils/places';
 import { isWeb } from '../../../../src/utils/capacitor';
+import { normalizePriceCoordinates, parseLatLng } from '../../../lib/price-coordinates';
+import { geocodeMerchantShopAddress } from '../../../lib/merchant-shop-coords';
+import { calculateDistanceKm } from '../../../lib/shopping-list';
+
+/** Cached once — recreating L.icon on every React render was costly. */
+const userLocationIcon = L.icon({
+  iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-blue.png',
+  shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png',
+  iconSize: [25, 41],
+  iconAnchor: [12, 41],
+  popupAnchor: [1, -34],
+  shadowSize: [41, 41],
+});
 
 // Fix for default marker icons in React-Leaflet
 delete (L.Icon.Default.prototype as any)._getIconUrl;
@@ -25,17 +38,25 @@ L.Icon.Default.mergeOptions({
 const priceIconCache = new Map<string, L.DivIcon>();
 const businessIconCache = new Map<string, L.DivIcon>();
 
-// Custom marker icon for prices (cached)
-const createPriceIcon = (price: string) => {
-  if (priceIconCache.has(price)) {
-    return priceIconCache.get(price)!;
+const escapeHtmlAttr = (value: string) =>
+  String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+    .replace(/</g, '&lt;');
+
+/** One pin per shared consumer location — shows how many reports. */
+const createLocationClusterIcon = (count: number) => {
+  const label = count > 99 ? '99+' : String(Math.max(1, count));
+  if (priceIconCache.has(`loc:${label}`)) {
+    return priceIconCache.get(`loc:${label}`)!;
   }
-  
+
   const icon = L.divIcon({
-    className: 'custom-price-marker',
+    className: 'custom-location-marker',
     html: `
       <div style="
-        background: #22c55e;
+        background: #16a34a;
         color: white;
         border-radius: 50%;
         width: 40px;
@@ -43,31 +64,91 @@ const createPriceIcon = (price: string) => {
         display: flex;
         align-items: center;
         justify-content: center;
-        font-weight: bold;
-        font-size: 12px;
-        border: 3px solid white;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+        font-weight: 700;
+        font-size: 13px;
+        border: 2px solid white;
         cursor: pointer;
-      ">
-        ${price}
-      </div>
+        will-change: transform;
+      ">${label}</div>
     `,
     iconSize: [40, 40],
     iconAnchor: [20, 20],
     popupAnchor: [0, -20],
   });
-  
-  priceIconCache.set(price, icon);
+
+  priceIconCache.set(`loc:${label}`, icon);
   return icon;
 };
 
-// Custom marker icon for businesses/places (cached, single instance)
+/** Circular shop pin using merchant logo (fallback: initial). */
+const createShopLogoIcon = (logoUrl: string | null | undefined, title: string) => {
+  const safeUrl =
+    logoUrl && /^https?:\/\//i.test(String(logoUrl).trim()) ? String(logoUrl).trim() : null;
+  const initial = (title || 'E').trim().charAt(0).toUpperCase() || 'E';
+  const cacheKey = `shop-logo:${safeUrl || ''}:${initial}`;
+  if (businessIconCache.has(cacheKey)) {
+    return businessIconCache.get(cacheKey)!;
+  }
+
+  const inner = safeUrl
+    ? `<img src="${escapeHtmlAttr(safeUrl)}" alt="" style="width:100%;height:100%;object-fit:cover;border-radius:50%;display:block" referrerpolicy="no-referrer" />`
+    : `<span style="font-size:18px;font-weight:700;color:#1d4ed8;line-height:1">${escapeHtmlAttr(initial)}</span>`;
+
+  const icon = L.divIcon({
+    className: 'custom-shop-logo-marker',
+    html: `
+      <div style="
+        width: 44px;
+        height: 44px;
+        border-radius: 50%;
+        background: #ffffff;
+        border: 2px solid #2563eb;
+        overflow: hidden;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+        will-change: transform;
+      ">${inner}</div>
+    `,
+    iconSize: [44, 44],
+    iconAnchor: [22, 22],
+    popupAnchor: [0, -22],
+  });
+
+  businessIconCache.set(cacheKey, icon);
+  return icon;
+};
+
+type MapPin = {
+  id: string;
+  lat: number;
+  lng: number;
+  kind: 'shop' | 'location';
+  title: string;
+  subtitle?: string;
+  label: string;
+  items: any[];
+  logoUrl?: string | null;
+  merchantId?: string;
+};
+
+const consumerLocationKey = (price: any): string => {
+  const locId = price.location_id || price.location?.id;
+  if (locId) return `loc:${locId}`;
+  const lat = Number(price.lat);
+  const lng = Number(price.lng);
+  // ~100m grid — same spot shares one pin
+  return `geo:${lat.toFixed(3)},${lng.toFixed(3)}`;
+};
+
+// Custom marker icon for Google Places businesses (cached, single instance)
 const createBusinessIcon = () => {
   const cacheKey = 'business-icon';
   if (businessIconCache.has(cacheKey)) {
     return businessIconCache.get(cacheKey)!;
   }
-  
+
   const icon = L.divIcon({
     className: 'custom-business-marker',
     html: `
@@ -75,37 +156,47 @@ const createBusinessIcon = () => {
         background: #3b82f6;
         color: white;
         border-radius: 8px;
-        width: 36px;
-        height: 36px;
+        width: 34px;
+        height: 34px;
         display: flex;
         align-items: center;
         justify-content: center;
         font-weight: bold;
-        font-size: 20px;
-        border: 3px solid white;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+        font-size: 18px;
+        border: 2px solid white;
         cursor: pointer;
+        will-change: transform;
       ">
         🏪
       </div>
     `,
-    iconSize: [36, 36],
-    iconAnchor: [18, 18],
-    popupAnchor: [0, -18],
+    iconSize: [34, 34],
+    iconAnchor: [17, 17],
+    popupAnchor: [0, -17],
   });
-  
+
   businessIconCache.set(cacheKey, icon);
   return icon;
 };
 
 // Component to center map on user location
-function MapCenter({ center, zoom }: { center: [number, number]; zoom?: number }) {
+function MapCenter({
+  center,
+  zoom,
+  suspend,
+}: {
+  center: [number, number];
+  zoom?: number;
+  /** When true (shop fit active), don't snap away from shop pins. */
+  suspend?: boolean;
+}) {
   const map = useMap();
   const prevCenterRef = useRef<[number, number] | null>(null);
   const prevZoomRef = useRef<number | undefined>(undefined);
   
   useEffect(() => {
     try {
+      if (suspend) return;
       // Validate center coordinates
       if (!center || !Array.isArray(center) || center.length !== 2) {
         console.error('❌ Invalid center coordinates:', center);
@@ -143,9 +234,8 @@ function MapCenter({ center, zoom }: { center: [number, number]; zoom?: number }
         });
         
         try {
-          // Disable animations on mobile for better performance (prevents ANR)
-          const isWebPlatform = isWeb();
-          const animateOptions = isWebPlatform ? { animate: true, duration: 0.5 } : { animate: false };
+          // Instant recenter — animated pans feel laggy on Android WebView
+          const animateOptions = { animate: false };
           
           if (zoom !== undefined && zoom >= 0 && zoom <= 20) {
             map.setView([lat, lng], zoom, animateOptions);
@@ -167,7 +257,53 @@ function MapCenter({ center, zoom }: { center: [number, number]; zoom?: number }
     } catch (error: any) {
       console.error('❌ MapCenter error:', error);
     }
-  }, [center, zoom, map]);
+  }, [center, zoom, map, suspend]);
+  return null;
+}
+
+/** Pull nearby esnaf shop pins into view (Meram etc. were off-screen at zoom 15). */
+function FitMapToShopPins({
+  shopPins,
+  userLocation,
+  onFitted,
+}: {
+  shopPins: MapPin[];
+  userLocation: [number, number] | null;
+  onFitted?: () => void;
+}) {
+  const map = useMap();
+  const lastKeyRef = useRef<string>('');
+
+  useEffect(() => {
+    if (!shopPins.length) return;
+    const key = `${shopPins.length}:${userLocation?.[0] ?? ''},${userLocation?.[1] ?? ''}:${shopPins.map((p) => p.id).join(',')}`;
+    if (lastKeyRef.current === key) return;
+
+    try {
+      const origin = userLocation
+        ? { lat: userLocation[0], lng: userLocation[1] }
+        : null;
+      const nearby = origin
+        ? shopPins.filter(
+            (s) => calculateDistanceKm(origin, { lat: s.lat, lng: s.lng }) <= 30
+          )
+        : shopPins;
+      const usePins = nearby.length > 0 ? nearby : shopPins;
+      const bounds = L.latLngBounds(usePins.map((p) => [p.lat, p.lng] as [number, number]));
+      if (userLocation) bounds.extend(userLocation);
+      map.fitBounds(bounds, {
+        padding: [56, 56],
+        maxZoom: 15,
+        animate: false,
+      });
+      lastKeyRef.current = key;
+      onFitted?.();
+      console.log('🗺️ Fitted map to shop pins:', usePins.map((p) => p.title));
+    } catch (err) {
+      console.warn('FitMapToShopPins failed:', err);
+    }
+  }, [shopPins, userLocation, map, onFitted]);
+
   return null;
 }
 
@@ -256,28 +392,56 @@ interface Business {
 }
 
 export default function MapScreen() {
+  const navigate = useNavigate();
   const { getCurrentPosition } = useGeolocation();
   const { user } = useAuth();
   const [searchParams] = useSearchParams();
   const [userLocation, setUserLocation] = useState<[number, number] | null>(null);
   const [prices, setPrices] = useState<Price[]>([]);
+  const [mapPins, setMapPins] = useState<MapPin[]>([]);
   const [selectedPrice, setSelectedPrice] = useState<Price | null>(null);
   const [productPhotos, setProductPhotos] = useState<Price[]>([]);
   const [isLoadingPhotos, setIsLoadingPhotos] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [businesses, setBusinesses] = useState<Business[]>([]);
   const [isLoadingBusinesses, setIsLoadingBusinesses] = useState(false);
-  const [showBusinesses, setShowBusinesses] = useState(true);
+  const [showBusinesses, setShowBusinesses] = useState(false);
   const [mapCenter, setMapCenter] = useState<[number, number]>([37.8667, 32.4833]); // Default: Konya
   const [mapZoom, setMapZoom] = useState(13);
+  const [selectedPin, setSelectedPin] = useState<MapPin | null>(null);
+  const [shopsFitted, setShopsFitted] = useState(false);
   const markerRefs = useRef<Record<string, any>>({});
   const mapRef = useRef<L.Map | null>(null);
   const hasFocusFromURL = useRef(false); // Track if we have focus coordinates from URL
   const focusedLocationRef = useRef<[number, number] | null>(null); // Store focused location coordinates
   const [mapError, setMapError] = useState<string | null>(null);
+  const [locationDenied, setLocationDenied] = useState(false);
 
   // State for filtering by product ID
   const [filterProductId, setFilterProductId] = useState<string | null>(null);
+
+  const isNativePlatform =
+    typeof window !== 'undefined' &&
+    !!(window as any).Capacitor?.isNativePlatform &&
+    (window as any).Capacitor.isNativePlatform();
+  const mapBottomChrome = isNativePlatform
+    ? 'calc(5.25rem + env(safe-area-inset-bottom, 0px) + 10px)'
+    : 'calc(5rem + env(safe-area-inset-bottom, 0px))';
+  const mapTopChrome = 'calc(64px + env(safe-area-inset-top, 0px))';
+
+  const visibleMapPins = useMemo(() => {
+    const isWebPlatform = isWeb();
+    const maxMarkers = isWebPlatform ? 200 : 50;
+    const shopPins = mapPins.filter((p) => p.kind === 'shop');
+    const locationPins = mapPins.filter((p) => p.kind === 'location');
+    const remaining = Math.max(0, maxMarkers - shopPins.length);
+    return [...shopPins, ...locationPins.slice(0, remaining)];
+  }, [mapPins]);
+
+  const shopPinsOnly = useMemo(
+    () => mapPins.filter((p) => p.kind === 'shop'),
+    [mapPins]
+  );
 
   // Check for focus location and product filter from URL params FIRST (before loading prices/location)
   useEffect(() => {
@@ -359,6 +523,7 @@ export default function MapScreen() {
     try {
       const position = await getCurrentPosition();
       if (position) {
+        setLocationDenied(false);
         const lat = position.latitude;
         const lng = position.longitude;
         
@@ -389,7 +554,10 @@ export default function MapScreen() {
       }
     } catch (error: any) {
       console.error('Failed to get user location:', error);
-      toast.error('Konum alınamadı');
+      const msg = String(error?.message || error || '');
+      if (/permission|denied|izin/i.test(msg)) {
+        setLocationDenied(true);
+      }
     }
   };
 
@@ -407,11 +575,19 @@ export default function MapScreen() {
       };
       
       if (filterProductId) {
-        requestParams.productId = filterProductId;
+        requestParams.product = filterProductId;
         console.log('🔍 Loading prices for product:', filterProductId);
       }
-      
-      const data = await pricesAPI.getAll(requestParams);
+
+      const [data, merchantShops] = await Promise.all([
+        pricesAPI.getAll(requestParams),
+        filterProductId
+          ? Promise.resolve([])
+          : merchantProductsAPI.getAllMerchantShops(100).catch((err) => {
+              console.warn('⚠️ Merchant shops for map failed:', err);
+              return [];
+            }),
+      ]);
       
       if (!Array.isArray(data)) {
         console.error('Invalid data format:', data);
@@ -421,70 +597,237 @@ export default function MapScreen() {
         return;
       }
       
-      // Filter prices that have coordinates (now normalized by API)
-      const pricesWithCoords = data.filter((price: any) => {
-        // Coordinates are now normalized by pricesAPI.getAll()
-        if (price.lat && price.lng) {
-          const lat = parseFloat(String(price.lat));
-          const lng = parseFloat(String(price.lng));
-          if (!isNaN(lat) && !isNaN(lng)) {
-            return true;
+      // Prefer API-normalized lat/lng; also parse POINT strings defensively.
+      const pricesWithCoords = data
+        .map((price: any) => normalizePriceCoordinates(price))
+        .filter((price: any) => {
+          if (price.lat != null && price.lng != null) {
+            const lat = parseFloat(String(price.lat));
+            const lng = parseFloat(String(price.lng));
+            return !isNaN(lat) && !isNaN(lng);
           }
-        }
-        return false;
-      });
+          return !!parseLatLng(price.coordinates) || !!parseLatLng(price.location?.coordinates);
+        });
       
       console.log(`📍 Found ${pricesWithCoords.length} prices with coordinates out of ${data.length} total`);
-      
-      // Group by product and keep only the cheapest price for each product
-      const cheapestByProduct: Record<string, Price> = {};
-      
+      console.log(`🏪 Merchant shops for map: ${Array.isArray(merchantShops) ? merchantShops.length : 0}`);
+
+      // Seed shop pins from merchant shops; prefer geocoded shop address over stale GPS.
+      const shopPinMap = new Map<string, MapPin>();
+      if (Array.isArray(merchantShops)) {
+        const shopEntries = await Promise.all(
+          merchantShops.map(async (shop: any) => {
+            const merchantId = String(shop?.id || shop?.merchant_id || '');
+            if (!merchantId) return null;
+            let coords = parseLatLng(shop.coordinates);
+            // Only geocode when coords are missing — map-open geocode for every shop was laggy.
+            if (!coords) {
+              const addressText = String(shop.shop_address || '').trim();
+              if (addressText.length > 3) {
+                try {
+                  const geo = await Promise.race([
+                    geocodeMerchantShopAddress({ address: addressText }),
+                    new Promise<null>((resolve) => setTimeout(() => resolve(null), 2500)),
+                  ]);
+                  if (geo?.coords) coords = geo.coords;
+                } catch (geoErr) {
+                  console.warn('Shop address geocode for map skipped:', geoErr);
+                }
+              }
+            }
+            if (!coords) return null;
+            return {
+              merchantId,
+              pin: {
+                id: `shop-${merchantId}`,
+                merchantId,
+                lat: coords.lat,
+                lng: coords.lng,
+                kind: 'shop' as const,
+                title: shop.name || 'Esnaf Dükkanı',
+                subtitle: shop.shop_address || '',
+                label: String(shop.productCount || ''),
+                logoUrl: shop.logoUrl || shop.avatar || null,
+                items: [] as any[],
+              },
+            };
+          })
+        );
+        for (const entry of shopEntries) {
+          if (!entry) continue;
+          shopPinMap.set(entry.merchantId, entry.pin);
+        }
+      }
+
+      // Merchant products → one pin per shop (same address).
+      // Consumer prices → one pin per shared location (not one pin per product).
+      const shopBuckets = new Map<string, any[]>();
+      const locationBuckets = new Map<string, any[]>();
+
+      const isMerchantPrice = (price: any) => {
+        const u = price.user || {};
+        if (u.is_merchant === true || u.is_merchant === 'true' || u.is_merchant === 1) return true;
+        // Merchant feed sync creates locations with type=market at the shop address.
+        const locType = String(price.location?.type || '').toLowerCase();
+        if (locType === 'market') return true;
+        if (u.shop_name || u.shop_address) return true;
+        return false;
+      };
+
       pricesWithCoords.forEach((price: any) => {
         try {
-          const productId = price.product?.id || price.product?._id || '';
-          if (!productId) return;
-          
           const currentPrice = parseFloat(String(price.price));
           if (isNaN(currentPrice)) return;
-          
-          if (!cheapestByProduct[productId]) {
-            cheapestByProduct[productId] = price;
-          } else {
-            const existingPrice = parseFloat(String(cheapestByProduct[productId].price));
-            if (!isNaN(existingPrice) && currentPrice < existingPrice) {
-              cheapestByProduct[productId] = price;
+
+          if (isMerchantPrice(price)) {
+            const shopKey = String(price.user_id || price.user?.id || price.location_id || '');
+            if (!shopKey) return;
+            const list = shopBuckets.get(shopKey) || [];
+            // Keep cheapest row per product inside the same shop
+            const productId = price.product?.id || price.product?._id || price.product_id || '';
+            const existingIdx = list.findIndex(
+              (p: any) => (p.product?.id || p.product?._id || p.product_id) === productId
+            );
+            if (existingIdx >= 0) {
+              const existing = parseFloat(String(list[existingIdx].price));
+              if (!isNaN(existing) && currentPrice < existing) {
+                list[existingIdx] = price;
+              }
+            } else {
+              list.push(price);
             }
+            shopBuckets.set(shopKey, list);
+            return;
           }
+
+          const locKey = consumerLocationKey(price);
+          const list = locationBuckets.get(locKey) || [];
+          const productId = price.product?.id || price.product?._id || price.product_id || '';
+          const existingIdx = productId
+            ? list.findIndex(
+                (p: any) => (p.product?.id || p.product?._id || p.product_id) === productId
+              )
+            : -1;
+          if (existingIdx >= 0) {
+            const existing = parseFloat(String(list[existingIdx].price));
+            if (!isNaN(existing) && currentPrice < existing) {
+              list[existingIdx] = price;
+            }
+          } else {
+            list.push(price);
+          }
+          locationBuckets.set(locKey, list);
         } catch (e) {
           console.error('Error processing price:', e, price);
         }
       });
-      
-      // Convert to array and set prices
-      const cheapestPrices = Object.values(cheapestByProduct);
-      setPrices(cheapestPrices);
-      
-      // If we have prices, center map on them (only if no user location and no focus from URL)
-      if (cheapestPrices.length > 0 && !userLocation && !hasFocusFromURL.current && !focusedLocationRef.current) {
-        const firstPrice = cheapestPrices[0];
-        if (firstPrice.lat && firstPrice.lng) {
-          console.log('📍 Centering map on first price location:', { lat: firstPrice.lat, lng: firstPrice.lng });
-          setMapCenter([firstPrice.lat, firstPrice.lng]);
+
+      shopBuckets.forEach((items, shopKey) => {
+        if (!items.length) return;
+        // Prefer shared location coords so all products sit on the same shop pin.
+        const anchor = items[0];
+        let lat = Number(anchor.lat);
+        let lng = Number(anchor.lng);
+        const fromLoc = parseLatLng(anchor.location?.coordinates);
+        if (fromLoc) {
+          lat = fromLoc.lat;
+          lng = fromLoc.lng;
         }
+        if (isNaN(lat) || isNaN(lng)) return;
+
+        const shopName =
+          anchor.user?.shop_name ||
+          anchor.location?.name ||
+          anchor.user?.name ||
+          'Esnaf Dükkanı';
+        const logoUrl =
+          anchor.user?.shop_logo ||
+          anchor.user?.avatar ||
+          null;
+        const sortedItems = items.sort((a: any, b: any) => Number(a.price) - Number(b.price));
+        const existing = shopPinMap.get(shopKey);
+        if (existing) {
+          existing.items = sortedItems;
+          existing.label = String(sortedItems.length);
+          if (!existing.logoUrl && logoUrl) existing.logoUrl = logoUrl;
+          if (!existing.subtitle) {
+            existing.subtitle =
+              anchor.location?.address || anchor.user?.shop_address || anchor.location?.city || '';
+          }
+          if (existing.title === 'Esnaf Dükkanı' && shopName) existing.title = shopName;
+          // Prefer precise price/location coords when available
+          if (Number.isFinite(lat) && Number.isFinite(lng)) {
+            existing.lat = lat;
+            existing.lng = lng;
+          }
+        } else {
+          shopPinMap.set(shopKey, {
+            id: `shop-${shopKey}`,
+            merchantId: String(anchor.user_id || anchor.user?.id || shopKey),
+            lat,
+            lng,
+            kind: 'shop',
+            title: shopName,
+            subtitle: anchor.location?.address || anchor.user?.shop_address || anchor.location?.city || '',
+            label: `${sortedItems.length}`,
+            logoUrl,
+            items: sortedItems,
+          });
+        }
+      });
+
+      const pins: MapPin[] = Array.from(shopPinMap.values());
+
+      const locationLists = Array.from(locationBuckets.entries());
+      locationLists.forEach(([locKey, items]) => {
+        if (!items.length) return;
+        const anchor = items[0];
+        const lat = Number(anchor.lat);
+        const lng = Number(anchor.lng);
+        if (isNaN(lat) || isNaN(lng)) return;
+        const sorted = items.sort((a: any, b: any) => Number(a.price) - Number(b.price));
+        pins.push({
+          id: `location-${locKey}`,
+          lat,
+          lng,
+          kind: 'location',
+          title: anchor.location?.name || 'Paylaşılan konum',
+          subtitle:
+            anchor.location?.address ||
+            [anchor.location?.district, anchor.location?.city].filter(Boolean).join(', ') ||
+            '',
+          label: String(sorted.length),
+          items: sorted,
+        });
+      });
+
+      // Flat prices for sheets: all shop items + location items
+      const flatPrices: Price[] = [
+        ...Array.from(shopBuckets.values()).flat(),
+        ...Array.from(locationBuckets.values()).flat(),
+      ] as Price[];
+
+      setPrices(flatPrices);
+      setMapPins(pins);
+      
+      // If we have pins, center map on them (only if no user location and no focus from URL)
+      if (pins.length > 0 && !userLocation && !hasFocusFromURL.current && !focusedLocationRef.current) {
+        const firstShop = pins.find((p) => p.kind === 'shop') || pins[0];
+        console.log('📍 Centering map on first pin:', { lat: firstShop.lat, lng: firstShop.lng, kind: firstShop.kind, title: firstShop.title });
+        setMapCenter([firstShop.lat, firstShop.lng]);
       } else if (hasFocusFromURL.current || focusedLocationRef.current) {
         console.log('📍 Skipping map center update from loadPrices - focus from URL is active');
       }
       
-      if (cheapestPrices.length === 0) {
-        console.warn('⚠️ No prices with coordinates found');
-        console.log('📊 Data summary:', {
-          totalPrices: data.length,
-          pricesWithCoords: pricesWithCoords.length,
-          cheapestByProduct: Object.keys(cheapestByProduct).length,
-        });
-        toast.info('Haritada gösterilecek fiyat bulunamadı. Fiyatların konum bilgisi olmalı.');
+      if (pins.length === 0) {
+        console.warn('⚠️ No map pins found');
+        if (!locationDenied) {
+          toast.info('Haritada gösterilecek konumlu fiyat yok. Esnaf ürünleri dükkan adresinde pinlenir.', {
+            duration: 4000,
+          });
+        }
       } else {
-        console.log(`✅ Found ${cheapestPrices.length} cheapest prices to display on map`);
+        console.log(`✅ Map pins ready: ${pins.length} (${pins.filter((p) => p.kind === 'shop').length} shops, ${pins.filter((p) => p.kind === 'location').length} locations)`);
       }
     } catch (error: any) {
       console.error('Failed to load prices:', error);
@@ -505,7 +848,7 @@ export default function MapScreen() {
     try {
       setIsLoadingPhotos(true);
       const data = await pricesAPI.getAll({
-        productId,
+        product: productId,
         limit: 100,
       });
       
@@ -537,8 +880,9 @@ export default function MapScreen() {
       const result = await searchNearbyPlaces(
         latitude,
         longitude,
-        Math.min(searchRadiusMeters, isWebPlatform ? 5000 : 2000), // Reduced from 3000 to 2000 for mobile
-        ['store', 'shop', 'establishment', 'supermarket', 'grocery_or_supermarket', 'bakery', 'butcher', 'pharmacy']
+        Math.min(searchRadiusMeters, isWebPlatform ? 5000 : 3000),
+        // Legacy Places Nearby Search: only the first type is used (must be a valid Table A type).
+        ['store', 'supermarket', 'grocery_or_supermarket', 'bakery', 'pharmacy']
       );
       
       if (result.success && result.places) {
@@ -547,7 +891,7 @@ export default function MapScreen() {
         const limitedBusinesses = result.places.slice(0, maxBusinesses);
         setBusinesses(limitedBusinesses);
         console.log(`✅ Loaded ${limitedBusinesses.length} nearby businesses (platform: ${isWebPlatform ? 'web' : 'mobile'})`);
-      } else {
+      } else if (result.error && !/API key|REQUEST_DENIED|yüklenemiyor|not activated/i.test(result.error)) {
         console.warn('⚠️ Failed to load businesses:', result.error);
       }
     } catch (error: any) {
@@ -561,6 +905,7 @@ export default function MapScreen() {
     try {
       const position = await getCurrentPosition();
       if (position) {
+        setLocationDenied(false);
         const location: [number, number] = [position.latitude, position.longitude];
         setUserLocation(location);
         // Clear URL focus and focused location when user manually centers
@@ -571,16 +916,34 @@ export default function MapScreen() {
       } else {
         toast.error('Konum alınamadı');
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error('Failed to get user location:', error);
-      toast.error('Konum alınamadı');
+      const msg = String(error?.message || error || '');
+      if (/permission|denied|izin/i.test(msg)) {
+        setLocationDenied(true);
+        toast.error('Konum izni kapalı. Telefon Ayarları → Uygulamalar → esnaftaucuz → Konum iznini açın.', {
+          duration: 6000,
+        });
+      } else {
+        toast.error('Konum alınamadı');
+      }
     }
   };
 
   return (
-    <div className="min-h-screen bg-gray-200 relative overflow-hidden">
+    <div className="relative overflow-hidden bg-gray-200" style={{ height: `calc(100dvh - ${mapBottomChrome})` }}>
       {/* Custom Leaflet Popup Styles */}
       <style>{`
+        .leaflet-div-icon {
+          background: transparent !important;
+          border: none !important;
+        }
+        .custom-shop-logo-marker,
+        .custom-location-marker,
+        .custom-business-marker {
+          background: transparent !important;
+          border: none !important;
+        }
         .leaflet-popup-content-wrapper {
           border-radius: 12px;
           box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
@@ -598,11 +961,26 @@ export default function MapScreen() {
         .leaflet-popup-tip {
           background: white;
         }
+        /* Keep zoom above bottom tab bar */
+        .leaflet-bottom {
+          bottom: 12px !important;
+        }
+        .leaflet-control-zoom {
+          margin-bottom: 8px !important;
+          margin-right: 10px !important;
+        }
+        /* Skip redrawing SVG radius while dragging — big FPS win on Android WebView */
+        .leaflet-dragging .leaflet-overlay-pane {
+          visibility: hidden !important;
+        }
+        .leaflet-container {
+          background: #e5e7eb;
+        }
       `}</style>
       
-      {/* Map Header */}
-      <div className="absolute left-0 right-0 bg-white/95 backdrop-blur-sm px-3 py-2.5 z-[1000] border-b border-gray-200 flex items-center justify-between gap-2" style={{ top: 'env(safe-area-inset-top, 0px)', paddingTop: 'calc(0.625rem + env(safe-area-inset-top, 0px))' }}>
-        <h1 className="font-semibold text-base sm:text-lg flex-1 min-w-0 truncate whitespace-nowrap">En Düşük Fiyatlı Ürünler</h1>
+      {/* Map Header — solid bar so title does not wash out over map/zoom */}
+      <div className="absolute left-0 right-0 bg-white px-3 py-2.5 z-[1000] border-b border-gray-200 shadow-sm flex items-center justify-between gap-2" style={{ top: 'env(safe-area-inset-top, 0px)', paddingTop: 'calc(0.625rem + env(safe-area-inset-top, 0px))' }}>
+        <h1 className="font-semibold text-base sm:text-lg flex-1 min-w-0 truncate whitespace-nowrap text-gray-900">En Düşük Fiyatlı Ürünler</h1>
         <div className="flex items-center gap-1.5 flex-shrink-0">
           <Button
             variant={showBusinesses ? "default" : "outline"}
@@ -624,12 +1002,28 @@ export default function MapScreen() {
         </div>
       </div>
 
+      {locationDenied && (
+        <div
+          className="absolute left-3 right-3 z-[1000] rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900 shadow-sm"
+          style={{ top: 'calc(64px + env(safe-area-inset-top, 0px) + 8px)' }}
+        >
+          Konum izni kapalı. Yakındaki fiyatlar için izin verin veya sağ üstteki konum düğmesine dokunun.
+          <button
+            type="button"
+            className="ml-2 font-semibold text-amber-950 underline"
+            onClick={handleCenterOnUser}
+          >
+            Tekrar dene
+          </button>
+        </div>
+      )}
+
       {/* Map Container */}
       <div 
         className="w-full relative" 
             style={{
-          height: 'calc(100vh - 80px)', 
-          marginTop: 'calc(64px + env(safe-area-inset-top, 0px))',
+          height: `calc(100% - ${mapTopChrome})`, 
+          marginTop: mapTopChrome,
           zIndex: 1
         }}
       >
@@ -656,9 +1050,22 @@ export default function MapScreen() {
             zoom={mapZoom}
             style={{ height: '100%', width: '100%', zIndex: 1 }}
             scrollWheelZoom={true}
+            zoomControl={false}
+            preferCanvas={true}
+            fadeAnimation={false}
+            markerZoomAnimation={false}
+            zoomAnimation={!isNativePlatform}
+            inertia={!isNativePlatform}
             whenCreated={(mapInstance) => {
               try {
                 mapRef.current = mapInstance;
+                // Prefer snappy pans over fancy animations in WebView
+                mapInstance.options.fadeAnimation = false;
+                mapInstance.options.markerZoomAnimation = false;
+                if (isNativePlatform) {
+                  mapInstance.options.zoomAnimation = false;
+                  mapInstance.options.inertia = false;
+                }
                 console.log('✅ Map instance created successfully');
               } catch (error: any) {
                 console.error('❌ Error creating map instance:', error);
@@ -667,9 +1074,15 @@ export default function MapScreen() {
             }}
           >
             <TileLayer
-              attribution='&copy; <a href="https://www.google.com/maps">Google Maps</a>'
-              url="https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}"
+              attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+              url="https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png"
+              subdomains="abcd"
+              maxZoom={19}
+              updateWhenIdle={true}
+              updateWhenZooming={false}
+              keepBuffer={2}
             />
+            <ZoomControl position="bottomright" />
             
             {/* Auto-open popups component */}
             <AutoOpenPopups prices={prices} markerRefs={markerRefs} mapRef={mapRef} />
@@ -700,38 +1113,21 @@ export default function MapScreen() {
                 
                 return (
                   <>
-                    {/* Search Radius Circle */}
                     <Circle
                       center={userLocation}
                       radius={searchRadiusMeters}
                       pathOptions={{
                         color: '#22c55e',
                         fillColor: '#22c55e',
-                        fillOpacity: 0.1,
-                        weight: 2,
-                        dashArray: '5, 5',
+                        fillOpacity: 0.08,
+                        weight: 1.5,
                       }}
-                    >
-                      <Popup>
-                        <div className="text-center">
-                          <strong>Arama Çevresi</strong>
-                          <br />
-                          <span className="text-sm text-gray-600">{searchRadiusKm} km</span>
-                        </div>
-                      </Popup>
-                    </Circle>
+                    />
                     
                     {/* User Location Marker */}
                     <Marker
                       position={userLocation}
-                      icon={L.icon({
-                        iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-blue.png',
-                        shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png',
-                        iconSize: [25, 41],
-                        iconAnchor: [12, 41],
-                        popupAnchor: [1, -34],
-                        shadowSize: [41, 41]
-                      })}
+                      icon={userLocationIcon}
                     >
                       <Popup>
                         <div className="text-center">
@@ -749,130 +1145,41 @@ export default function MapScreen() {
               }
             })()}
 
-            {/* Price Markers - Only cheapest prices per product (platform-specific limits) */}
-            {(() => {
-              const isWebPlatform = isWeb();
-              const maxMarkers = isWebPlatform ? 200 : 20; // Reduced from 50 to 20 for mobile to prevent ANR
-              return prices.slice(0, maxMarkers).map((price) => {
-              // Validate coordinates before rendering marker
-              if (!price.lat || !price.lng) return null;
-              
-              const lat = typeof price.lat === 'number' ? price.lat : parseFloat(String(price.lat));
-              const lng = typeof price.lng === 'number' ? price.lng : parseFloat(String(price.lng));
+            {/* Price / Shop Markers */}
+            {visibleMapPins.map((pin) => {
+              const lat = pin.lat;
+              const lng = pin.lng;
               
               if (isNaN(lat) || isNaN(lng) || lat < -90 || lat > 90 || lng < -180 || lng > 180) {
-                console.warn('⚠️ Skipping invalid price coordinates:', { priceId: price.id, lat, lng });
+                console.warn('⚠️ Skipping invalid pin coordinates:', { pinId: pin.id, lat, lng });
                 return null;
               }
-              
-              const priceText = `${formatPrice(price.price)} ₺`;
-              const priceId = price.id || price._id || '';
+
+              const isShop = pin.kind === 'shop';
+              const icon = isShop
+                ? createShopLogoIcon(pin.logoUrl, pin.title)
+                : createLocationClusterIcon(pin.items.length || Number(pin.label) || 1);
               
               return (
                 <Marker
-                  key={priceId}
+                  key={pin.id}
                   ref={(ref) => {
                     if (ref) {
-                      markerRefs.current[priceId] = ref;
+                      markerRefs.current[pin.id] = ref;
                     }
                   }}
                   position={[lat, lng]}
-                  icon={createPriceIcon(priceText)}
+                  icon={icon}
+                  zIndexOffset={isShop ? 600 : 200}
                   eventHandlers={{
-                    click: (e) => {
-                      try {
-                        // Debounce click handler to prevent rapid clicks from causing ANR
-                        const marker = e.target;
-                        // Use setTimeout with 0ms to defer to next event loop (prevents blocking)
-                        setTimeout(() => {
-                          try {
-                            // Open popup when marker is clicked
-                            if (marker && marker.isPopupOpen()) {
-                              marker.closePopup();
-                            } else {
-                              marker.openPopup();
-                            }
-                            // Also open bottom sheet with details
-                            setSelectedPrice(price);
-                          } catch (error: any) {
-                            console.error('❌ Error handling marker click:', error);
-                          }
-                        }, 0);
-                      } catch (error: any) {
-                        console.error('❌ Error in click handler:', error);
-                      }
+                    click: () => {
+                      setSelectedPin(pin);
+                      setSelectedPrice(null);
                     },
                   }}
-                >
-                  <Popup 
-                    autoClose={false} 
-                    closeOnClick={false} 
-                    className="custom-popup"
-                  >
-                    <div className="min-w-[200px] max-w-[280px]">
-                      {/* Header with product name */}
-                      <div className="mb-3 pb-2 border-b border-gray-200">
-                        <div className="font-bold text-lg text-green-700 mb-1">
-                          {price.product.name}
-                        </div>
-                        <div className="text-xs text-gray-500">
-                          {price.product.category}
-                        </div>
-                      </div>
-                      
-                      {/* Price section */}
-                      <div className="mb-3">
-                        <div className="text-2xl font-bold text-green-600 mb-1">
-                          {priceText}
-                        </div>
-                        <div className="text-sm text-gray-600">
-                          / {price.unit}
-                        </div>
-                      </div>
-                      
-                      {/* Badge */}
-                      <div className="mb-3">
-                        <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-semibold bg-yellow-100 text-yellow-800 border border-yellow-300">
-                          ⭐ En Düşük Fiyat
-                        </span>
-                        {(price.isVerified || price.is_verified) && (
-                          <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-semibold bg-green-100 text-green-800 border border-green-300 ml-2">
-                            ✓ Doğrulanmış
-                          </span>
-                        )}
-                      </div>
-                      
-                      {/* Location */}
-                      <div className="mb-3 pb-2 border-b border-gray-200">
-                        <div className="flex items-center gap-2 text-sm text-gray-700">
-                          <MapPin className="w-4 h-4 text-gray-500" />
-                          <span className="font-medium">{price.location.name}</span>
-                        </div>
-                        {price.location.city && (
-                          <div className="text-xs text-gray-500 mt-1 ml-6">
-                            {price.location.city}
-                            {price.location.district && `, ${price.location.district}`}
-                          </div>
-                        )}
-                      </div>
-                      
-                      {/* Action button */}
-                      <button
-                        onClick={async () => {
-                          setSelectedPrice(price);
-                          // Load all photos for this product
-                          await loadProductPhotos(price.product.id || price.product._id || '');
-                        }}
-                        className="w-full mt-2 px-4 py-2 bg-green-600 hover:bg-green-700 text-white text-sm font-semibold rounded-lg transition-colors"
-                      >
-                        Detayları Gör
-                      </button>
-                    </div>
-                  </Popup>
-                </Marker>
+                />
               );
-              });
-            })()}
+            })}
 
             {/* Business/Place Markers (platform-specific limits) */}
             {showBusinesses && (() => {
@@ -945,31 +1252,6 @@ export default function MapScreen() {
                           </span>
                         </div>
                       )}
-                      
-                      {/* Types */}
-                      {business.types && business.types.length > 0 && (
-                        <div className="mb-3">
-                          <div className="text-xs text-gray-500">
-                            {business.types.slice(0, 3).map((type, idx) => {
-                              const typeLabels: Record<string, string> = {
-                                'store': 'Mağaza',
-                                'shop': 'Dükkan',
-                                'establishment': 'İşletme',
-                                'supermarket': 'Süpermarket',
-                                'grocery_or_supermarket': 'Market',
-                                'bakery': 'Fırın',
-                                'butcher': 'Kasap',
-                                'pharmacy': 'Eczane',
-                              };
-                              return (
-                                <span key={idx} className="inline-block mr-1">
-                                  {typeLabels[type] || type}
-                                </span>
-                              );
-                            }).join(', ')}
-                          </div>
-                        </div>
-                      )}
                     </div>
                   </Popup>
                 </Marker>
@@ -977,17 +1259,105 @@ export default function MapScreen() {
               });
             })()}
 
-            <MapCenter center={mapCenter} zoom={mapZoom} />
+            <MapCenter center={mapCenter} zoom={mapZoom} suspend={shopsFitted} />
+            <FitMapToShopPins
+              shopPins={shopPinsOnly}
+              userLocation={userLocation}
+              onFitted={() => setShopsFitted(true)}
+            />
           </MapContainer>
         )}
       </div>
 
-      {/* Bottom Sheet */}
+      {/* Pin list bottom sheet (shop or clustered location) */}
+      {selectedPin && !selectedPrice && (
+        <Sheet open={!!selectedPin} onOpenChange={(open) => !open && setSelectedPin(null)}>
+          <SheetContent side="bottom" className="h-[55vh]">
+            <SheetHeader>
+              <SheetTitle className="flex items-center gap-2">
+                {selectedPin.kind === 'shop' && selectedPin.logoUrl ? (
+                  <img
+                    src={selectedPin.logoUrl}
+                    alt=""
+                    className="w-8 h-8 rounded-full object-cover"
+                    referrerPolicy="no-referrer"
+                  />
+                ) : null}
+                <span className="truncate">{selectedPin.title}</span>
+              </SheetTitle>
+            </SheetHeader>
+            <div className="py-3 space-y-3 overflow-y-auto h-[calc(55vh-5rem)]">
+              {selectedPin.subtitle ? (
+                <div className="text-xs text-gray-500 flex items-start gap-1 px-1">
+                  <MapPin className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" />
+                  <span>{selectedPin.subtitle}</span>
+                </div>
+              ) : null}
+              {selectedPin.kind === 'shop' && selectedPin.merchantId ? (
+                <Button
+                  className="w-full bg-blue-600 hover:bg-blue-700"
+                  onClick={() => navigate(`/app/merchant-shop/${selectedPin.merchantId}`)}
+                >
+                  Dükkanı aç
+                </Button>
+              ) : null}
+              <div className="text-sm font-medium text-gray-700 px-1">
+                {selectedPin.kind === 'shop'
+                  ? `Ürünler (${selectedPin.items.length})`
+                  : `Bu konumdaki paylaşımlar (${selectedPin.items.length})`}
+              </div>
+              {selectedPin.items.length === 0 ? (
+                <div className="text-sm text-gray-500 text-center py-6">
+                  {selectedPin.kind === 'shop'
+                    ? 'Ürün listesi yüklenemedi; dükkan sayfasından bakabilirsiniz.'
+                    : 'Bu konumda listelenecek fiyat yok.'}
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {selectedPin.items.map((item: any) => {
+                    const itemId = item.id || item._id || `${item.product_id}-${item.price}`;
+                    return (
+                      <button
+                        key={itemId}
+                        type="button"
+                        className="w-full text-left px-3 py-2.5 rounded-lg bg-white border border-gray-200 hover:border-green-500"
+                        onClick={() => {
+                          setSelectedPrice(item);
+                          void loadProductPhotos(
+                            item.product?.id || item.product?._id || item.product_id || ''
+                          );
+                        }}
+                      >
+                        <div className="font-medium text-gray-900 truncate">
+                          {item.product?.name || 'Ürün'}
+                        </div>
+                        <div className="text-green-600 font-semibold text-sm">
+                          {formatPrice(Number(item.price))} ₺
+                          <span className="text-gray-500 font-normal"> / {item.unit}</span>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </SheetContent>
+        </Sheet>
+      )}
+
+      {/* Bottom Sheet — single price detail */}
       {selectedPrice && (
-        <Sheet open={!!selectedPrice} onOpenChange={(open) => !open && setSelectedPrice(null)}>
+        <Sheet
+          open={!!selectedPrice}
+          onOpenChange={(open) => {
+            if (!open) {
+              setSelectedPrice(null);
+            }
+          }}
+        >
           <SheetContent side="bottom" className="h-[50vh]">
           <SheetHeader>
-              <SheetTitle>{selectedPrice.product.name}</SheetTitle>
+              <SheetTitle>{selectedPrice.product?.name || 'Ürün'}</SheetTitle>
           </SheetHeader>
             <div className="py-4 space-y-4 overflow-y-auto">
               {/* Main Price Card */}
@@ -995,10 +1365,10 @@ export default function MapScreen() {
                 <div className="flex justify-between items-start mb-4">
                   <div className="flex-1">
                     <h3 className="font-bold text-xl text-gray-900 mb-1">
-                      {selectedPrice.product.name}
+                      {selectedPrice.product?.name}
                     </h3>
                     <div className="text-xs text-gray-500 mb-3">
-                      {selectedPrice.product.category}
+                      {selectedPrice.product?.category}
                     </div>
                     <div className="flex items-baseline gap-2 mb-3">
                       <p className="text-3xl font-bold text-green-600">
@@ -1062,7 +1432,7 @@ export default function MapScreen() {
                     <div className="text-sm font-medium text-gray-700 mb-2">Bu Fiyatın Fotoğrafı</div>
                     <img
                       src={selectedPrice.photo}
-                      alt={selectedPrice.product.name}
+                      alt={selectedPrice.product?.name || 'Ürün'}
                       className="w-full h-48 object-cover rounded-lg border border-gray-200"
                       onError={(e) => {
                         // Hide image on error
@@ -1088,7 +1458,7 @@ export default function MapScreen() {
                         <div key={priceId} className="relative group">
                           <img
                             src={priceWithPhoto.photo}
-                            alt={selectedPrice.product.name}
+                            alt={selectedPrice.product?.name || 'Ürün'}
                             className="w-full h-32 object-cover rounded-lg border border-gray-200 cursor-pointer hover:opacity-80 transition-opacity"
                             onError={(e) => {
                               (e.target as HTMLImageElement).style.display = 'none';

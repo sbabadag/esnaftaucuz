@@ -2,17 +2,36 @@
 <html lang="tr">
   <head>
     <meta charset="UTF-8" />
+    <title>esnaftaucuz</title>
     <script>
-      // Project site: username.github.io/REPO/... — keep first path segment (repo name)
-      var pathSegmentsToKeep = 1;
-      var l = window.location;
-      l.replace(
-        l.protocol + '//' + l.hostname + (l.port ? ':' + l.port : '') +
-        l.pathname.split('/').slice(0, 1 + pathSegmentsToKeep).join('/') + '/?/' +
-        l.pathname.slice(1).split('/').slice(pathSegmentsToKeep).join('/').replace(/&/g, '~and~') +
-        (l.search ? '&' + l.search.slice(1).replace(/&/g, '~and~') : '') +
-        l.hash
-      );
+      // SPA fallback for static hosts that serve this file on deep links.
+      // Custom domain / site root: keep 0 path segments (NOT GitHub project pages).
+      // Old pathSegmentsToKeep=1 caused /app/?/&/~and~/… loops → URI Too Long.
+      (function () {
+        var pathSegmentsToKeep = 0;
+        var l = window.location;
+        // Already in query-redirect form — do not rewrite again (prevents loops).
+        if (l.search.indexOf('?/') === 0 || (l.search.length > 1 && l.search.charAt(1) === '/')) {
+          return;
+        }
+        var base =
+          l.protocol +
+          '//' +
+          l.hostname +
+          (l.port ? ':' + l.port : '') +
+          l.pathname.split('/').slice(0, 1 + pathSegmentsToKeep).join('/') +
+          '/?/';
+        var path = l.pathname
+          .slice(1)
+          .split('/')
+          .slice(pathSegmentsToKeep)
+          .join('/')
+          .replace(/&/g, '~and~');
+        var search = l.search
+          ? '&' + l.search.slice(1).replace(/&/g, '~and~')
+          : '';
+        l.replace(base + path + search + l.hash);
+      })();
     </script>
   </head>
   <body></body>

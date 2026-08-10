@@ -35,6 +35,8 @@ interface Price {
   is_verified: boolean;
   created_at: string;
   photo?: string;
+  /** All public image URLs for this price (merchant multi-photo). */
+  photos?: string[];
   user?: {
     id: string;
     name: string;
@@ -48,6 +50,37 @@ interface Price {
   lng?: number;
 }
 
+function normalizePricePhotos(row: any): string[] {
+  const fromArray = Array.isArray(row?.photos)
+    ? row.photos
+    : typeof row?.photos === 'string'
+      ? (() => {
+          try {
+            const parsed = JSON.parse(row.photos);
+            return Array.isArray(parsed) ? parsed : [];
+          } catch {
+            return [];
+          }
+        })()
+      : [];
+  const candidates = [
+    ...fromArray,
+    ...(Array.isArray(row?.merchantImages) ? row.merchantImages : []),
+    row?.photo,
+  ];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of candidates) {
+    const url = String(raw || '').trim();
+    if (!url || !/^https?:\/\//i.test(url)) continue;
+    if (/localhost|_capacitor_file_|127\.0\.0\.1|^blob:|^data:/i.test(url)) continue;
+    if (seen.has(url)) continue;
+    seen.add(url);
+    out.push(url);
+  }
+  return out;
+}
+
 const resolveMerchantRole = resolveMerchantRoleFromProfile;
 
 export default function ProductDetailScreen() {
@@ -56,6 +89,8 @@ export default function ProductDetailScreen() {
   const { user } = useAuth();
   const [product, setProduct] = useState<any>(null);
   const [prices, setPrices] = useState<Price[]>([]);
+  const [productGallery, setProductGallery] = useState<string[]>([]);
+  const [galleryIndex, setGalleryIndex] = useState(0);
   const [sortBy, setSortBy] = useState<'cheapest' | 'newest' | 'verified'>('cheapest');
   const [isLoading, setIsLoading] = useState(true);
   const [averagePrice, setAveragePrice] = useState(0);
@@ -80,6 +115,8 @@ export default function ProductDetailScreen() {
 
   useEffect(() => {
     if (id) {
+      setProductGallery([]);
+      setGalleryIndex(0);
       loadProductData();
       checkFavoriteStatus();
     }
@@ -179,6 +216,10 @@ export default function ProductDetailScreen() {
   const loadProductData = async () => {
     try {
       setIsLoading(true);
+      if (id) {
+        // Count toward "Bugün en çok bakılanlar" (client dedupes once per device/day).
+        void productsAPI.recordView(id);
+      }
       const sbUrl = import.meta.env.VITE_SUPABASE_URL as string;
       const sbKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
       const resolveAccessTokenQuick = async (): Promise<string | null> => {
@@ -215,9 +256,36 @@ export default function ProductDetailScreen() {
             : null;
         if (feedJson?.ok) {
           const productData = feedJson.product;
-          const rows = Array.isArray(feedJson.prices) ? feedJson.prices : [];
-          if (productData) setProduct(productData);
+          const rowsRaw = Array.isArray(feedJson.prices) ? feedJson.prices : [];
+          const rows = rowsRaw.map((row: any) => {
+            const photos = normalizePricePhotos(row);
+            return {
+              ...row,
+              price: typeof row?.price === 'number' ? row.price : Number(row?.price || 0),
+              photos,
+              photo: photos[0] || row?.photo || undefined,
+            };
+          });
+          const galleryFromFeed = Array.isArray(feedJson.all_photos)
+            ? feedJson.all_photos.map((u: unknown) => String(u || '').trim()).filter(Boolean)
+            : [];
+          const gallery =
+            galleryFromFeed.length > 0
+              ? galleryFromFeed
+              : Array.from(
+                  new Set(
+                    rows.flatMap((r: any) => (Array.isArray(r.photos) ? r.photos : r.photo ? [r.photo] : []))
+                  )
+                );
+          if (productData) {
+            setProduct({
+              ...productData,
+              image: gallery[0] || productData.image || null,
+            });
+          }
           setPrices(rows);
+          setProductGallery(gallery);
+          setGalleryIndex(0);
 
           if (rows.length > 0) {
             const total = rows.reduce((sum: number, p: Price) => sum + Number((p as any).price || 0), 0);
@@ -254,16 +322,24 @@ export default function ProductDetailScreen() {
       const controller = new AbortController();
       const tid = setTimeout(() => controller.abort(), 12000);
 
-      const [productResp, pricesResp] = await Promise.all([
+      const [productResp, pricesRespPrimary] = await Promise.all([
         fetch(
           `${sbUrl}/rest/v1/products?select=id,name,category,image,default_unit&id=eq.${id}&limit=1`,
           { headers: { ...headers, Accept: 'application/vnd.pgrst.object+json' }, signal: controller.signal }
         ),
         fetch(
-          `${sbUrl}/rest/v1/prices?select=id,price,unit,created_at,is_verified,photo,coordinates,product_id,location_id,user_id&product_id=eq.${id}&order=created_at.desc&limit=50`,
+          `${sbUrl}/rest/v1/prices?select=id,price,unit,created_at,is_verified,photo,photos,coordinates,product_id,location_id,user_id&product_id=eq.${id}&order=created_at.desc&limit=50`,
           { headers, signal: controller.signal }
         ),
       ]);
+      // Older DBs may not have prices.photos yet — retry without it.
+      let pricesResp = pricesRespPrimary;
+      if (!pricesRespPrimary.ok) {
+        pricesResp = await fetch(
+          `${sbUrl}/rest/v1/prices?select=id,price,unit,created_at,is_verified,photo,coordinates,product_id,location_id,user_id&product_id=eq.${id}&order=created_at.desc&limit=50`,
+          { headers, signal: controller.signal }
+        );
+      }
       clearTimeout(tid);
 
       const productData = productResp.ok ? await productResp.json().catch(() => null) : null;
@@ -280,26 +356,45 @@ export default function ProductDetailScreen() {
 
           const ctrl2 = new AbortController();
           const tid2 = setTimeout(() => ctrl2.abort(), 8000);
-          const [locResp, userResp] = await Promise.all([
+          const [locResp, userResp, merchantResp] = await Promise.all([
             locationIds.length
               ? fetch(`${sbUrl}/rest/v1/locations?select=id,name,type,city,district,coordinates&id=in.(${locationIds.join(',')})`, { headers, signal: ctrl2.signal })
               : Promise.resolve(null),
             userIds.length
               ? fetch(`${sbUrl}/rest/v1/users?select=id,name,avatar&id=in.(${userIds.join(',')})`, { headers, signal: ctrl2.signal })
               : Promise.resolve(null),
+            userIds.length
+              ? fetch(
+                  `${sbUrl}/rest/v1/merchant_products?select=merchant_id,product_id,images&product_id=eq.${id}&merchant_id=in.(${userIds.join(',')})`,
+                  { headers, signal: ctrl2.signal }
+                )
+              : Promise.resolve(null),
           ]);
           clearTimeout(tid2);
 
           const locations = locResp?.ok ? await locResp.json().catch(() => []) : [];
           const users = userResp?.ok ? await userResp.json().catch(() => []) : [];
+          const merchantRows = merchantResp?.ok ? await merchantResp.json().catch(() => []) : [];
           const locMap = new Map((locations || []).map((l: any) => [l.id, l]));
           const userMap = new Map((users || []).map((u: any) => [u.id, u]));
+          const merchantImageMap = new Map(
+            (Array.isArray(merchantRows) ? merchantRows : []).map((m: any) => [
+              `${m.merchant_id}:${m.product_id}`,
+              m.images,
+            ])
+          );
 
-          priceData = priceData.map((p: any) => ({
-            ...p,
-            location: locMap.get(p.location_id) || null,
-            user: userMap.get(p.user_id) || null,
-          }));
+          priceData = priceData.map((p: any) => {
+            const merchantImages = merchantImageMap.get(`${p.user_id}:${p.product_id || id}`);
+            const photos = normalizePricePhotos({ ...p, merchantImages });
+            return {
+              ...p,
+              location: locMap.get(p.location_id) || null,
+              user: userMap.get(p.user_id) || null,
+              photos,
+              photo: photos[0] || p.photo || undefined,
+            };
+          });
         }
       }
       // Fallback to client API when direct REST path returns empty (usually auth/RLS edge cases on mobile).
@@ -315,12 +410,31 @@ export default function ProductDetailScreen() {
       }
 
       // Keep numeric math stable even if backend returns numeric strings.
-      priceData = (priceData || []).map((row: any) => ({
-        ...row,
-        price: typeof row?.price === 'number' ? row.price : Number(row?.price || 0),
-      }));
+      // Also normalize photo lists when rows came from fallback API (no merchant join).
+      priceData = (priceData || []).map((row: any) => {
+        const photos = normalizePricePhotos(row);
+        return {
+          ...row,
+          price: typeof row?.price === 'number' ? row.price : Number(row?.price || 0),
+          photos,
+          photo: photos[0] || row?.photo || undefined,
+        };
+      });
 
       setPrices(priceData);
+
+      const gallery = Array.from(
+        new Set(
+          priceData.flatMap((r: any) =>
+            Array.isArray(r.photos) && r.photos.length > 0 ? r.photos : r.photo ? [r.photo] : []
+          )
+        )
+      );
+      setProductGallery(gallery);
+      setGalleryIndex(0);
+      if (gallery[0]) {
+        setProduct((prev: any) => (prev ? { ...prev, image: prev.image || gallery[0] } : prev));
+      }
 
       // Calculate average price
       if (priceData.length > 0) {
@@ -461,21 +575,21 @@ export default function ProductDetailScreen() {
     }
   };
 
-  const handlePhotoSelect = (file: File | null) => {
+  const handlePhotoSelect = (file: File | null, previewUrl?: string | null) => {
     if (file) {
       setPriceFormData({
         ...priceFormData,
         photo: file,
-        photoPreview: URL.createObjectURL(file),
+        photoPreview: previewUrl || URL.createObjectURL(file),
       });
     }
   };
 
   const handlePhotoFromSource = async (source: 'camera' | 'gallery') => {
     try {
-      const file = await pickSingleImage(source);
-      if (!file) return;
-      handlePhotoSelect(file);
+      const picked = await pickSingleImage(source);
+      if (!picked) return;
+      handlePhotoSelect(picked.file, picked.previewUrl);
     } catch (error: any) {
       console.error('Photo pick error:', error);
       toast.error(error?.message || 'Fotoğraf seçilemedi');
@@ -637,21 +751,67 @@ export default function ProductDetailScreen() {
 
       {/* Summary */}
       <div className="bg-white p-6 border-b border-gray-200" style={{ marginTop: 'calc(64px + env(safe-area-inset-top, 0px))' }}>
-        <div className="flex items-start gap-4">
-          <div className="w-20 h-20 rounded-lg bg-gray-100 flex items-center justify-center flex-shrink-0 overflow-hidden">
-            {product.image ? (
-              <img 
-                src={product.image} 
+        {(productGallery.length > 0 || product.image) && (
+          <div className="mb-4">
+            <div className="relative w-full aspect-[4/3] max-h-72 rounded-xl overflow-hidden bg-gray-100">
+              <img
+                src={productGallery[galleryIndex] || product.image}
                 alt={product.name}
                 className="w-full h-full object-cover"
                 onError={(e) => {
                   (e.target as HTMLImageElement).style.display = 'none';
-                  (e.target as HTMLImageElement).nextElementSibling?.classList.remove('hidden');
                 }}
               />
-            ) : null}
-            <Package className={`w-10 h-10 text-gray-400 ${product.image ? 'hidden' : ''}`} />
+              {productGallery.length > 1 && (
+                <>
+                  <button
+                    type="button"
+                    className="absolute left-2 top-1/2 -translate-y-1/2 w-9 h-9 rounded-full bg-black/50 text-white flex items-center justify-center"
+                    onClick={() =>
+                      setGalleryIndex((i) => (i - 1 + productGallery.length) % productGallery.length)
+                    }
+                    aria-label="Önceki fotoğraf"
+                  >
+                    ‹
+                  </button>
+                  <button
+                    type="button"
+                    className="absolute right-2 top-1/2 -translate-y-1/2 w-9 h-9 rounded-full bg-black/50 text-white flex items-center justify-center"
+                    onClick={() => setGalleryIndex((i) => (i + 1) % productGallery.length)}
+                    aria-label="Sonraki fotoğraf"
+                  >
+                    ›
+                  </button>
+                  <div className="absolute bottom-2 right-2 bg-black/60 text-white text-xs px-2 py-1 rounded-full">
+                    {galleryIndex + 1} / {productGallery.length}
+                  </div>
+                </>
+              )}
+            </div>
+            {productGallery.length > 1 && (
+              <div className="flex gap-2 mt-2 overflow-x-auto pb-1">
+                {productGallery.map((src, idx) => (
+                  <button
+                    key={`thumb-${idx}`}
+                    type="button"
+                    onClick={() => setGalleryIndex(idx)}
+                    className={`w-14 h-14 rounded-lg overflow-hidden flex-shrink-0 border-2 ${
+                      idx === galleryIndex ? 'border-green-600' : 'border-transparent'
+                    }`}
+                  >
+                    <img src={src} alt="" className="w-full h-full object-cover" />
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
+        )}
+        <div className="flex items-start gap-4">
+          {!(productGallery.length > 0 || product.image) && (
+            <div className="w-20 h-20 rounded-lg bg-gray-100 flex items-center justify-center flex-shrink-0 overflow-hidden">
+              <Package className="w-10 h-10 text-gray-400" />
+            </div>
+          )}
           <div className="flex-1">
             <div className="flex items-center justify-between mb-1">
               <div className="text-sm text-gray-600">Ortalama fiyat</div>
@@ -667,8 +827,13 @@ export default function ProductDetailScreen() {
               )}
             </div>
             <div className="text-3xl text-gray-900 mb-3">
-              {formatPrice(averagePrice)} TL
+              {prices.length === 0 || !averagePrice
+                ? '—'
+                : `${formatPrice(averagePrice)} TL`}
             </div>
+            {prices.length === 0 && (
+              <div className="text-sm text-gray-500">Henüz fiyat girilmemiş</div>
+            )}
             {cheapestToday && (
               <div className="text-sm text-green-600">
                 Bugün en ucuz: {formatPrice(cheapestToday.price)} TL
@@ -679,9 +844,17 @@ export default function ProductDetailScreen() {
       </div>
 
       {/* All Product Photos Section */}
-      {prices.some(p => p.photo) && (() => {
-        // Get photos sorted by current sort criteria
-        const photosWithPrices = prices.filter(p => p.photo);
+      {prices.some((p) => (p.photos && p.photos.length > 0) || p.photo) && (() => {
+        // Expand each price into all of its photos (merchant multi-image support).
+        const photosWithPrices = prices.flatMap((p) => {
+          const imgs =
+            Array.isArray(p.photos) && p.photos.length > 0
+              ? p.photos
+              : p.photo
+                ? [p.photo]
+                : [];
+          return imgs.map((src, idx) => ({ ...p, photo: src, _photoIndex: idx }));
+        });
         let sortedPhotos = [...photosWithPrices];
         
         // Sort photos based on current sortBy selection
@@ -720,8 +893,9 @@ export default function ProductDetailScreen() {
               {sortedPhotos.map((item) => {
                 const itemId = item.id || item._id || '';
                 const isVerified = item.is_verified || item.isVerified || false;
+                const photoKey = `${itemId}-${(item as any)._photoIndex ?? 0}`;
                 return (
-                  <div key={itemId} className="relative group">
+                  <div key={photoKey} className="relative group">
                     <img
                       src={item.photo}
                       alt={product.name}
@@ -850,10 +1024,10 @@ export default function ProductDetailScreen() {
               <div key={itemId} className="bg-white rounded-lg p-4 border border-gray-200">
                 <div className="flex gap-4">
                   <div className="relative w-20 h-20 sm:w-24 sm:h-24 rounded-lg bg-gray-100 flex items-center justify-center flex-shrink-0 overflow-hidden border-2 border-gray-200">
-                    {item.photo ? (
+                    {(item.photos && item.photos.length > 0) || item.photo ? (
                       <>
                         <img 
-                          src={item.photo} 
+                          src={(item.photos && item.photos[0]) || item.photo} 
                           alt={`${item.product?.name || product.name} - Kullanıcı fotoğrafı`}
                           className="w-full h-full object-cover"
                           title="Kullanıcı tarafından yüklenen fotoğraf"
@@ -864,11 +1038,11 @@ export default function ProductDetailScreen() {
                           }}
                         />
                         <div className="absolute top-1 right-1 bg-green-600 text-white text-[10px] px-1.5 py-0.5 rounded-full font-semibold shadow-md">
-                          📷
+                          {(item.photos && item.photos.length > 1) ? `+${item.photos.length}` : '📷'}
                         </div>
                       </>
                     ) : null}
-                    <Package className={`w-8 h-8 text-gray-400 ${item.photo ? 'hidden' : ''}`} />
+                    <Package className={`w-8 h-8 text-gray-400 ${((item.photos && item.photos.length > 0) || item.photo) ? 'hidden' : ''}`} />
                   </div>
                   <div className="flex-1 min-w-0">
                     <div className="flex justify-between items-start mb-3">
@@ -932,6 +1106,22 @@ export default function ProductDetailScreen() {
                           </AvatarFallback>
                         </Avatar>
                         <span className="text-sm text-gray-600">{item.user.name}</span>
+                      </div>
+                    )}
+
+                    {Array.isArray(item.photos) && item.photos.length > 1 && (
+                      <div className="flex gap-2 overflow-x-auto pb-2 mb-3 -mx-1 px-1">
+                        {item.photos.map((src, idx) => (
+                          <img
+                            key={`${itemId}-gallery-${idx}`}
+                            src={src}
+                            alt={`${product.name} ${idx + 1}`}
+                            className="w-16 h-16 rounded-md object-cover border border-gray-200 flex-shrink-0"
+                            onError={(e) => {
+                              (e.target as HTMLImageElement).style.display = 'none';
+                            }}
+                          />
+                        ))}
                       </div>
                     )}
 
@@ -1056,6 +1246,7 @@ export default function ProductDetailScreen() {
                       src={priceFormData.photoPreview}
                       alt="Preview"
                       className="w-full h-32 object-cover rounded"
+                      referrerPolicy="no-referrer"
                     />
                     <button
                       type="button"

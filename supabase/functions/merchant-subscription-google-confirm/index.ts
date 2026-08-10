@@ -265,7 +265,7 @@ Deno.serve(async (req) => {
     const { error: userUpdateError } = await service
       .from('users')
       .update({
-        is_merchant: true,
+        ...(isActive ? { is_merchant: true } : {}),
         merchant_subscription_status: merchantStatus,
         merchant_subscription_plan: planCode,
         merchant_subscription_fee_tl: monthlyEquivalentFeeTl,

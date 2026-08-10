@@ -68,3 +68,7 @@ keys/
 *.keystore
 **/key.properties
 
+# Cursor Android auto-install markers (runtime only)
+.cursor/pending-android-install
+.cursor/android-install-done
+

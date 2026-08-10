@@ -64,7 +64,7 @@ export async function safeGetSession(): Promise<{ accessToken: string; session: 
   try {
     const result = await Promise.race([
       supabase.auth.getSession(),
-      new Promise<null>((resolve) => setTimeout(() => resolve(null), 4000)),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), 1500)),
     ]);
     session = (result as any)?.data?.session || null;
     accessToken = session?.access_token || '';

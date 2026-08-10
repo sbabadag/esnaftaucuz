@@ -1,16 +1,17 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { useNavigate, useParams, useLocation, useSearchParams } from 'react-router-dom';
-import { ArrowLeft, Plus, Edit, Trash2, Camera, Image as ImageIcon, X, MapPin, Navigation, CheckCircle2, XCircle, Search, Eye } from 'lucide-react';
+import { ArrowLeft, Plus, Edit, Trash2, Camera, Image as ImageIcon, X, MapPin, Navigation, CheckCircle2, XCircle, Search, Eye, Phone, Clock, Settings2 } from 'lucide-react';
 import { Button } from '../ui/button';
 import { Input } from '../ui/input';
 import { Label } from '../ui/label';
 import { Badge } from '../ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '../ui/dialog';
 import { toast } from 'sonner';
-import { merchantProductsAPI, productsAPI, locationsAPI } from '../../services/supabase-api';
+import { merchantProductsAPI, productsAPI, ensureMerchantSubscriptionActive, syncMerchantProductToPriceFeed, invalidateMerchantCaches } from '../../services/supabase-api';
 import { useAuth } from '../../contexts/AuthContext';
-import { useGeolocation } from '../../../src/hooks/useGeolocation';
-import { forwardGeocode, reverseGeocode } from '../../utils/geocoding';
+import { forwardGeocode } from '../../utils/geocoding';
+import { resolveCatalogProduct } from '../../lib/product-name';
+import { readMerchantProfileFromUser, type MerchantProfileFields } from '../../lib/merchant-profile';
 import { supabase, safeGetSession } from '../../lib/supabase';
 import { v4 as uuidv4 } from 'uuid';
 import { Capacitor } from '@capacitor/core';
@@ -51,7 +52,6 @@ export default function MerchantShopScreen() {
   const [searchParams] = useSearchParams();
   const { merchantId } = useParams<{ merchantId: string }>();
   const { user } = useAuth();
-  const { getCurrentPosition } = useGeolocation();
   const [products, setProducts] = useState<MerchantProduct[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
@@ -68,7 +68,6 @@ export default function MerchantShopScreen() {
     coordinates: null as { lat: number; lng: number } | null,
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [isGettingLocation, setIsGettingLocation] = useState(false);
   const [userVerifications, setUserVerifications] = useState<Record<string, { is_verified: boolean }>>({});
   const [isLoadingAvailableProducts, setIsLoadingAvailableProducts] = useState(false);
   const [productSearchQuery, setProductSearchQuery] = useState('');
@@ -76,6 +75,7 @@ export default function MerchantShopScreen() {
   const [serverSearchResults, setServerSearchResults] = useState<Product[] | null>(null);
   const [isServerSearching, setIsServerSearching] = useState(false);
   const serverSearchSeq = useRef(0);
+  const [shopProfile, setShopProfile] = useState<MerchantProfileFields | null>(null);
 
   const isOwnShopById = merchantId === user?.id;
   const isMerchantOnboardingPending = (() => {
@@ -179,13 +179,14 @@ export default function MerchantShopScreen() {
     setServerSearchResults(null);
     const t = window.setTimeout(async () => {
       try {
-        const { data, error } = await supabase
+        const searchPromise = supabase
           .from('products')
           .select('id,name,category,image')
           .eq('is_active', true)
           .or(`name.ilike.%${safe}%,category.ilike.%${safe}%`)
           .order('name', { ascending: true })
           .limit(120);
+        const { data, error } = await withTimeout(searchPromise, 8000, 'product-search');
 
         if (serverSearchSeq.current !== seq) return;
         if (error) throw error;
@@ -193,21 +194,63 @@ export default function MerchantShopScreen() {
       } catch (e) {
         console.warn('Server product search failed:', e);
         if (serverSearchSeq.current !== seq) return;
+        // Fail open: typed name can still be saved as a new catalog product.
         setServerSearchResults([]);
       } finally {
         if (serverSearchSeq.current === seq) setIsServerSearching(false);
       }
     }, 320);
-    return () => clearTimeout(t);
+    return () => {
+      clearTimeout(t);
+      // Debounced timeout may never run; don't leave Ekle disabled.
+      if (serverSearchSeq.current === seq) {
+        setIsServerSearching(false);
+      }
+    };
   }, [productSearchQuery, isDialogOpen, editingProduct]);
 
   useEffect(() => {
     if (merchantId) {
       loadMerchantProducts();
+      loadShopProfile();
     } else {
       setIsLoading(false);
     }
   }, [merchantId]);
+
+  const loadShopProfile = async () => {
+    if (!merchantId) return;
+    try {
+      if (isOwnShopById && user) {
+        setShopProfile(readMerchantProfileFromUser(user));
+      }
+      const { data, error } = await supabase
+        .from('users')
+        .select('name, avatar, shop_logo, shop_phone, shop_whatsapp, shop_address, shop_description, shop_opening_hours, location, preferences')
+        .eq('id', merchantId)
+        .maybeSingle();
+      if (error) {
+        // Fallback if migration 046 not applied yet
+        const legacy = await supabase
+          .from('users')
+          .select('name, avatar, location, preferences')
+          .eq('id', merchantId)
+          .maybeSingle();
+        if (legacy.error) throw legacy.error;
+        if (legacy.data) setShopProfile(readMerchantProfileFromUser(legacy.data));
+        return;
+      }
+      if (data) setShopProfile(readMerchantProfileFromUser(data));
+    } catch (e) {
+      console.warn('Shop profile load failed:', e);
+    }
+  };
+
+  useEffect(() => {
+    if (isOwnShopById && user) {
+      setShopProfile(readMerchantProfileFromUser(user));
+    }
+  }, [isOwnShopById, user]);
 
   useEffect(() => {
     if (user && products.length > 0) {
@@ -411,39 +454,48 @@ export default function MerchantShopScreen() {
     }
   };
 
-  const handleImageSelect = (files: FileList | null) => {
+  const handleImageSelect = async (files: FileList | null) => {
     if (!files) return;
-    
+
     const newFiles: File[] = [];
     const newPreviews: string[] = [];
-    
-    Array.from(files).forEach((file) => {
-      if (file.type.startsWith('image/')) {
-        newFiles.push(file);
+
+    for (const file of Array.from(files)) {
+      if (!file.type.startsWith('image/')) continue;
+      newFiles.push(file);
+      try {
+        const dataUrl = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(String(reader.result || ''));
+          reader.onerror = () => reject(reader.error);
+          reader.readAsDataURL(file);
+        });
+        newPreviews.push(dataUrl);
+      } catch {
         newPreviews.push(URL.createObjectURL(file));
       }
-    });
-    
-    setFormData({
-      ...formData,
-      images: [...formData.images, ...newFiles],
-      imagePreviews: [...formData.imagePreviews, ...newPreviews],
-    });
+    }
+
+    setFormData((current) => ({
+      ...current,
+      images: newFiles.length ? [...current.images, ...newFiles] : current.images,
+      imagePreviews: [...current.imagePreviews, ...newPreviews],
+    }));
   };
 
   const handleNativeImagePick = async (source: 'camera' | 'gallery') => {
     try {
-      const files = await pickImages({
+      const picked = await pickImages({
         source,
         multiple: source === 'gallery',
       });
-      if (!files.length) return;
-      const newPreviews = files.map((file) => URL.createObjectURL(file));
-      setFormData({
-        ...formData,
-        images: [...formData.images, ...files],
-        imagePreviews: [...formData.imagePreviews, ...newPreviews],
-      });
+      if (!picked.length) return;
+      setFormData((current) => ({
+        ...current,
+        images: [...current.images, ...picked.map((p) => p.file)],
+        imagePreviews: [...current.imagePreviews, ...picked.map((p) => p.previewUrl)],
+      }));
+      toast.success(picked.length > 1 ? `${picked.length} fotoğraf eklendi` : 'Fotoğraf eklendi');
     } catch (error: any) {
       console.error('Image pick error:', error);
       toast.error(error?.message || 'Fotoğraf seçilemedi');
@@ -451,12 +503,30 @@ export default function MerchantShopScreen() {
   };
 
   const removeImage = (index: number) => {
-    const newImages = formData.images.filter((_, i) => i !== index);
+    const preview = formData.imagePreviews[index];
+    const isRemote = typeof preview === 'string' && /^https?:\/\//i.test(preview);
     const newPreviews = formData.imagePreviews.filter((_, i) => i !== index);
-    
-    // Revoke object URL to prevent memory leak
-    URL.revokeObjectURL(formData.imagePreviews[index]);
-    
+    let newImages = formData.images;
+    if (!isRemote && !(typeof preview === 'string' && preview.startsWith('data:'))) {
+      // legacy blob: mapping by non-remote index
+      let fileIdx = 0;
+      for (let i = 0; i < index; i++) {
+        const p = formData.imagePreviews[i];
+        if (!(typeof p === 'string' && /^https?:\/\//i.test(p))) fileIdx += 1;
+      }
+      newImages = formData.images.filter((_, i) => i !== fileIdx);
+      if (typeof preview === 'string' && preview.startsWith('blob:')) {
+        URL.revokeObjectURL(preview);
+      }
+    } else if (!isRemote) {
+      // data: preview — still drop matching file by non-remote index
+      let fileIdx = 0;
+      for (let i = 0; i < index; i++) {
+        const p = formData.imagePreviews[i];
+        if (!(typeof p === 'string' && /^https?:\/\//i.test(p))) fileIdx += 1;
+      }
+      newImages = formData.images.filter((_, i) => i !== fileIdx);
+    }
     setFormData({
       ...formData,
       images: newImages,
@@ -464,96 +534,310 @@ export default function MerchantShopScreen() {
     });
   };
 
-  const handleGetLocation = async () => {
-    try {
-      setIsGettingLocation(true);
-      toast.info('Konum alınıyor...');
-      const position = await getCurrentPosition();
-      
-      if (position) {
-        const { latitude, longitude } = position;
-        setFormData((prev) => ({
-          ...prev,
-          coordinates: { lat: latitude, lng: longitude },
-        }));
+  const parseCoordinates = (coords: any): { lat: number; lng: number } | null => {
+    if (!coords) return null;
 
-        const geo = await reverseGeocode(latitude, longitude);
-        if (geo.success && geo.address) {
-          setFormData((prev) => ({
-            ...prev,
-            locationName: geo.address!,
-          }));
-          toast.success(`Konum: ${geo.address}`);
-        } else {
-          setFormData((prev) => ({
-            ...prev,
-            locationName: `${latitude.toFixed(5)}, ${longitude.toFixed(5)}`,
-          }));
-          toast.success('Konum alındı');
-        }
-      } else {
-        toast.error('Konum alınamadı. Konum izni verildiğinden emin olun.');
+    if (typeof coords === 'string') {
+      const match = coords.match(/\(([^,]+),([^)]+)\)/);
+      if (match) {
+        return { lat: parseFloat(match[2]), lng: parseFloat(match[1]) };
       }
-    } catch (error: any) {
-      console.error('Location error:', error);
-      toast.error(error?.message || 'Konum alınamadı');
-    } finally {
-      setIsGettingLocation(false);
+    } else if (typeof coords === 'object') {
+      if (coords.lat != null && coords.lng != null) {
+        return { lat: Number(coords.lat), lng: Number(coords.lng) };
+      }
+      if (coords.x != null && coords.y != null) {
+        return { lat: Number(coords.y), lng: Number(coords.x) };
+      }
     }
+
+    return null;
   };
 
-  const handleLocationTextChange = async (text: string) => {
-    setFormData({ ...formData, locationName: text });
-    
-    if (text.trim().length > 5) {
+  const buildShopAddressText = (): string => {
+    const parts = [shopProfile?.address, shopProfile?.district, shopProfile?.city]
+      .map((part) => String(part || '').trim())
+      .filter(Boolean);
+    return parts.join(', ');
+  };
+
+  /** Use dükkan adresi — GPS/son ürün koordinatına göre değil, adrese göre pinle. */
+  const resolveShopLocationForSave = async (): Promise<{
+    locationId: string | null;
+    coords: { lat: number; lng: number } | null;
+  }> => {
+    const existingLocationId =
+      editingProduct?.location?.id ||
+      products.find((p) => p.location?.id)?.location?.id ||
+      null;
+
+    const shopAddress = buildShopAddressText();
+    const locationName =
+      shopProfile?.shopName?.trim() ||
+      user?.name?.trim() ||
+      'Esnaf Dükkanı';
+
+    // Prefer geocoded shop address so the map pin sits on Peri Sokak (etc.), not last GPS.
+    let coords: { lat: number; lng: number } | null = null;
+    if (shopAddress.length > 3) {
       try {
-        const result = await forwardGeocode(text);
-        if (result.success && result.coordinates) {
-          setFormData({
-            ...formData,
-            locationName: text,
-            coordinates: result.coordinates,
-          });
+        const geocoded = await withTimeout(
+          forwardGeocode(shopAddress),
+          6000,
+          'Dükkan adresi geocode zaman aşımı'
+        );
+        if (geocoded?.success && geocoded.coordinates) {
+          coords = geocoded.coordinates;
         }
-      } catch (error) {
-        console.error('Geocoding error:', error);
+      } catch (geoErr) {
+        console.warn('⚠️ Shop address geocode skipped:', geoErr);
       }
     }
+
+    if (!coords) {
+      coords =
+        parseCoordinates(editingProduct?.coordinates || editingProduct?.location?.coordinates) ||
+        (() => {
+          for (const product of products) {
+            const found = parseCoordinates(product.coordinates || product.location?.coordinates);
+            if (found) return found;
+          }
+          return null;
+        })() ||
+        parseCoordinates(user?.location?.coordinates) ||
+        null;
+    }
+
+    if (existingLocationId) {
+      // Keep the same location row but refresh coordinates/address when we have better data.
+      if (coords) {
+        try {
+          const sbUrl = import.meta.env.VITE_SUPABASE_URL as string;
+          const sbKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
+          let token = resolveAuthTokenFast();
+          if (!token) {
+            const { accessToken } = await safeGetSession();
+            token = accessToken || '';
+          }
+          if (sbUrl && sbKey && token) {
+            await fetch(`${sbUrl}/rest/v1/locations?id=eq.${encodeURIComponent(existingLocationId)}`, {
+              method: 'PATCH',
+              headers: {
+                apikey: sbKey,
+                Authorization: `Bearer ${token}`,
+                'Content-Type': 'application/json',
+                Prefer: 'return=minimal',
+              },
+              body: JSON.stringify({
+                name: locationName,
+                address: shopAddress || locationName,
+                coordinates: `(${coords.lng},${coords.lat})`,
+                city: shopProfile?.city || null,
+                district: shopProfile?.district || null,
+              }),
+            });
+          }
+        } catch (patchErr) {
+          console.warn('⚠️ Shop location coord refresh failed:', patchErr);
+        }
+      }
+      return { locationId: existingLocationId, coords };
+    }
+
+    if (coords) {
+      try {
+        const sbUrl = import.meta.env.VITE_SUPABASE_URL as string;
+        const sbKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
+        let token = resolveAuthTokenFast();
+        if (!token) {
+          const { accessToken } = await safeGetSession();
+          token = accessToken || '';
+        }
+        if (sbUrl && sbKey && token) {
+          const controller = new AbortController();
+          const tid = setTimeout(() => controller.abort(), 8000);
+          const resp = await fetch(`${sbUrl}/rest/v1/locations?select=id`, {
+            method: 'POST',
+            headers: {
+              apikey: sbKey,
+              Authorization: `Bearer ${token}`,
+              'Content-Type': 'application/json',
+              Prefer: 'return=representation',
+            },
+            body: JSON.stringify({
+              name: locationName,
+              type: 'market',
+              address: shopAddress || locationName,
+              coordinates: `(${coords.lng},${coords.lat})`,
+              city: shopProfile?.city || null,
+              district: shopProfile?.district || null,
+            }),
+            signal: controller.signal,
+          });
+          clearTimeout(tid);
+          if (resp.ok) {
+            const rows = await resp.json().catch(() => []);
+            const id = Array.isArray(rows) && rows[0]?.id ? String(rows[0].id) : null;
+            return { locationId: id, coords };
+          }
+          const body = await resp.text().catch(() => '');
+          console.warn('⚠️ Shop location REST create failed:', resp.status, body.slice(0, 160));
+        }
+      } catch (locationCreateError) {
+        console.warn('⚠️ Failed to create shop location:', locationCreateError);
+      }
+    }
+
+    // Still return coords so syncMerchantProductToPriceFeed can create location itself.
+    return { locationId: null, coords };
+  };
+
+  const normalizeImageList = (images: unknown): string[] => {
+    const toPublicUrl = (u: string): string | null => {
+      const value = u.trim();
+      if (!value) return null;
+      // Never persist Capacitor/local preview URLs — they only work on the picking device.
+      if (
+        /^blob:/i.test(value) ||
+        /^data:/i.test(value) ||
+        /^capacitor:/i.test(value) ||
+        /^content:/i.test(value) ||
+        /localhost|_capacitor_file_|127\.0\.0\.1/i.test(value)
+      ) {
+        return null;
+      }
+      if (/^https?:\/\//i.test(value)) return value;
+      const sbUrl = String(import.meta.env.VITE_SUPABASE_URL || '').replace(/\/$/, '');
+      if (!sbUrl) return null;
+      if (value.startsWith('/storage/')) return `${sbUrl}${value}`;
+      if (value.includes('price-photos/')) {
+        const path = value.replace(/^.*price-photos\//, '');
+        return `${sbUrl}/storage/v1/object/public/price-photos/${path}`;
+      }
+      return null;
+    };
+
+    const dedupe = (urls: string[]) => {
+      const seen = new Set<string>();
+      const out: string[] = [];
+      for (const url of urls) {
+        if (seen.has(url)) continue;
+        seen.add(url);
+        out.push(url);
+      }
+      return out;
+    };
+
+    if (Array.isArray(images)) {
+      return dedupe(
+        images
+          .map((u) => (typeof u === 'string' ? toPublicUrl(u) : null))
+          .filter((u): u is string => !!u)
+      );
+    }
+    if (typeof images === 'string' && images.trim()) {
+      try {
+        const parsed = JSON.parse(images);
+        if (Array.isArray(parsed)) return normalizeImageList(parsed);
+      } catch {
+        const single = toPublicUrl(images);
+        if (single) return [single];
+      }
+    }
+    return [];
+  };
+
+  const resolveAuthTokenFast = (): string => {
+    try {
+      const direct = localStorage.getItem('authToken');
+      if (direct && direct.includes('.')) return direct;
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i) || '';
+        if (!(key.startsWith('sb-') && key.endsWith('-auth-token'))) continue;
+        const parsed = JSON.parse(localStorage.getItem(key) || '{}');
+        if (parsed?.access_token && String(parsed.access_token).includes('.')) {
+          return String(parsed.access_token);
+        }
+      }
+    } catch {
+      /* ignore */
+    }
+    return '';
   };
 
   const uploadImages = async (images: File[]): Promise<string[]> => {
     if (!user) throw new Error('User not authenticated');
-    
-    const uploadedUrls: string[] = [];
-    
-    for (const image of images) {
-      try {
-        const fileExt = image.name.split('.').pop() || 'jpg';
-        const fileName = `merchant-products/${user.id}/${uuidv4()}.${fileExt}`;
-        
-        const { data: uploadData, error: uploadError } = await supabase.storage
-          .from('price-photos')
-          .upload(fileName, image, {
-            cacheControl: '3600',
-            upsert: false,
-          });
+    const sbUrl = import.meta.env.VITE_SUPABASE_URL as string;
+    const sbKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
+    if (!sbUrl || !sbKey) throw new Error('Depolama ayarları eksik');
 
-        if (uploadError) {
-          console.error('Image upload error:', uploadError);
+    let token = resolveAuthTokenFast();
+    if (!token) {
+      const { accessToken } = await safeGetSession();
+      token = accessToken || '';
+    }
+    if (!token) throw new Error('Oturum bulunamadı — tekrar giriş yapın');
+
+    // Sequential uploads — parallel POSTs often drop 2nd/3rd files on Android WebView.
+    const batch = images.slice(0, 6);
+    const uploaded: string[] = [];
+
+    for (let i = 0; i < batch.length; i++) {
+      const image = batch[i];
+      if (!image) continue;
+
+      const fileExt = (image.name?.split('.').pop() || 'jpg').toLowerCase().replace(/[^a-z0-9]/g, '') || 'jpg';
+      const fileName = `${user.id}/${uuidv4()}.${fileExt}`;
+      const controller = new AbortController();
+      const tid = setTimeout(() => controller.abort(), 25000);
+
+      try {
+        let body: Blob;
+        if (image instanceof Blob && image.size > 0) {
+          body = image;
+        } else {
+          const buf = await (image as File).arrayBuffer();
+          if (!buf.byteLength) {
+            console.error(`Image upload skipped (empty): #${i + 1}`, image.name);
+            clearTimeout(tid);
+            continue;
+          }
+          body = new Blob([buf], { type: image.type || 'image/jpeg' });
+        }
+
+        console.log(`📤 Uploading image ${i + 1}/${batch.length}`, {
+          name: image.name,
+          size: body.size,
+          type: body.type || image.type,
+        });
+
+        const resp = await fetch(`${sbUrl}/storage/v1/object/price-photos/${fileName}`, {
+          method: 'POST',
+          headers: {
+            apikey: sbKey,
+            Authorization: `Bearer ${token}`,
+            'Content-Type': body.type || image.type || 'image/jpeg',
+            'x-upsert': 'true',
+          },
+          body,
+          signal: controller.signal,
+        });
+        clearTimeout(tid);
+
+        if (!resp.ok) {
+          const errBody = await resp.text().catch(() => '');
+          console.error(`Image upload REST error (#${i + 1}):`, resp.status, errBody.slice(0, 160));
           continue;
         }
 
-        const { data: { publicUrl } } = supabase.storage
-          .from('price-photos')
-          .getPublicUrl(fileName);
-
-        uploadedUrls.push(publicUrl);
+        uploaded.push(`${sbUrl}/storage/v1/object/public/price-photos/${fileName}`);
       } catch (error) {
-        console.error('Failed to upload image:', error);
+        clearTimeout(tid);
+        console.error(`Failed to upload image #${i + 1}:`, error);
       }
     }
-    
-    return uploadedUrls;
+
+    return uploaded;
   };
 
   const isSubscriptionCheckTimeoutError = (error: unknown) => {
@@ -567,7 +851,9 @@ export default function MerchantShopScreen() {
   const saveMerchantProductViaRest = async (
     imageUrls: string[],
     resolvedPrice: number,
-    resolvedLocationId: string | null
+    resolvedLocationId: string | null,
+    resolvedProductId: string,
+    resolvedCoords?: { lat: number; lng: number } | null
   ) => {
     const sbUrl = import.meta.env.VITE_SUPABASE_URL as string;
     const sbKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
@@ -575,8 +861,11 @@ export default function MerchantShopScreen() {
       throw new Error(`REST ayarlar eksik: url=${!!sbUrl} key=${!!sbKey} user=${!!user}`);
     }
 
-    const { accessToken: sessionToken } = await safeGetSession();
-    const accessToken = sessionToken || localStorage.getItem('authToken');
+    let accessToken = resolveAuthTokenFast();
+    if (!accessToken) {
+      const { accessToken: sessionToken } = await safeGetSession();
+      accessToken = sessionToken || localStorage.getItem('authToken') || '';
+    }
     if (!accessToken) {
       throw new Error('Oturum token bulunamadı - lütfen tekrar giriş yapın');
     }
@@ -587,19 +876,22 @@ export default function MerchantShopScreen() {
       Authorization: `Bearer ${accessToken}`,
     };
 
+    const coords = resolvedCoords || formData.coordinates;
+    const fallbackImages = normalizeImageList(editingProduct?.images);
     const payload: any = {
       price: resolvedPrice,
       unit: formData.unit,
-      images: imageUrls.length > 0 ? imageUrls : (editingProduct?.images || []),
+      // Always send a string[] so PostgREST stores jsonb correctly (not a raw string).
+      images: imageUrls.length > 0 ? imageUrls : fallbackImages,
       location_id: resolvedLocationId,
       updated_at: new Date().toISOString(),
     };
     if (!editingProduct) {
       payload.merchant_id = user.id;
-      payload.product_id = formData.productId;
+      payload.product_id = resolvedProductId;
     }
-    if (formData.coordinates) {
-      payload.coordinates = `(${formData.coordinates.lng},${formData.coordinates.lat})`;
+    if (coords) {
+      payload.coordinates = `(${coords.lng},${coords.lat})`;
     }
 
     const controller = new AbortController();
@@ -621,6 +913,8 @@ export default function MerchantShopScreen() {
       const body = await resp.text().catch(() => '');
       throw new Error(`REST ${resp.status}: ${body.substring(0, 200) || 'Kayıt başarısız'}`);
     }
+
+    invalidateMerchantCaches();
   };
 
   const handleSubmit = async () => {
@@ -629,7 +923,8 @@ export default function MerchantShopScreen() {
       return;
     }
 
-    if (!formData.productId || !formData.price) {
+    const typedProductName = productSearchQuery.trim();
+    if ((!editingProduct && !formData.productId && !typedProductName) || !formData.price) {
       toast.error('Lütfen ürün ve fiyat bilgilerini girin');
       return;
     }
@@ -655,79 +950,127 @@ export default function MerchantShopScreen() {
         console.warn('⚠️ Session refresh before submit:', sessionErr);
       }
 
-      // Upload images with timeout
-      let imageUrls: string[] = [];
-      if (formData.images.length > 0) {
-        console.log('📤 Uploading images...', formData.images.length);
-        try {
-          const uploadPromise = uploadImages(formData.images);
-          const timeoutPromise = new Promise<string[]>((_, reject) => 
-            setTimeout(() => reject(new Error('Resim yükleme zaman aşımına uğradı')), 60000)
+      // Typed name may not be in catalog yet — match existing or create in products library.
+      let resolvedProductId = formData.productId;
+      if (!editingProduct) {
+        const catalogProducts = Array.from(
+          new Map(
+            [...availableProducts, ...(serverSearchResults || [])].map((product) => [product.id, product])
+          ).values()
+        );
+        const resolvedProduct = await resolveCatalogProduct({
+          productId: formData.productId,
+          productName: typedProductName,
+          products: catalogProducts,
+          defaultUnit: formData.unit,
+          createProduct: productsAPI.create,
+        });
+        resolvedProductId = resolvedProduct.id;
+
+        if (resolvedProduct.created) {
+          const catalogProduct = {
+            id: resolvedProduct.id,
+            name: resolvedProduct.name,
+            category: 'Diğer',
+          };
+          setAvailableProducts((current) => [catalogProduct, ...current]);
+          setServerSearchResults((current) =>
+            current
+              ? [catalogProduct, ...current.filter((product) => product.id !== catalogProduct.id)]
+              : current
           );
-          imageUrls = await Promise.race([uploadPromise, timeoutPromise]);
-          console.log('✅ Images uploaded:', imageUrls.length);
+          setFormData((current) => ({ ...current, productId: resolvedProduct.id }));
+          toast.success(`"${resolvedProduct.name}" ürün kataloğuna eklendi`);
+        }
+      }
+
+      // Upload newly picked Files first; keep only real remote URLs from existing previews.
+      // Capacitor preview URLs must never be saved.
+      const existingRemoteUrls = normalizeImageList(formData.imagePreviews);
+      let uploadedUrls: string[] = [];
+      if (formData.images.length > 0) {
+        console.log('📤 Uploading images...', formData.images.length, formData.images.map((f) => ({ name: f.name, size: f.size, type: f.type })));
+        toast.info(`${formData.images.length} resim yükleniyor...`);
+        try {
+          uploadedUrls = await withTimeout(
+            uploadImages(formData.images),
+            Math.max(30000, formData.images.length * 20000),
+            'Resim yükleme zaman asimi'
+          );
+          console.log('✅ Images uploaded:', uploadedUrls);
+          if (uploadedUrls.length === 0) {
+            toast.error('Resimler yüklenemedi. Lütfen tekrar deneyin.');
+            setIsSubmitting(false);
+            return;
+          }
+          if (uploadedUrls.length < formData.images.length) {
+            toast.warning(
+              `${uploadedUrls.length}/${formData.images.length} resim yüklendi. Eksik olanları tekrar ekleyebilirsiniz.`
+            );
+          }
         } catch (uploadError: any) {
           console.error('❌ Image upload error:', uploadError);
-          toast.error(uploadError.message || 'Resim yükleme başarısız');
-          // Continue without images if upload fails
+          toast.error(uploadError?.message || 'Resim yükleme başarısız');
+          setIsSubmitting(false);
+          return;
         }
       }
-
-      // Resolve location id from typed address/current coordinates if needed.
-      let resolvedLocationId: string | null = formData.locationId || null;
-      if (!resolvedLocationId && (formData.locationName.trim() || formData.coordinates)) {
-        try {
-          let lat = formData.coordinates?.lat;
-          let lng = formData.coordinates?.lng;
-          const locationName = formData.locationName.trim() || `${user.name} Dukkani`;
-
-          if ((!lat || !lng) && formData.locationName.trim().length > 3) {
-            const geocoded = await withTimeout(
-              forwardGeocode(formData.locationName.trim()),
-              7000,
-              'Konum metni geocode zaman asimi'
-            );
-            if (geocoded?.success && geocoded.coordinates) {
-              lat = geocoded.coordinates.lat;
-              lng = geocoded.coordinates.lng;
-            }
-          }
-
-          if (lat && lng) {
-            const createdLocation = await withTimeout(
-              locationsAPI.create({
-                name: locationName,
-                type: 'market',
-                address: formData.locationName.trim() || locationName,
-                lat,
-                lng,
-              }),
-              8000,
-              'Dukkan konumu kayit zaman asimi'
-            );
-            resolvedLocationId = createdLocation?.id || null;
-          }
-        } catch (locationResolveError) {
-          console.warn('⚠️ Failed to resolve merchant location_id:', locationResolveError);
-        }
+      // Prefer freshly uploaded public URLs; then keep prior remote URLs (deduped).
+      const imageUrls = normalizeImageList([...uploadedUrls, ...existingRemoteUrls]);
+      if (formData.images.length > 0 && imageUrls.length === 0) {
+        toast.error('Resim URL oluşturulamadı. Lütfen tekrar deneyin.');
+        setIsSubmitting(false);
+        return;
       }
 
-      // Save product — try direct REST first (fastest, most reliable on mobile),
-      // then fall back to merchantProductsAPI which includes subscription check.
+      // Dükkan adresini kullan — ürün formunda konum sormuyoruz.
+      const shopLocation = await resolveShopLocationForSave();
+      const resolvedLocationId = shopLocation.locationId;
+      const resolvedCoords = shopLocation.coords;
+
+      if (!resolvedLocationId && !resolvedCoords && !editingProduct) {
+        // Adres doğrulanmasa bile sync fallback koordinatla akışa yazar.
+        console.warn('⚠️ Shop address not geocoded; feed sync will use approximate location');
+      }
+
+      // Save product — subscription check with short timeout, then REST then API.
       console.log('💾 Saving product...');
       toast.info('Ürün kaydediliyor...');
       let saved = false;
       let lastError: any = null;
 
-      // Attempt 1: Direct REST (bypasses subscription check + Supabase client)
       try {
-        await saveMerchantProductViaRest(imageUrls, priceNum, resolvedLocationId);
+        await withTimeout(
+          ensureMerchantSubscriptionActive(user.id),
+          6000,
+          'Abonelik kontrolu zaman asimi'
+        );
+      } catch (subErr: any) {
+        if (isSubscriptionCheckTimeoutError(subErr)) {
+          console.warn('⚠️ Subscription check timed out, continuing save attempt');
+        } else {
+          throw subErr;
+        }
+      }
+
+      // Attempt 1: Direct REST (after subscription gate)
+      try {
+        await withTimeout(
+          saveMerchantProductViaRest(
+            imageUrls,
+            priceNum,
+            resolvedLocationId,
+            resolvedProductId,
+            resolvedCoords
+          ),
+          12000,
+          'Urun kayit zaman asimi'
+        );
         saved = true;
         console.log('✅ Product saved via direct REST');
       } catch (restErr: any) {
         lastError = restErr;
         console.warn('⚠️ Direct REST save failed:', restErr?.message);
-        // Silent fallback to attempt 2
       }
 
       // Attempt 2: merchantProductsAPI (has subscription check + Supabase fallback)
@@ -737,25 +1080,21 @@ export default function MerchantShopScreen() {
             ? merchantProductsAPI.update(editingProduct.id, {
                 price: priceNum,
                 unit: formData.unit,
-                images: imageUrls.length > 0 ? imageUrls : editingProduct.images,
+                images: imageUrls.length > 0 ? imageUrls : normalizeImageList(editingProduct.images),
                 location_id: resolvedLocationId || undefined,
-                coordinates: formData.coordinates || undefined,
+                coordinates: resolvedCoords || undefined,
               })
             : merchantProductsAPI.create({
                 merchant_id: user.id,
-                product_id: formData.productId,
+                product_id: resolvedProductId,
                 price: priceNum,
                 unit: formData.unit,
                 images: imageUrls,
                 location_id: resolvedLocationId || undefined,
-                coordinates: formData.coordinates || undefined,
+                coordinates: resolvedCoords || undefined,
               });
 
-          const timeoutPromise = new Promise((_, reject) =>
-            setTimeout(() => reject(new Error('İşlem zaman aşımına uğradı')), 30000)
-          );
-
-          await Promise.race([savePromise, timeoutPromise]);
+          await withTimeout(savePromise, 12000, 'Urun kayit zaman asimi');
           saved = true;
           console.log('✅ Product saved via merchantProductsAPI');
         } catch (apiErr: any) {
@@ -768,6 +1107,45 @@ export default function MerchantShopScreen() {
         throw lastError || new Error('Ürün kaydedilemedi');
       }
 
+      // Mirror into Keşfet "son girilen" (prices table) — must succeed for feed visibility.
+      const photoUrls =
+        (Array.isArray(imageUrls) && imageUrls.length > 0
+          ? imageUrls
+          : editingProduct?.images
+            ? normalizeImageList(editingProduct.images)
+            : []) || [];
+      const photoUrl = photoUrls[0] || null;
+      const shopAddressText = buildShopAddressText();
+      try {
+        const syncResult = await withTimeout(
+          syncMerchantProductToPriceFeed({
+            merchantId: user.id,
+            productId: resolvedProductId,
+            price: priceNum,
+            unit: formData.unit,
+            locationId: resolvedLocationId,
+            coordinates: resolvedCoords || null,
+            photoUrl,
+            photoUrls,
+            locationName: shopProfile?.shopName || user.name || 'Esnaf Dükkanı',
+            locationAddress: shopAddressText || null,
+            city: shopProfile?.city || null,
+            district: shopProfile?.district || null,
+          }),
+          15000,
+          'Fiyat akışı senkron zaman aşımı'
+        );
+        if (!syncResult?.synced) {
+          const reason = syncResult?.reason || 'unknown';
+          console.warn('⚠️ Feed sync failed:', reason);
+          toast.warning('Ürün kaydedildi ama Keşfet akışına yansımadı. Biraz sonra tekrar deneyin.');
+        }
+      } catch (syncErr: any) {
+        console.warn('⚠️ Feed sync error:', syncErr);
+        toast.warning('Ürün kaydedildi ama Keşfet akışına yansımadı.');
+      }
+
+      invalidateMerchantCaches();
       toast.success(editingProduct ? 'Ürün güncellendi' : 'Ürün eklendi');
 
       // Reset form
@@ -783,22 +1161,12 @@ export default function MerchantShopScreen() {
       });
       setProductSearchQuery('');
       setEditingProduct(null);
-      
-      // Reload products first (with error handling)
-      try {
-        await loadMerchantProducts();
-      } catch (reloadError) {
-        console.error('⚠️ Failed to reload products:', reloadError);
-        // Don't show error to user - product was saved successfully
-      }
-      
-      // Close dialog after reload
       setIsDialogOpen(false);
+
+      // Reload in background — don't block success UX
+      void loadMerchantProducts();
       
-      // Ensure we stay on merchant-shop page (prevent any unwanted navigation)
-      // Use replace: true to prevent back navigation issues
       if (merchantId && location.pathname !== `/app/merchant-shop/${merchantId}`) {
-        console.log('🔄 Ensuring we stay on merchant-shop page');
         navigate(`/app/merchant-shop/${merchantId}`, { replace: true });
       }
     } catch (error: any) {
@@ -815,12 +1183,13 @@ export default function MerchantShopScreen() {
   const handleEdit = (product: MerchantProduct) => {
     setEditingProduct(product);
     setProductSearchQuery(product.product?.name || '');
+    const existingImages = normalizeImageList(product.images);
     setFormData({
       productId: product.product.id,
       price: product.price.toString(),
       unit: product.unit,
       images: [],
-      imagePreviews: product.images || [],
+      imagePreviews: existingImages,
       locationId: product.location?.id || '',
       locationName: product.location?.name || '',
       coordinates: product.coordinates ? parseCoordinates(product.coordinates) : null,
@@ -839,25 +1208,6 @@ export default function MerchantShopScreen() {
       console.error('Delete error:', error);
       toast.error(error.message || 'Silme işlemi başarısız');
     }
-  };
-
-  const parseCoordinates = (coords: any): { lat: number; lng: number } | null => {
-    if (!coords) return null;
-    
-    if (typeof coords === 'string') {
-      const match = coords.match(/\(([^,]+),([^)]+)\)/);
-      if (match) {
-        return { lat: parseFloat(match[2]), lng: parseFloat(match[1]) };
-      }
-    } else if (typeof coords === 'object') {
-      if (coords.lat && coords.lng) {
-        return { lat: coords.lat, lng: coords.lng };
-      } else if (coords.x && coords.y) {
-        return { lat: coords.y, lng: coords.x };
-      }
-    }
-    
-    return null;
   };
 
   const getShopCoordinates = (): { lat: number; lng: number } | null => {
@@ -899,8 +1249,8 @@ export default function MerchantShopScreen() {
     <div className="fixed inset-0 flex flex-col bg-gray-50" style={{ top: `calc(env(safe-area-inset-top, 0px) + ${headerTopOffsetPx}px)` }}>
       {/* Header - sits in flex column, never scrolls */}
       <div className="flex-shrink-0 bg-white border-b border-gray-200">
-        <div className="flex items-center justify-between p-4">
-          <div className="flex items-center gap-3">
+        <div className="flex items-center justify-between p-4 gap-2">
+          <div className="flex items-center gap-3 min-w-0">
             <Button
               variant="ghost"
               size="icon"
@@ -908,9 +1258,38 @@ export default function MerchantShopScreen() {
             >
               <ArrowLeft className="w-5 h-5" />
             </Button>
-            <h1 className="text-xl font-bold">Esnaf Dükkanı</h1>
+            <div className="min-w-0 flex items-center gap-2">
+              {shopProfile?.logoUrl ? (
+                <img
+                  src={shopProfile.logoUrl}
+                  alt=""
+                  className="w-9 h-9 rounded-md object-cover border border-gray-200 shrink-0"
+                />
+              ) : null}
+              <div className="min-w-0">
+                <h1 className="text-xl font-bold truncate">
+                  {shopProfile?.shopName || (isOwnShop ? user?.name : null) || 'Esnaf Dükkanı'}
+                </h1>
+                {(shopProfile?.city || shopProfile?.district) && (
+                  <p className="text-xs text-gray-500 truncate">
+                    {[shopProfile.district, shopProfile.city].filter(Boolean).join(', ')}
+                  </p>
+                )}
+              </div>
+            </div>
           </div>
-          {isOwnShop && (
+          <div className="flex items-center gap-2 shrink-0">
+            {isOwnShop && (
+              <Button
+                variant="outline"
+                size="icon"
+                title="Esnaf bilgileri"
+                onClick={() => navigate('/app/merchant-profile')}
+              >
+                <Settings2 className="w-4 h-4" />
+              </Button>
+            )}
+            {isOwnShop && (
             <Dialog 
               open={isDialogOpen} 
               onOpenChange={(open) => {
@@ -967,7 +1346,21 @@ export default function MerchantShopScreen() {
                         <Search className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
                         <Input
                           value={productSearchQuery}
-                          onChange={(e) => setProductSearchQuery(e.target.value)}
+                          onChange={(e) => {
+                            const nextName = e.target.value;
+                            setProductSearchQuery(nextName);
+                            if (!editingProduct && formData.productId) {
+                              const selected = availableProducts.find(
+                                (product) => product.id === formData.productId
+                              );
+                              if (
+                                !selected ||
+                                normalizeForSearch(selected.name) !== normalizeForSearch(nextName)
+                              ) {
+                                setFormData((current) => ({ ...current, productId: '' }));
+                              }
+                            }
+                          }}
                           placeholder={editingProduct ? 'Ürün adı' : 'Ürün ara (örn: domates)'}
                           className="pl-9"
                           disabled={!!editingProduct}
@@ -980,7 +1373,7 @@ export default function MerchantShopScreen() {
                         ) : productsForList.length === 0 ? (
                           <div className="text-sm text-gray-500 p-2">
                             {productSearchQuery.trim().length >= 2
-                              ? 'Aramanıza uygun ürün bulunamadı. Farklı yazı yazmayı deneyin.'
+                              ? 'Aramanıza uygun ürün bulunamadı. Kaydedince yeni ürün olarak eklenecek.'
                               : 'Ürün bulunamadı'}
                           </div>
                         ) : (
@@ -1023,6 +1416,17 @@ export default function MerchantShopScreen() {
                           </div>
                         )}
                       </div>
+                      {!editingProduct &&
+                        productSearchQuery.trim() &&
+                        !productsForList.some(
+                          (product) =>
+                            normalizeForSearch(product.name) === normalizeForSearch(productSearchQuery)
+                        ) && (
+                          <p className="text-sm text-green-700">
+                            Bu isim katalogda yok. Kaydettiğinizde yeni ürün olarak eklenecek ve sonraki
+                            aramalarda görünecek.
+                          </p>
+                        )}
                     </div>
                   </div>
 
@@ -1064,7 +1468,8 @@ export default function MerchantShopScreen() {
                             <img
                               src={preview}
                               alt={`Preview ${index + 1}`}
-                              className="w-20 h-20 object-cover rounded border"
+                              className="w-20 h-20 object-cover rounded border bg-gray-50"
+                              referrerPolicy="no-referrer"
                             />
                             <button
                               onClick={() => removeImage(index)}
@@ -1114,32 +1519,17 @@ export default function MerchantShopScreen() {
                     </div>
                   </div>
 
-                  {/* Location */}
-                  <div>
-                    <Label>Konum (Opsiyonel)</Label>
-                    <div className="flex gap-2 mt-1">
-                      <Input
-                        value={formData.locationName}
-                        onChange={(e) => handleLocationTextChange(e.target.value)}
-                        placeholder="Adres veya konum adı"
-                        className="flex-1"
-                      />
-                      <Button
-                        type="button"
-                        variant="outline"
-                        onClick={handleGetLocation}
-                        disabled={isGettingLocation}
-                      >
-                        <MapPin className="w-4 h-4" />
-                      </Button>
-                    </div>
-                  </div>
-
                   {/* Submit */}
                   <div className="flex gap-2 pt-4">
                     <Button
                       onClick={handleSubmit}
-                      disabled={isSubmitting}
+                      disabled={
+                        isSubmitting ||
+                        !String(formData.price || '').trim() ||
+                        (!editingProduct &&
+                          !formData.productId &&
+                          !productSearchQuery.trim())
+                      }
                       className="flex-1"
                     >
                       {isSubmitting ? 'Kaydediliyor...' : editingProduct ? 'Güncelle' : 'Ekle'}
@@ -1157,8 +1547,45 @@ export default function MerchantShopScreen() {
                 </div>
               </DialogContent>
             </Dialog>
-          )}
+            )}
+          </div>
         </div>
+        {shopProfile &&
+          (shopProfile.description ||
+            shopProfile.address ||
+            shopProfile.phone ||
+            shopProfile.openingHours) && (
+          <div className="px-4 pb-3 space-y-1.5 text-sm text-gray-600">
+            {shopProfile.description && (
+              <p className="text-gray-700">{shopProfile.description}</p>
+            )}
+            {shopProfile.address && (
+              <p className="flex items-start gap-1.5">
+                <MapPin className="w-3.5 h-3.5 mt-0.5 shrink-0 text-gray-400" />
+                <span>
+                  {shopProfile.address}
+                  {(shopProfile.district || shopProfile.city) &&
+                    ` · ${[shopProfile.district, shopProfile.city].filter(Boolean).join(', ')}`}
+                </span>
+              </p>
+            )}
+            {shopProfile.phone && (
+              <a
+                href={`tel:${shopProfile.phone.replace(/\s+/g, '')}`}
+                className="flex items-center gap-1.5 text-blue-700"
+              >
+                <Phone className="w-3.5 h-3.5" />
+                {shopProfile.phone}
+              </a>
+            )}
+            {shopProfile.openingHours && (
+              <p className="flex items-center gap-1.5">
+                <Clock className="w-3.5 h-3.5 text-gray-400" />
+                {shopProfile.openingHours}
+              </p>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Scrollable content area */}
@@ -1199,7 +1626,7 @@ export default function MerchantShopScreen() {
             const productPrice = typeof product.price === 'number'
               ? product.price
               : Number(product.price) || 0;
-            const productImages = Array.isArray(product.images) ? product.images : [];
+            const productImages = normalizeImageList(product.images);
             return (
             <div
               key={product.id}
@@ -1210,7 +1637,7 @@ export default function MerchantShopScreen() {
                 <div className="flex-shrink-0 w-20 sm:w-24">
                   {productImages.length > 0 ? (
                     <div className="flex flex-col gap-1.5 sm:gap-2">
-                      {productImages.slice(0, 2).map((img, idx) => (
+                      {productImages.slice(0, 4).map((img, idx) => (
                         <div key={idx} className="relative w-full aspect-square overflow-hidden rounded border">
                           <img
                             src={img}
@@ -1218,12 +1645,13 @@ export default function MerchantShopScreen() {
                             className="w-full h-full object-cover"
                             loading="lazy"
                             decoding="async"
+                            referrerPolicy="no-referrer"
                           />
                         </div>
                       ))}
-                      {productImages.length > 2 && (
+                      {productImages.length > 4 && (
                         <div className="w-full aspect-square bg-gray-100 rounded border flex items-center justify-center text-xs text-gray-500">
-                          +{productImages.length - 2}
+                          +{productImages.length - 4}
                         </div>
                       )}
                     </div>

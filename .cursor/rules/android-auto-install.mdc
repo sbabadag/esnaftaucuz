@@ -1,0 +1,32 @@
+---
+description: After app code changes, rebuild and install debug APK on the connected Android phone
+alwaysApply: true
+---
+
+# Android auto-install
+
+When you finish a turn that changed code shipping in the Capacitor Android app, **install to the connected phone before ending** — do not wait for the user to ask.
+
+## What counts as shipping code
+
+- `app/**`, `src/**`, `index.html`, `public/**` (if used by the web bundle)
+- Capacitor / Android native config that affects the build
+- `.env` values baked into Vite (`VITE_*`) when they must land in the APK
+
+Skip install for docs-only, store-assets QA dumps, or pure investigation with no file edits.
+
+## How to install
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install-android-device.ps1
+```
+
+Or: `npm run mobile:install`
+
+Use Shell with full permissions (`all`). Budget several minutes (`block_until_ms` ≥ 600000).
+
+## Failure handling
+
+- If `INSTALL_FAILED_UPDATE_INCOMPATIBLE`, uninstall `com.esnaftaucuz.app` then reinstall (the script already retries this).
+- If no device: report clearly; do not pretend install succeeded.
+- Tell the user briefly that the phone was updated (or why it was skipped).

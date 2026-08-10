@@ -1,8 +1,23 @@
 import { createContext, useContext, useState, useEffect, useRef, ReactNode } from 'react';
-import { authAPI, setMerchantSubscriptionCache, clearMerchantSubscriptionCache } from '../services/supabase-api';
+import { authAPI, setMerchantSubscriptionCache, clearMerchantSubscriptionCache, MERCHANT_SUBSCRIPTION_MONTHLY_FEE_TL, MERCHANT_BASIC_MONTHLY_PLAN } from '../services/supabase-api';
 import { supabase, safeGetSession } from '../lib/supabase';
 import { resolveMerchantRoleFromProfile } from '../lib/merchant-role';
 import { toast } from 'sonner';
+
+const getExplorePathForHistory = () => {
+  try {
+    const base = String(import.meta.env.BASE_URL || '/');
+    if (base && base !== '/') {
+      const normalized = base.endsWith('/') ? base.slice(0, -1) : base;
+      return `${normalized}/app/explore`;
+    }
+    const pathname = String(window.location.pathname || '/');
+    if (pathname.startsWith('/esnaftaucuz')) return '/esnaftaucuz/app/explore';
+  } catch {
+    // ignore
+  }
+  return '/app/explore';
+};
 
 interface User {
   id: string;
@@ -252,28 +267,29 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const updateUser = (newUser: User | null) => {
-    // If new value would downgrade merchant to non-merchant, check hint first
-    if (newUser && userRef.current?.id === newUser.id && userRef.current?.is_merchant && !newUser.is_merchant) {
-      const hint = getMerchantHint(newUser.email);
-      if (hint) {
-        newUser = { ...newUser, is_merchant: true };
-      }
-    }
+    // Do not force is_merchant from stale local hints — authoritative profile wins.
+    // Hints are only used when constructing temporary fallback users during network errors.
     userRef.current = newUser;
     setUser(newUser);
 
-    // Keep the in-memory subscription cache in sync so product operations
-    // never need a blocking RPC call.  Only cache positive results here;
-    // uncertain/inactive states fall through to the REST/RPC check so the
-    // server-side function (which may have trial/grace-period logic) decides.
     if (newUser === null) {
       clearMerchantSubscriptionCache();
     } else if (newUser.is_merchant) {
       const status = String(newUser.merchant_subscription_status || '').toLowerCase();
       if (status === 'active' || status === 'past_due') {
         setMerchantSubscriptionCache(true);
+      } else {
+        setMerchantSubscriptionCache(false);
       }
-      // Don't cache false — let the API check handle edge cases
+    } else {
+      clearMerchantSubscriptionCache();
+      // Normal kullanıcılar her zaman ücretsiz — esnaf ödeme kilidini temizle.
+      try {
+        localStorage.removeItem(MERCHANT_SIGNUP_INTENT_KEY);
+        localStorage.removeItem(MERCHANT_SUBSCRIPTION_ONBOARDING_KEY);
+      } catch {
+        /* best effort */
+      }
     }
   };
   useEffect(() => {
@@ -311,20 +327,31 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     
     if (error) {
       console.error('OAuth error in URL:', error);
-      toast.error('Google giriş tamamlanamadı', {
-        description: 'İnternet bağlantınızı kontrol edip tekrar deneyin.',
-      });
-      // Clean up URL
-      window.history.replaceState({}, document.title, window.location.pathname);
-      setIsLoading(false);
-      setIsOAuthCallback(false);
-      isOAuthCallbackRef.current = false;
+      const decoded = decodeURIComponent(String(error));
+      // Stale/replayed PKCE failures should not block auth bootstrap.
+      const isStaleExchangeNoise =
+        /invalid_grant|code.?verifier|expired|already.?used|oauth_exchange/i.test(decoded);
+      if (!isStaleExchangeNoise) {
+        toast.error('Google giriş tamamlanamadı', {
+          description: 'İnternet bağlantınızı kontrol edip tekrar deneyin.',
+        });
+      } else {
+        console.warn('🧹 Ignoring stale OAuth error hash (will continue normal auth)');
+      }
+      try {
+        window.history.replaceState({}, document.title, window.location.pathname + window.location.search);
+      } catch {
+        /* best effort */
+      }
       try {
         localStorage.removeItem('oauth-pending-ts');
+        localStorage.removeItem('oauth-pending-code');
       } catch {
         // best effort
       }
-      return;
+      setIsOAuthCallback(false);
+      isOAuthCallbackRef.current = false;
+      // Do NOT return — continue session restore / onAuthStateChange wiring.
     }
     
     // If explicit OAuth callback is detected, keep loading until session is processed.
@@ -530,8 +557,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                   search_radius: 15,
                   ...(merchantSignupIntent ? {
                     merchant_subscription_status: 'inactive',
-                    merchant_subscription_plan: 'merchant_basic_500_tl_monthly',
-                    merchant_subscription_fee_tl: 500,
+                    merchant_subscription_plan: MERCHANT_BASIC_MONTHLY_PLAN,
+                    merchant_subscription_fee_tl: MERCHANT_SUBSCRIPTION_MONTHLY_FEE_TL,
                   } : {}),
                 };
 
@@ -610,8 +637,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             search_radius: 15, // Default search radius (ensures constraint is satisfied: 1-1000)
             ...(merchantSignupIntent ? {
               merchant_subscription_status: 'inactive',
-              merchant_subscription_plan: 'merchant_basic_500_tl_monthly',
-              merchant_subscription_fee_tl: 500,
+              merchant_subscription_plan: MERCHANT_BASIC_MONTHLY_PLAN,
+              merchant_subscription_fee_tl: MERCHANT_SUBSCRIPTION_MONTHLY_FEE_TL,
             } : {}),
           };
           
@@ -668,32 +695,44 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             hasMerchantProducts = false;
           }
 
-          // Merchant sign-up intent: elevate account to merchant
+          // Merchant sign-up intent: elevate only when not already subscribed/paying
           if (merchantSignupIntent) {
             try {
-              const merchantSetupUpdate = {
-                is_merchant: true,
-                merchant_subscription_status: 'inactive',
-                merchant_subscription_plan: 'merchant_basic_500_tl_monthly',
-                merchant_subscription_fee_tl: 500,
-                merchant_subscription_current_period_start: null,
-                merchant_subscription_current_period_end: null,
-              };
-              const { data: merchantProfile, error: merchantSetupError } = await supabase
-                .from('users')
-                .update(merchantSetupUpdate)
-                .eq('id', session.user.id)
-                .select('*')
-                .single();
+              const existingStatus = String(profile?.merchant_subscription_status || '').toLowerCase();
+              const hasProtectableSub = ['active', 'past_due'].includes(existingStatus);
+              const alreadyMerchant = normalizeMerchantFlag(profile?.is_merchant);
 
-              if (!merchantSetupError && merchantProfile) {
-                profile = merchantProfile;
-                console.log('✅ Merchant sign-up intent applied after auth callback');
-              } else if (merchantSetupError) {
-                console.warn('⚠️ Could not apply merchant sign-up intent:', merchantSetupError);
+              if (hasProtectableSub) {
+                console.log('ℹ️ Merchant signup intent ignored — active/past_due subscription preserved');
+                localStorage.removeItem(MERCHANT_SIGNUP_INTENT_KEY);
+              } else if (alreadyMerchant) {
+                // Already merchant but inactive: send to onboarding without wiping fee/plan history
+                localStorage.setItem(MERCHANT_SUBSCRIPTION_ONBOARDING_KEY, session.user.id);
+                localStorage.removeItem(MERCHANT_SIGNUP_INTENT_KEY);
+                console.log('ℹ️ Merchant signup intent: existing merchant routed to onboarding');
+              } else {
+                const merchantSetupUpdate = {
+                  is_merchant: true,
+                  merchant_subscription_status: 'inactive',
+                  merchant_subscription_plan: MERCHANT_BASIC_MONTHLY_PLAN,
+                  merchant_subscription_fee_tl: MERCHANT_SUBSCRIPTION_MONTHLY_FEE_TL,
+                };
+                const { data: merchantProfile, error: merchantSetupError } = await supabase
+                  .from('users')
+                  .update(merchantSetupUpdate)
+                  .eq('id', session.user.id)
+                  .select('*')
+                  .single();
+
+                if (!merchantSetupError && merchantProfile) {
+                  profile = merchantProfile;
+                  console.log('✅ Merchant sign-up intent applied after auth callback');
+                } else if (merchantSetupError) {
+                  console.warn('⚠️ Could not apply merchant sign-up intent:', merchantSetupError);
+                }
+                localStorage.setItem(MERCHANT_SUBSCRIPTION_ONBOARDING_KEY, session.user.id);
+                localStorage.removeItem(MERCHANT_SIGNUP_INTENT_KEY);
               }
-              localStorage.setItem(MERCHANT_SUBSCRIPTION_ONBOARDING_KEY, session.user.id);
-              localStorage.removeItem(MERCHANT_SIGNUP_INTENT_KEY);
             } catch (intentError) {
               console.warn('⚠️ Merchant sign-up intent handling failed:', intentError);
             }
@@ -1080,7 +1119,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               }
               // Go straight to app — never dump to "/" (onboarding/login flash)
               try {
-                window.history.replaceState({}, document.title, '/app/explore');
+                window.history.replaceState({}, document.title, getExplorePathForHistory());
               } catch {
                 // best effort
               }
@@ -1185,7 +1224,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setIsOAuthCallback(false);
         isOAuthCallbackRef.current = false;
         try {
-          window.history.replaceState({}, document.title, '/app/explore');
+          window.history.replaceState({}, document.title, getExplorePathForHistory());
         } catch { /* best effort */ }
         if (detail.user.id) {
           startBackgroundProfilePoller(detail.user.id);
@@ -1233,9 +1272,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const login = async (email: string, password: string) => {
     try {
       try {
+        // Normal müşteri girişi — esnaf abonelik kilidi / niyet bayraklarını temizle.
         localStorage.removeItem(MERCHANT_SIGNUP_INTENT_KEY);
+        localStorage.removeItem(MERCHANT_SUBSCRIPTION_ONBOARDING_KEY);
       } catch {
-        /* e-posta girişi önceki esnaf kayıt niyetini sıfırlasın */
+        /* best effort */
       }
       const data = await authAPI.login(email, password);
       console.log('✅ Login successful, user data (auth API):', {
@@ -1274,6 +1315,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const googleLogin = async (options?: { merchantSignupIntent?: boolean; loginHint?: string }) => {
     try {
+      try {
+        if (options?.merchantSignupIntent === true) {
+          localStorage.setItem(MERCHANT_SIGNUP_INTENT_KEY, '1');
+        } else {
+          // Müşteri Google girişi ücretsiz; esnaf ödeme ekranına zorlamayın.
+          localStorage.removeItem(MERCHANT_SIGNUP_INTENT_KEY);
+          localStorage.removeItem(MERCHANT_SUBSCRIPTION_ONBOARDING_KEY);
+        }
+      } catch {
+        /* best effort */
+      }
       const data = await authAPI.googleLogin(options);
       // Web flow redirects in current window; mobile flow is opened via Capacitor Browser.
       if (data.redirectUrl && !data.openedInBrowser) {
@@ -1287,9 +1339,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const guestLogin = async () => {
     try {
+      try {
+        localStorage.removeItem(MERCHANT_SIGNUP_INTENT_KEY);
+        localStorage.removeItem(MERCHANT_SUBSCRIPTION_ONBOARDING_KEY);
+      } catch {
+        /* best effort */
+      }
       const data = await authAPI.guestLogin();
       setToken(data.token);
       updateUser(data.user);
+      try {
+        localStorage.setItem('authToken', data.token);
+        localStorage.setItem('user', JSON.stringify(data.user));
+      } catch {
+        // best effort
+      }
     } catch (error) {
       console.error('Guest login error:', error);
       throw error;
@@ -1347,106 +1411,134 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const refreshUser = async () => {
     try {
-      const { session } = await safeGetSession();
-      if (!session) {
+      const sbUrl = import.meta.env.VITE_SUPABASE_URL as string;
+      const sbKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
+      const { accessToken, session } = await safeGetSession();
+      const userId = session?.user?.id || (() => {
+        try {
+          return JSON.parse(localStorage.getItem('user') || '{}')?.id || null;
+        } catch {
+          return null;
+        }
+      })();
+
+      if (!userId) {
         console.warn('⚠️ No session found for refreshUser');
         return;
       }
-      
-      // Fetch fresh user data from Supabase with retry to survive transient
-      // mobile callback/session races.
+
       let profile: any = null;
-      let error: any = null;
-      for (let attempt = 0; attempt < 3; attempt += 1) {
-        const result = await supabase
-          .from('users')
-          .select('*')
-          .eq('id', session.user.id)
-          .maybeSingle();
-        profile = result.data;
-        error = result.error;
-        if (!error && profile) break;
-        await new Promise((resolve) => setTimeout(resolve, 600 * (attempt + 1)));
+
+      // Fast path: REST with short timeout (avoid hung supabase-js on Android).
+      if (sbUrl && sbKey) {
+        try {
+          const token = accessToken || localStorage.getItem('authToken') || '';
+          const headers: Record<string, string> = {
+            apikey: sbKey,
+            Authorization: `Bearer ${token || sbKey}`,
+          };
+          const controller = new AbortController();
+          const tid = setTimeout(() => controller.abort(), 4000);
+          const [profileResp, merchantResp] = await Promise.all([
+            fetch(
+              `${sbUrl}/rest/v1/users?id=eq.${encodeURIComponent(userId)}&select=*`,
+              { headers, signal: controller.signal }
+            ),
+            fetch(
+              `${sbUrl}/rest/v1/merchant_products?merchant_id=eq.${encodeURIComponent(userId)}&select=id&limit=1`,
+              { headers, signal: controller.signal }
+            ),
+          ]);
+          clearTimeout(tid);
+
+          if (profileResp.ok) {
+            const rows = await profileResp.json().catch(() => []);
+            profile = Array.isArray(rows) ? rows[0] : rows;
+          }
+
+          let hasMerchantProducts = false;
+          if (merchantResp.ok) {
+            const rows = await merchantResp.json().catch(() => []);
+            hasMerchantProducts = Array.isArray(rows) && rows.length > 0;
+          }
+
+          if (profile) {
+            const isMerchantFromProfile = resolveMerchantStatus(profile);
+            const subscriptionActive = ['active', 'past_due'].includes(
+              String(profile?.merchant_subscription_status || '').toLowerCase()
+            );
+            const isMerchantFinal = isMerchantFromProfile || hasMerchantProducts || subscriptionActive;
+
+            const preferencesRadius = profile.preferences?.searchRadius;
+            const legacyRadius = profile.search_radius;
+            const finalSearchRadius =
+              preferencesRadius !== undefined
+                ? preferencesRadius
+                : legacyRadius !== undefined
+                  ? legacyRadius
+                  : 15;
+
+            const userData = {
+              ...profile,
+              is_merchant: isMerchantFinal,
+              preferences: {
+                ...(profile.preferences || {}),
+                searchRadius: finalSearchRadius,
+              },
+              search_radius: finalSearchRadius,
+            };
+            updateUser(userData);
+            localStorage.setItem('user', JSON.stringify(userData));
+            lastAuthoritativeProfileSyncAtRef.current = Date.now();
+            if (isMerchantFinal && userData.email) {
+              try { localStorage.setItem('merchant-hint-' + userData.email, '1'); } catch {}
+            } else if (!isMerchantFinal && userData.email) {
+              try { localStorage.removeItem('merchant-hint-' + userData.email); } catch {}
+            }
+            console.log('✅ User refreshed (REST):', {
+              email: userData.email,
+              is_merchant: userData.is_merchant,
+            });
+            return;
+          }
+        } catch (restErr) {
+          console.warn('refreshUser REST path failed, falling back:', restErr);
+        }
       }
 
-      if (error || !profile) {
+      // Fallback: single supabase-js read (no multi-second retry loop).
+      const { data: fallbackProfile, error } = await supabase
+        .from('users')
+        .select('*')
+        .eq('id', userId)
+        .maybeSingle();
+      if (error || !fallbackProfile) {
         console.error('❌ Error refreshing user:', error || 'Profile not found');
         return;
       }
+      profile = fallbackProfile;
 
-      // Merchant role can exist through active merchant products even if
-      // profile flag arrives stale right after OAuth.
-      let hasMerchantProducts = false;
-      try {
-        const { data: merchantRows, error: merchantErr } = await supabase
-          .from('merchant_products')
-          .select('id')
-          .eq('merchant_id', session.user.id)
-          .limit(1);
-        if (!merchantErr && Array.isArray(merchantRows) && merchantRows.length > 0) {
-          hasMerchantProducts = true;
-        }
-      } catch {
-        hasMerchantProducts = false;
-      }
-      
-      if (profile) {
-        const isMerchantFromProfile = resolveMerchantStatus(profile);
-        const subscriptionActive = ['active', 'past_due'].includes(
-          String(profile?.merchant_subscription_status || '').toLowerCase()
-        );
-        const isMerchantFinal = isMerchantFromProfile || hasMerchantProducts || subscriptionActive;
-
-        const needsRepair = !normalizeMerchantFlag(profile?.is_merchant) &&
-          (hasMerchantProducts || subscriptionActive);
-        if (needsRepair) {
-          console.log('🔧 refreshUser: Auto-repairing is_merchant flag');
-          try {
-            const { data: repairedProfile } = await supabase
-              .from('users')
-              .update({ is_merchant: true })
-              .eq('id', session.user.id)
-              .select('*')
-              .single();
-            if (repairedProfile) {
-              profile = repairedProfile;
-              console.log('✅ refreshUser: is_merchant auto-repaired');
-            }
-          } catch {
-            // best effort repair
-          }
-        }
-
-        const preferencesRadius = profile.preferences?.searchRadius;
-        const legacyRadius = profile.search_radius;
-        const finalSearchRadius = preferencesRadius !== undefined 
-          ? preferencesRadius 
-          : (legacyRadius !== undefined ? legacyRadius : 15);
-        
-        const userData = {
-          ...profile,
-          is_merchant: isMerchantFinal,
-          preferences: {
-            ...(profile.preferences || {}),
-            searchRadius: finalSearchRadius,
-          },
-          search_radius: finalSearchRadius,
-        };
-        updateUser(userData);
-        localStorage.setItem('user', JSON.stringify(userData));
-        lastAuthoritativeProfileSyncAtRef.current = Date.now();
-        if (isMerchantFinal && userData.email) {
-          try { localStorage.setItem('merchant-hint-' + userData.email, '1'); } catch {}
-        } else if (!isMerchantFinal && userData.email) {
-          try { localStorage.removeItem('merchant-hint-' + userData.email); } catch {}
-        }
-        console.log('✅ User refreshed (authoritative):', {
-          email: userData.email,
-          is_merchant: userData.is_merchant,
-          merchant_subscription_status: profile.merchant_subscription_status,
-          hasMerchantProducts,
-        });
-      }
+      const preferencesRadius = profile.preferences?.searchRadius;
+      const legacyRadius = profile.search_radius;
+      const finalSearchRadius =
+        preferencesRadius !== undefined
+          ? preferencesRadius
+          : legacyRadius !== undefined
+            ? legacyRadius
+            : 15;
+      const userData = {
+        ...profile,
+        is_merchant: resolveMerchantStatus(profile),
+        preferences: {
+          ...(profile.preferences || {}),
+          searchRadius: finalSearchRadius,
+        },
+        search_radius: finalSearchRadius,
+      };
+      updateUser(userData);
+      localStorage.setItem('user', JSON.stringify(userData));
+      lastAuthoritativeProfileSyncAtRef.current = Date.now();
+      console.log('✅ User refreshed (fallback):', userData.email);
     } catch (error) {
       console.error('Refresh user error:', error);
     }

@@ -13,6 +13,8 @@ import { forwardGeocode } from '../../../utils/geocoding';
 import { supabase, safeGetSession } from '../../../lib/supabase';
 import { resolveMerchantRoleFromProfile } from '../../../lib/merchant-role';
 import { pickSingleImage } from '../../../lib/native-image-picker';
+import { assertCreatableEntityName, formatLocationDisplayName, isGarbageEntityName } from '../../../utils/entity-name';
+import { productNamesMatch, resolveCatalogProduct } from '../../../lib/product-name';
 
 const steps = ['product', 'price', 'location', 'photo', 'confirm'];
 
@@ -21,6 +23,7 @@ interface Product {
   name: string;
   image?: string;
   category?: string;
+  default_unit?: string;
   _id?: string;
 }
 
@@ -89,7 +92,7 @@ export default function AddPriceScreen() {
     productId: '',
     productName: '',
     price: '',
-    unit: 'kg',
+    unit: 'adet',
     locationId: '',
     locationName: '',
     photo: null as File | null,
@@ -98,6 +101,7 @@ export default function AddPriceScreen() {
     lng: null as number | null,
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isCreatingProduct, setIsCreatingProduct] = useState(false);
   const [isPickingPhoto, setIsPickingPhoto] = useState(false);
   const productsIndexCacheKey = `add-price-products-index:${user?.id || 'anon'}`;
   const locationsCacheKey = `add-price-locations-index:${user?.id || 'anon'}`;
@@ -135,7 +139,7 @@ export default function AddPriceScreen() {
         const controller = new AbortController();
         const tid = setTimeout(() => controller.abort(), 15000);
         const response = await fetch(
-          `${sbUrl}/rest/v1/products?select=id,name,category,image,is_active&order=name.asc&limit=2000`,
+          `${sbUrl}/rest/v1/products?select=id,name,category,image,default_unit,is_active&order=name.asc&limit=2000`,
           {
             headers: {
               apikey: sbKey,
@@ -148,10 +152,11 @@ export default function AddPriceScreen() {
         if (response.ok) {
           const rows = await response.json().catch(() => []);
           if (Array.isArray(rows) && rows.length > 0) {
-            setAllProductsIndex(rows);
-            setProducts(rows);
+            const usable = rows.filter((p: Product) => !isGarbageEntityName(p?.name));
+            setAllProductsIndex(usable);
+            setProducts(usable);
             try {
-              localStorage.setItem(productsIndexCacheKey, JSON.stringify(rows));
+              localStorage.setItem(productsIndexCacheKey, JSON.stringify(usable));
             } catch {}
             return;
           }
@@ -160,8 +165,9 @@ export default function AddPriceScreen() {
 
       // Fallback to existing API path.
       const data = await productsAPI.getAll();
-      setAllProductsIndex(data);
-      setProducts(data);
+      const usable = (data || []).filter((p: Product) => !isGarbageEntityName(p?.name));
+      setAllProductsIndex(usable);
+      setProducts(usable);
     } catch (error) {
       console.error('Failed to load products:', error);
     }
@@ -173,21 +179,25 @@ export default function AddPriceScreen() {
       if (!raw) return;
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed) && parsed.length > 0) {
-        setAllProductsIndex(parsed);
-        setProducts(parsed);
+        const usable = parsed.filter((p: Product) => !isGarbageEntityName(p?.name));
+        setAllProductsIndex(usable);
+        setProducts(usable);
       }
     } catch {}
   }, [productsIndexCacheKey]);
 
   const loadLocations = async () => {
     try {
+      const keepUsable = (rows: Location[]) =>
+        (rows || []).filter((loc) => !isGarbageEntityName(loc?.name));
+
       // 1) Restore cached locations immediately.
       try {
         const raw = localStorage.getItem(locationsCacheKey);
         if (raw) {
           const parsed = JSON.parse(raw);
           if (Array.isArray(parsed) && parsed.length > 0) {
-            setLocations(parsed);
+            setLocations(keepUsable(parsed));
           }
         }
       } catch {}
@@ -212,9 +222,10 @@ export default function AddPriceScreen() {
         if (response && response.ok) {
           const rows = await response.json().catch(() => []);
           if (Array.isArray(rows) && rows.length > 0) {
-            setLocations(rows);
+            const usable = keepUsable(rows);
+            setLocations(usable);
             try {
-              localStorage.setItem(locationsCacheKey, JSON.stringify(rows));
+              localStorage.setItem(locationsCacheKey, JSON.stringify(usable));
             } catch {}
             return;
           }
@@ -227,9 +238,10 @@ export default function AddPriceScreen() {
         new Promise<Location[]>((resolve) => setTimeout(() => resolve([]), 8000)),
       ]);
       if (Array.isArray(data) && data.length > 0) {
-        setLocations(data);
+        const usable = keepUsable(data);
+        setLocations(usable);
         try {
-          localStorage.setItem(locationsCacheKey, JSON.stringify(data));
+          localStorage.setItem(locationsCacheKey, JSON.stringify(usable));
         } catch {}
       }
     } catch (error) {
@@ -280,9 +292,9 @@ export default function AddPriceScreen() {
     if (query.trim()) {
       try {
         const results = await locationsAPI.getAll();
-        const filtered = results.filter((loc: Location) =>
-          loc.name.toLowerCase().includes(query.toLowerCase())
-        );
+        const filtered = results
+          .filter((loc: Location) => !isGarbageEntityName(loc.name))
+          .filter((loc: Location) => loc.name.toLowerCase().includes(query.toLowerCase()));
         setLocations(filtered);
       } catch (error) {
         console.error('Location search error:', error);
@@ -292,7 +304,7 @@ export default function AddPriceScreen() {
     }
   };
 
-  const handlePhotoSelect = (file: File | null) => {
+  const handlePhotoSelect = (file: File | null, previewUrl?: string | null) => {
     if (file) {
       console.log('📸 Photo selected:', {
         name: file.name,
@@ -302,7 +314,7 @@ export default function AddPriceScreen() {
       setFormData({
         ...formData,
         photo: file,
-        photoPreview: URL.createObjectURL(file),
+        photoPreview: previewUrl || URL.createObjectURL(file),
       });
       console.log('✅ Photo added to form data');
     } else {
@@ -314,12 +326,12 @@ export default function AddPriceScreen() {
     if (isPickingPhoto) return;
     setIsPickingPhoto(true);
     try {
-      const file = await pickSingleImage(source);
-      if (!file) {
+      const picked = await pickSingleImage(source);
+      if (!picked) {
         toast.message(source === 'camera' ? 'Kamera iptal edildi' : 'Galeri seçimi iptal edildi');
         return;
       }
-      handlePhotoSelect(file);
+      handlePhotoSelect(picked.file, picked.previewUrl);
       toast.success('Fotoğraf eklendi');
     } catch (error: any) {
       console.error('Photo pick error:', error);
@@ -330,6 +342,16 @@ export default function AddPriceScreen() {
   };
 
   const handleNext = async () => {
+    if (stepName === 'product' && !formData.productId) {
+      const typedName = searchProductQuery.trim();
+      if (!typedName) {
+        toast.error('Lütfen bir ürün seçin veya yeni ürün adı yazın');
+        return;
+      }
+      await createProduct(typedName);
+      return;
+    }
+
     if (currentStep < steps.length - 1) {
       setCurrentStep(currentStep + 1);
     } else {
@@ -339,6 +361,8 @@ export default function AddPriceScreen() {
   };
 
   const handleSubmit = async () => {
+    if (isSubmitting) return;
+
     if (!user) {
       toast.error('Giriş yapmanız gerekiyor');
       navigate('/login');
@@ -355,14 +379,22 @@ export default function AddPriceScreen() {
       return;
     }
 
+    const lat = formData.lat;
+    const lng = formData.lng;
+    if (
+      typeof lat !== 'number' ||
+      typeof lng !== 'number' ||
+      !Number.isFinite(lat) ||
+      !Number.isFinite(lng)
+    ) {
+      toast.error('Konum koordinatı gerekli. Lütfen bir yer seçin veya mevcut konumu kullanın.');
+      return;
+    }
+
     try {
       setIsSubmitting(true);
 
-      // Never block submit on geolocation here.
-      // Prefer selected-location coordinates; otherwise use safe default.
-      const lat = formData.lat || 37.8667;
-      const lng = formData.lng || 32.4833;
-      console.log('📍 Submit coordinates:', { lat, lng, source: formData.lat && formData.lng ? 'selected-location' : 'default' });
+      console.log('📍 Submit coordinates:', { lat, lng, source: 'selected-location' });
 
       console.log('📤 Submitting price:', {
         product: formData.productId,
@@ -375,7 +407,7 @@ export default function AddPriceScreen() {
         photoType: formData.photo?.type,
         lat,
         lng,
-        hasCoordinates: !!(lat && lng),
+        hasCoordinates: true,
         user: user?.id,
       });
 
@@ -483,25 +515,52 @@ export default function AddPriceScreen() {
   };
 
   const createProduct = async (name: string) => {
+    if (isCreatingProduct) return;
     try {
-      console.log('Creating product:', name);
-      const product = await productsAPI.create(name);
-      console.log('Product created:', product);
+      setIsCreatingProduct(true);
+      toast.info('Ürün kütüphaneye ekleniyor...');
+      const catalog = (allProductsIndex.length > 0 ? allProductsIndex : products).map((p) => ({
+        id: p.id || (p as any)._id,
+        name: p.name,
+      }));
+      const resolved = await resolveCatalogProduct({
+        productId: '',
+        productName: name,
+        products: catalog,
+        defaultUnit: formData.unit || 'adet',
+        createProduct: productsAPI.create,
+      });
+      const productRow = {
+        id: resolved.id,
+        name: resolved.name,
+        default_unit: formData.unit || 'adet',
+      };
+      if (resolved.created) {
+        setAllProductsIndex((prev) => [productRow, ...prev]);
+        setProducts((prev) => [productRow, ...prev]);
+        toast.success(`"${resolved.name}" ürün kütüphanesine eklendi`);
+      } else {
+        toast.success(`"${resolved.name}" seçildi`);
+      }
       setFormData({
         ...formData,
-        productId: product.id || product._id, // Support both formats
-        productName: product.name,
+        productId: resolved.id,
+        productName: resolved.name,
+        unit: formData.unit || 'adet',
       });
+      setSearchProductQuery('');
       setCurrentStep(currentStep + 1);
-      toast.success('Ürün oluşturuldu');
     } catch (error: any) {
       console.error('Create product error:', error);
-      toast.error(error.message || 'Ürün oluşturulamadı');
+      toast.error(error.message || 'Ürün oluşturulamadı', { duration: 5000 });
+    } finally {
+      setIsCreatingProduct(false);
     }
   };
 
   const createLocation = async (name: string, lat?: number, lng?: number) => {
     try {
+      const safeName = assertCreatableEntityName(name, 'location');
       let finalLat = lat;
       let finalLng = lng;
       
@@ -550,11 +609,11 @@ export default function AddPriceScreen() {
         }
       }
       
-      console.log('📍 Creating location with coordinates:', { name, lat: finalLat, lng: finalLng });
+      console.log('📍 Creating location with coordinates:', { name: safeName, lat: finalLat, lng: finalLng });
       
       const location = await withTimeout(
         locationsAPI.create({
-          name,
+          name: safeName,
           type: 'diğer',
           lat: finalLat!,
           lng: finalLng!,
@@ -566,7 +625,7 @@ export default function AddPriceScreen() {
       setFormData({
         ...formData,
         locationId: location.id || location._id, // Support both formats
-        locationName: location.name,
+        locationName: formatLocationDisplayName(location.name, finalLat, finalLng),
         lat: finalLat || null,
         lng: finalLng || null,
       });
@@ -744,15 +803,15 @@ export default function AddPriceScreen() {
       setFormData({
         ...formData,
         locationId: picked.id,
-        locationName: picked.name,
+        locationName: formatLocationDisplayName(picked.name, lat, lng),
         lat,
         lng,
       });
       setCurrentStep(currentStep + 1);
       if (position) {
-        toast.success('Mevcut konum alindi');
+        toast.success('Konum alındı');
       } else {
-        toast.warning('Konum servisi yavas, kayitli konum ile devam edildi');
+        toast.warning('Konum servisi yavaş, kayıtlı konum ile devam edildi');
       }
     } catch (error: any) {
       console.error('Location error:', error);
@@ -841,6 +900,7 @@ export default function AddPriceScreen() {
                         ...formData,
                         productId: productId,
                         productName: product.name,
+                        unit: product.default_unit || 'adet',
                       });
                       setCurrentStep(currentStep + 1);
                     }}
@@ -866,14 +926,20 @@ export default function AddPriceScreen() {
                 );
               })}
             </div>
-            {searchProductQuery && !products.find((p) => p.name.toLowerCase() === searchProductQuery.toLowerCase()) && (
+            {searchProductQuery.trim() &&
+              !(allProductsIndex.length > 0 ? allProductsIndex : products).some((p) =>
+                productNamesMatch(p.name, searchProductQuery)
+              ) && (
               <Button
                 type="button"
                 variant="outline"
-                className="w-full mt-4"
+                className="w-full mt-4 border-green-600 text-green-700 hover:bg-green-50"
+                disabled={isCreatingProduct}
                 onClick={() => createProduct(searchProductQuery)}
               >
-                "{searchProductQuery}" olarak ekle
+                {isCreatingProduct
+                  ? 'Ekleniyor...'
+                  : `"${searchProductQuery.trim()}" kütüphaneye ekle ve devam et`}
               </Button>
             )}
           </div>
@@ -899,12 +965,12 @@ export default function AddPriceScreen() {
                 <Label>Birim</Label>
                 <RadioGroup value={formData.unit} onValueChange={(value) => setFormData({ ...formData, unit: value })}>
                   <div className="flex items-center space-x-2">
-                    <RadioGroupItem value="kg" id="kg" />
-                    <Label htmlFor="kg">kg</Label>
-                  </div>
-                  <div className="flex items-center space-x-2">
                     <RadioGroupItem value="adet" id="adet" />
                     <Label htmlFor="adet">adet</Label>
+                  </div>
+                  <div className="flex items-center space-x-2">
+                    <RadioGroupItem value="kg" id="kg" />
+                    <Label htmlFor="kg">kg</Label>
                   </div>
                   <div className="flex items-center space-x-2">
                     <RadioGroupItem value="lt" id="lt" />
@@ -967,6 +1033,7 @@ export default function AddPriceScreen() {
                   }
                 }
                 
+                const displayName = formatLocationDisplayName(location.name, lat, lng);
                 return (
                   <Button
                     key={locationId}
@@ -976,21 +1043,21 @@ export default function AddPriceScreen() {
                     onClick={() => {
                       console.log('📍 Location selected:', {
                         id: locationId,
-                        name: location.name,
+                        name: displayName,
                         lat,
                         lng,
                       });
                       setFormData({
                         ...formData,
                         locationId: locationId,
-                        locationName: location.name,
+                        locationName: displayName,
                         lat: lat || formData.lat,
                         lng: lng || formData.lng,
                       });
                       setCurrentStep(currentStep + 1);
                     }}
                   >
-                    {location.name}
+                    {displayName}
                   </Button>
                 );
               })}
@@ -1033,7 +1100,12 @@ export default function AddPriceScreen() {
             <p className="text-gray-500 mb-6">Etiket veya tezgâh fotoğrafı güveni artırır.</p>
             {formData.photoPreview && (
               <div className="mb-4">
-                <img src={formData.photoPreview} alt="Preview" className="w-full rounded-lg" />
+                <img
+                  src={formData.photoPreview}
+                  alt="Preview"
+                  className="w-full rounded-lg"
+                  referrerPolicy="no-referrer"
+                />
               </div>
             )}
             <div className="grid grid-cols-2 gap-4">
@@ -1080,7 +1152,12 @@ export default function AddPriceScreen() {
               </div>
               {formData.photoPreview && (
                 <div className="mt-4">
-                  <img src={formData.photoPreview} alt="Preview" className="w-full rounded-lg" />
+                  <img
+                  src={formData.photoPreview}
+                  alt="Preview"
+                  className="w-full rounded-lg"
+                  referrerPolicy="no-referrer"
+                />
                 </div>
               )}
             </div>
@@ -1095,7 +1172,8 @@ export default function AddPriceScreen() {
           onClick={handleNext}
           disabled={
             isSubmitting ||
-            (stepName === 'product' && !formData.productId) ||
+            isCreatingProduct ||
+            (stepName === 'product' && !formData.productId && !searchProductQuery.trim()) ||
             (stepName === 'price' && !formData.price) ||
             (stepName === 'location' && !formData.locationId)
           }
