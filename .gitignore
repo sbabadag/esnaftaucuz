@@ -10,6 +10,9 @@ coverage/
 dist/
 build/
 
+# SEO — build zamanında üretilir (scripts/generate-sitemap.mjs)
+public/sitemap.xml
+
 # Misc
 .DS_Store
 .env

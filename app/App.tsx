@@ -10,6 +10,7 @@ import { LoadingScreenWithVersion } from './components/LoadingScreenWithVersion'
 import OnboardingScreen from './components/screens/OnboardingScreen';
 import LoginScreen from './components/screens/LoginScreen';
 import MainApp from './components/screens/MainApp';
+import PublicProductPage from './components/screens/PublicProductPage';
 import { App as CapacitorApp } from '@capacitor/app';
 import { Browser } from '@capacitor/browser';
 import { supabase } from './lib/supabase';
@@ -144,6 +145,7 @@ function AppRoutes() {
     return (
       <Routes>
         <Route path="/app/*" element={<MainApp key={`${user.id}:${resolveMerchantRoleFromProfile(user) ? 'merchant' : 'normal'}`} />} />
+        <Route path="/p/:id" element={<PublicProductPage />} />
         <Route path="*" element={<Navigate to="/app/explore" replace />} />
       </Routes>
     );
@@ -182,6 +184,7 @@ function AppRoutes() {
         path="/login" 
         element={<LoginScreen onLogin={() => {}} />} 
       />
+      <Route path="/p/:id" element={<PublicProductPage />} />
       <Route path="/app/*" element={<ProtectedRoute><MainApp key={user?.id || 'anon'} /></ProtectedRoute>} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

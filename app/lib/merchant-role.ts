@@ -2,7 +2,7 @@
  * Esnaf rolü: yalnızca açık is_merchant veya aktif benzeri abonelik durumu.
  * Sadece merchant_subscription_plan dolu olması (iptal/yarım kayıt) esnaf sayılmamalı.
  */
-function normalizeMerchantFlag(value: unknown): boolean {
+export function normalizeMerchantFlag(value: unknown): boolean {
   if (value === true) return true;
   if (value === false || value == null) return false;
   if (typeof value === 'string') {
