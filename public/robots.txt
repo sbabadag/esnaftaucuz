@@ -1,0 +1,7 @@
+User-agent: *
+Allow: /
+
+# Tüm ürün sayfaları taranabilir
+Allow: /p/
+
+Sitemap: https://www.esnaftaucuz.com/sitemap.xml

@@ -54,10 +54,10 @@ const envFileVars = loadEnvFile();
 const requiredVars = {
   VITE_SUPABASE_URL: 'Supabase project URL',
   VITE_SUPABASE_ANON_KEY: 'Supabase anonymous key',
-  VITE_GOOGLE_MAPS_API_KEY: 'Google Maps API key (required for geocoding)',
 };
 
 const optionalVars = {
+  VITE_GOOGLE_MAPS_API_KEY: 'Google Maps API key (enables Google geocoding)',
   VITE_API_URL: 'Backend API URL (optional if using Supabase only)',
   VITE_FIREBASE_API_KEY: 'Firebase Web API key (required for browser push notifications)',
   VITE_FIREBASE_AUTH_DOMAIN: 'Firebase Auth domain for web push setup',

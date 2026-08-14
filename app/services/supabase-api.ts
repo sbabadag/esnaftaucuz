@@ -3,10 +3,18 @@
  * 
  * This service replaces the backend API and uses Supabase directly.
  * No backend server needed - everything runs client-side with Supabase.
+ *
+ * @module supabase-api
+ * @refactor TODO: Split auth/products/locations/prices into ~5 modules.
+ *                Shared cache + auth helpers → api-utils.ts (ready).
+ *                Steps: (1) delete duplicate cachedQuery/stableKey/invalidateCachedQueries/
+ *                withHardTimeout/getRestAuthHeaders/getAccessTokenFromStorageFallback
+ *                (lines 50-200) (2) import from ./api-utils (3) extract authAPI block
+ *                (lines 290-885) → auth-api.ts (4) repeat for products/locations/prices.
  */
 
 import { supabase, safeGetSession, getAnonReadClient } from '../lib/supabase';
-import { resolveMerchantRoleFromProfile } from '../lib/merchant-role';
+import { resolveMerchantRoleFromProfile, normalizeMerchantFlag } from '../lib/merchant-role';
 import { v4 as uuidv4 } from 'uuid';
 import { Browser } from '@capacitor/browser';
 import { Capacitor } from '@capacitor/core';
@@ -39,18 +47,6 @@ const getMerchantSubscriptionCache = (): boolean | null => {
   return _merchantSubActive;
 };
 
-const normalizeMerchantFlag = (value: any): boolean => {
-  if (value === true) return true;
-  if (value === false || value == null) return false;
-  if (typeof value === 'string') {
-    const normalized = value.trim().toLowerCase();
-    return normalized === 'true' || normalized === 't' || normalized === '1';
-  }
-  if (typeof value === 'number') {
-    return value === 1;
-  }
-  return false;
-};
 const resolveMerchantStatus = resolveMerchantRoleFromProfile;
 
 type ApiCacheEntry<T> = {
@@ -1364,6 +1360,7 @@ export const pricesAPI = {
     limit?: number;
     lat?: number;
     lng?: number;
+    /** Radius in meters (e.g., 5000 for 5km). Client-side filtering. */
     radius?: number;
   }) => {
     return cachedQuery(stableKey('prices:getAll', filters), 12000, async () => {
