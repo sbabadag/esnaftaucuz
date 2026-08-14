@@ -1,7 +1,7 @@
 import { createContext, useContext, useState, useEffect, useRef, ReactNode } from 'react';
 import { authAPI, setMerchantSubscriptionCache, clearMerchantSubscriptionCache } from '../services/supabase-api';
 import { supabase, safeGetSession } from '../lib/supabase';
-import { resolveMerchantRoleFromProfile } from '../lib/merchant-role';
+import { resolveMerchantRoleFromProfile, normalizeMerchantFlag } from '../lib/merchant-role';
 import { toast } from 'sonner';
 
 interface User {
@@ -63,18 +63,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const OAUTH_PENDING_MAX_AGE_MS = 2 * 60 * 1000;
   const MERCHANT_SIGNUP_INTENT_KEY = 'merchant-signup-intent';
   const MERCHANT_SUBSCRIPTION_ONBOARDING_KEY = 'merchant-subscription-onboarding-user';
-  const normalizeMerchantFlag = (value: any): boolean => {
-    if (value === true) return true;
-    if (value === false || value == null) return false;
-    if (typeof value === 'string') {
-      const normalized = value.trim().toLowerCase();
-      return normalized === 'true' || normalized === 't' || normalized === '1';
-    }
-    if (typeof value === 'number') {
-      return value === 1;
-    }
-    return false;
-  };
   const resolveMerchantStatus = resolveMerchantRoleFromProfile;
   const getMerchantHint = (email?: string | null): boolean => {
     if (!email) return false;
