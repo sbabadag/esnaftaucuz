@@ -253,8 +253,10 @@ export default function ExploreScreen() {
     products: Product[];
     prices: Price[];
     locations: any[];
+    merchants: any[];
   } | null>(null);
   const [allProductsIndex, setAllProductsIndex] = useState<Product[]>([]);
+  const [allMerchantsIndex, setAllMerchantsIndex] = useState<any[]>([]);
   const [isSearching, setIsSearching] = useState(false);
   const [trendProducts, setTrendProducts] = useState<Product[]>([]);
   const [nearbyCheapest, setNearbyCheapest] = useState<Price[]>([]);
@@ -313,7 +315,8 @@ export default function ExploreScreen() {
   const hasSearchMatches = !!searchResults && (
     (searchResults.products?.length || 0) > 0 ||
     (searchResults.prices?.length || 0) > 0 ||
-    (searchResults.locations?.length || 0) > 0
+    (searchResults.locations?.length || 0) > 0 ||
+    (searchResults.merchants?.length || 0) > 0
   );
   const isNativePlatform =
     typeof window !== 'undefined' &&
@@ -1596,6 +1599,54 @@ export default function ExploreScreen() {
     }
   };
 
+  // Dükkan arama indeksi — isim + açıklama metni de aransın ("içindeki text'ler")
+  useEffect(() => {
+    let mounted = true;
+    const cacheKey = 'merchants-search-index:v1';
+    try {
+      const raw = localStorage.getItem(cacheKey);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed) && parsed.length > 0) setAllMerchantsIndex(parsed);
+      }
+    } catch (e) {
+      console.warn('Failed to restore merchants search index cache:', e);
+    }
+
+    const loadMerchantsIndex = async () => {
+      try {
+        const sbUrl = import.meta.env.VITE_SUPABASE_URL as string;
+        const sbKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
+        if (!sbUrl || !sbKey) return;
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 20000);
+        const response = await fetch(
+          `${sbUrl}/rest/v1/users?select=id,name,shop_name,avatar,preferences,location&is_merchant=eq.true&limit=2000`,
+          {
+            headers: { apikey: sbKey, Authorization: `Bearer ${sbKey}` },
+            signal: controller.signal,
+          }
+        );
+        clearTimeout(timer);
+        if (!response.ok) return;
+        const rows = await response.json().catch(() => []);
+        if (!mounted || !Array.isArray(rows)) return;
+        if (rows.length > 0) {
+          setAllMerchantsIndex(rows);
+          try {
+            localStorage.setItem(cacheKey, JSON.stringify(rows));
+          } catch {}
+        }
+      } catch (e) {
+        console.warn('Merchants search index load failed:', e);
+      }
+    };
+    loadMerchantsIndex();
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
   const performSearch = async (query: string) => {
     const normalized = query.trim().toLowerCase();
     if (!normalized) {
@@ -1658,10 +1709,38 @@ export default function ExploreScreen() {
       .filter((l: any, idx: number, arr: any[]) => arr.findIndex((x) => x.id === l.id) === idx)
       .slice(0, 10);
 
+    // Dükkan eşleştirme: isim (shop_name/name) + açıklama metni (preferences.shopDescription)
+    const getShopScore = (m: any) => {
+      const name = m.shop_name || m.name || '';
+      const nn = trNormalize(name);
+      if (nn === qn) return 100;
+      if (nn.startsWith(qn)) return 80;
+      if (nn.split(/\s+/).some((w) => w.startsWith(qn))) return 60;
+      if (nn.includes(qn)) return 40;
+      const desc = trNormalize(String((m.preferences && m.preferences.shopDescription) || ''));
+      if (desc.includes(qn)) return 30;
+      return -1;
+    };
+    const localMerchants = allMerchantsIndex
+      .map((m) => ({
+        id: m.id,
+        name: m.shop_name || m.name || 'Dükkan',
+        avatar: m.avatar || null,
+        logo: (m.preferences && m.preferences.shopLogo) || null,
+        city: (m.location && m.location.city) || (m.preferences && m.preferences.city) || '',
+        district: (m.location && m.location.district) || (m.preferences && m.preferences.district) || '',
+        description: (m.preferences && m.preferences.shopDescription) || '',
+        score: getShopScore(m),
+      }))
+      .filter((m) => m.score >= 0)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 6);
+
     setSearchResults({
       products: localProducts,
       prices: localPrices as any,
       locations: localLocations,
+      merchants: localMerchants,
     });
     setSearchParams({ search: query });
 
@@ -1691,6 +1770,7 @@ export default function ExploreScreen() {
         products: productsWithImages,
         prices: rankedPrices,
         locations: remoteLocations,
+        merchants: localMerchants,
       });
       setSearchParams({ search: query });
     } catch (error: any) {
@@ -2017,6 +2097,47 @@ export default function ExploreScreen() {
             )}
 
               <>
+                {/* Merchants Results */}
+                {searchResults.merchants.length > 0 && (
+                  <section>
+                    <h3 className="text-base font-semibold mb-3 text-gray-700">
+                      Dükkanlar ({searchResults.merchants.length})
+                    </h3>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 sm:gap-3">
+                      {searchResults.merchants.map((shop) => (
+                        <div
+                          key={shop.id}
+                          onClick={() => navigate(`/app/merchant-shop/${shop.id}`)}
+                          className="bg-white rounded-lg p-3 border border-gray-200 hover:border-green-600 hover:shadow-md cursor-pointer transition-all flex gap-3 items-start"
+                        >
+                          <div className="w-11 h-11 rounded-lg bg-gray-100 flex items-center justify-center overflow-hidden shrink-0">
+                            {shop.logo || shop.avatar ? (
+                              <img
+                                src={shop.logo || shop.avatar}
+                                alt=""
+                                className="w-full h-full object-cover"
+                              />
+                            ) : (
+                              <ShoppingBag className="w-5 h-5 text-gray-400" />
+                            )}
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <h4 className="font-medium text-gray-900 truncate text-sm">{shop.name}</h4>
+                            {(shop.district || shop.city) && (
+                              <p className="text-xs text-gray-500 truncate">
+                                {[shop.district, shop.city].filter(Boolean).join(', ')}
+                              </p>
+                            )}
+                            {shop.description && (
+                              <p className="text-xs text-gray-500 truncate mt-0.5">{shop.description}</p>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </section>
+                )}
+
                 {/* Products Results */}
                 {searchResults.products.length > 0 && (
                   <section>
