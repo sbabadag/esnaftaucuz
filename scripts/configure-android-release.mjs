@@ -32,6 +32,20 @@ if (!keystoreB64 || !storePassword) {
 
 const escapeGradle = (value) => value.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
 
+// 0) package.json'dan versionCode/versionName hesapla ve build.gradle'a yaz.
+//    (cap add android, config'teki android.versionCode'u uygulamıyor — hep 1 kalıyor.)
+const pkgJson = JSON.parse(readFileSync(join(projectRoot, 'package.json'), 'utf8'));
+const semParts = String(pkgJson.version || '1.0.0').split('.').map((n) => parseInt(n, 10) || 0);
+const derivedVersionCode = (semParts[0] || 0) * 10000 + (semParts[1] || 0) * 100 + (semParts[2] || 0);
+{
+  let gradleRaw = readFileSync(gradlePath, 'utf8');
+  const codeBefore = gradleRaw.match(/versionCode (\d+)/)?.[1];
+  gradleRaw = gradleRaw.replace(/versionCode \d+/, `versionCode ${derivedVersionCode}`);
+  gradleRaw = gradleRaw.replace(/versionName "[^"]*"/, `versionName "${pkgJson.version}"`);
+  writeFileSync(gradlePath, gradleRaw);
+  console.log(`✅ build.gradle versionCode: ${codeBefore} → ${derivedVersionCode}, versionName → ${pkgJson.version}`);
+}
+
 // 1) Keystore'u yaz
 writeFileSync(keystorePath, Buffer.from(keystoreB64, 'base64'));
 console.log(`✅ Keystore yazıldı: ${keystorePath}`);
