@@ -218,6 +218,29 @@ const enrichProductImages = async (products: any[]): Promise<any[]> => {
   }
 };
 
+/** Uygulama açılışında resimsiz ürünlerin fotoğraf ipuçlarını arka planda bir kez toplar. */
+const preloadMissingProductImages = async () => {
+  try {
+    const sbUrl = import.meta.env.VITE_SUPABASE_URL as string;
+    const sbKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
+    if (!sbUrl || !sbKey) return;
+    const headers = { apikey: sbKey, Authorization: `Bearer ${sbKey}` };
+    const prodResp = await fetch(`${sbUrl}/rest/v1/products?select=id&image=is.null&limit=500`, { headers });
+    if (!prodResp.ok) return;
+    const rows = await prodResp.json().catch(() => []);
+    const ids = (Array.isArray(rows) ? rows : []).map((r: any) => r.id).filter(Boolean);
+    if (!ids.length) return;
+    const hints = loadImageHints();
+    const missing = ids.filter((id) => !hints[id]);
+    if (!missing.length) return;
+    // Bulunan ipuçları önbelleğe yazılır — sonraki aramalar anında resimli olur.
+    await enrichProductImages(missing.map((id) => ({ id })));
+    console.log(`🖼️ ${missing.length} ürün için fotoğraf ipucu önyüklendi`);
+  } catch {
+    /* sessiz — arama sırasındaki zenginleştirme yedek yol */
+  }
+};
+
 export default function ExploreScreen() {
   const navigate = useNavigate();
   const { getCurrentPosition } = useGeolocation();
@@ -471,6 +494,15 @@ export default function ExploreScreen() {
       mounted = false;
     };
   }, [productsIndexCacheKey]);
+
+  // Açılışta resimsiz ürünlerin fotoğraf ipuçlarını arka planda önyükle —
+  // kullanıcının oluşturduğu ürünler de aramada anında resimli çıksın.
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      void preloadMissingProductImages();
+    }, 2500);
+    return () => clearTimeout(timer);
+  }, []);
 
 
   // Check for search query in URL on mount
