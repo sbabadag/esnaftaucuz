@@ -1098,6 +1098,19 @@ export default function ProductDetailScreen() {
               userCoords && hasCoordinates
                 ? calculateDistanceKm(userCoords, { lat: lat as number, lng: lng as number })
                 : null;
+            if (import.meta.env.VITE_DEBUG_LOGS) {
+              console.log(
+                '[DIST-BADGE] userCoords:',
+                JSON.stringify(userCoords),
+                'hasCoords:',
+                hasCoordinates,
+                'lat/lng:',
+                lat,
+                lng,
+                'distance:',
+                distanceKm,
+              );
+            }
             const distanceText =
               distanceKm === null
                 ? ''

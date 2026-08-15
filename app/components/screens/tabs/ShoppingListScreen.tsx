@@ -86,6 +86,9 @@ export default function ShoppingListScreen() {
         if (RANGE_OPTIONS_KM.includes(Number(saved?.radiusKm))) {
           setRadiusKm(Number(saved.radiusKm));
         }
+        // Sonuçlar da kalıcı: karttan dönüşte hesap kaybolmasın
+        if (saved?.comparison?.results) setComparison(saved.comparison);
+        if (Array.isArray(saved?.shopTotals)) setShopTotals(saved.shopTotals);
       }
     } catch {
       // Ignore invalid local list data.
@@ -97,11 +100,11 @@ export default function ShoppingListScreen() {
   useEffect(() => {
     if (hydratedStorageKey !== storageKey) return;
     try {
-      localStorage.setItem(storageKey, JSON.stringify({ items, radiusKm }));
+      localStorage.setItem(storageKey, JSON.stringify({ items, radiusKm, comparison, shopTotals }));
     } catch {
       // Persistence is best effort.
     }
-  }, [hydratedStorageKey, items, radiusKm, storageKey]);
+  }, [hydratedStorageKey, items, radiusKm, comparison, shopTotals, storageKey]);
 
   useEffect(() => {
     let cancelled = false;
@@ -142,11 +145,13 @@ export default function ShoppingListScreen() {
     setItems((current) => [...current, { product, quantity: 1 }]);
     setQuery('');
     setComparison(null);
+    setShopTotals([]);
   };
 
   const removeProduct = (productId: string) => {
     setItems((current) => current.filter((item) => item.product.id !== productId));
     setComparison(null);
+    setShopTotals([]);
   };
 
   const updateQuantity = (productId: string, rawQuantity: string) => {
@@ -158,6 +163,7 @@ export default function ShoppingListScreen() {
       ),
     );
     setComparison(null);
+    setShopTotals([]);
   };
 
   const calculateCheapest = async () => {
@@ -306,6 +312,7 @@ export default function ShoppingListScreen() {
                 onClick={() => {
                   setItems([]);
                   setComparison(null);
+                  setShopTotals([]);
                 }}
                 className="text-xs font-medium text-red-600"
               >
@@ -368,6 +375,7 @@ export default function ShoppingListScreen() {
             onChange={(event) => {
               setRadiusKm(Number(event.target.value));
               setComparison(null);
+              setShopTotals([]);
             }}
             className="h-10 w-full rounded-md border border-gray-300 bg-white px-3 text-sm"
           >
