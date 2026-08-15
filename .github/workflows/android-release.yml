@@ -132,8 +132,19 @@ jobs:
           printf '%s\n' "$NOTES" > whatsnew/whatsnew-en-US
           echo "Notlar:" && cat whatsnew/whatsnew-tr-TR
 
+      - name: Play secret kontrolü
+        id: playcheck
+        env:
+          PLAY_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+        run: |
+          if [ -n "$PLAY_JSON" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Google Play'e yükle
-        if: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON != '' }}
+        if: steps.playcheck.outputs.enabled == 'true'
         uses: r0adkll/upload-google-play@v1
         with:
           serviceAccountJson: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
@@ -146,7 +157,7 @@ jobs:
           changesNotSentForReview: false
 
       - name: Play yükleme atlandı (secret yok)
-        if: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON == '' }}
+        if: steps.playcheck.outputs.enabled != 'true'
         run: |
           echo "⚠️ PLAY_SERVICE_ACCOUNT_JSON secret'ı yok — otomatik Play yüklemesi atlandı."
           echo "👉 AAB'yi Actions → bu iş → Artifacts bölümünden indirip"
