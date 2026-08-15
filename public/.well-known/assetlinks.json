@@ -1,0 +1,12 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "com.esnaftaucuz.app",
+      "sha256_cert_fingerprints": [
+        "d35519b34cab9447d312adc7a849720966b260dab4b00783834b54e5560fc4bf"
+      ]
+    }
+  }
+]

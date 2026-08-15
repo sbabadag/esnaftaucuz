@@ -76,3 +76,36 @@ if (gradle.includes('signingConfigs')) {
 }
 
 console.log('✅ configure-android-release tamamlandı');
+
+// 3) AndroidManifest.xml'e App Links intent-filter'ı enjekte et:
+// Google sonuçlarındaki https://www.esnaftaucuz.com/p/... ve /s/... linkleri
+// uygulama kuruluysa doğrudan uygulamada açılsın (assetlinks.json ile doğrulanır).
+const manifestPath = join(projectRoot, 'android', 'app', 'src', 'main', 'AndroidManifest.xml');
+let manifest = readFileSync(manifestPath, 'utf8');
+
+if (manifest.includes('android:host="www.esnaftaucuz.com"')) {
+  console.log('ℹ️ AndroidManifest zaten App Links içeriyor — enjeksiyon atlandı');
+} else {
+  const schemeFilter = `            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="@string/custom_url_scheme" />
+            </intent-filter>`;
+
+  if (!manifest.includes(schemeFilter)) {
+    console.warn('⚠️ Capacitor AndroidManifest şablonu bulunamadı — App Links enjeksiyonu atlandı');
+  } else {
+    const appLinksFilter = `            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" android:host="www.esnaftaucuz.com" android:pathPrefix="/p/" />
+                <data android:scheme="https" android:host="www.esnaftaucuz.com" android:pathPrefix="/s/" />
+            </intent-filter>`;
+
+    manifest = manifest.replace(schemeFilter, schemeFilter + '\n\n' + appLinksFilter);
+    writeFileSync(manifestPath, manifest);
+    console.log('✅ AndroidManifest App Links intent-filter enjekte edildi');
+  }
+}

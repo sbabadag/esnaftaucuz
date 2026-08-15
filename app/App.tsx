@@ -729,6 +729,29 @@ function App() {
       const handleIncomingDeepLink = async (incomingUrl: string, source: string) => {
         console.log(`🔗 App opened with URL (${source}):`, incomingUrl);
         const normalizedIncoming = String(incomingUrl || '').toLowerCase();
+
+        // Web App Links: https://www.esnaftaucuz.com/p/<id> veya /s/<id>
+        // Google sonuçlarından gelen linkler uygulamada ilgili sayfayı açsın.
+        const isWebDeepLink = /^https?:\/\/(www\.)?esnaftaucuz\.com\/(p|s)\//i.test(incomingUrl);
+        if (isWebDeepLink) {
+          try {
+            const u = new URL(incomingUrl);
+            const path = u.pathname; // /p/<id> veya /s/<id>
+            try {
+              localStorage.setItem('pending_deep_link', path);
+            } catch {
+              // storage hatası önemsiz
+            }
+            console.log('🔗 Web derin bağlantı — uygulama içi hedefe gidiliyor:', path);
+            // Capacitor kök origin üzerinden '?/' biçimiyle git: main.tsx restoreDeepPathFromQuery
+            // aynı mekanizmayı çözer, SPA doğru rotada açılır.
+            window.location.replace(window.location.origin + '/?/' + path.replace(/^\//, ''));
+          } catch {
+            // sessiz — normal akış devam eder
+          }
+          return;
+        }
+
         const isKnownOAuthCallback =
           normalizedIncoming.startsWith('com.esnaftaucuz.app:') ||
           normalizedIncoming.includes('supabase.co/auth/v1/callback');

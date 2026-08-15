@@ -182,7 +182,7 @@ function buildShopHtml(shop, items) {
   <h2 style="font-size:18px;margin-top:20px;">Ürünler ve fiyatlar</h2>
   ${items.length === 0 ? '<p style="color:#666;">Bu dükkanda henüz ürün kaydı yok.</p>' : `<ul>${productRows}</ul>`}
 
-  <a class="cta" href="/">Uygulamada Gör →</a>
+  <a class="cta" href="/s/${shop.id}">📱 Uygulamada aç</a>
 
   <div class="play">
     <div class="play-text">Güncel fiyatları kaçırmayın — uygulamayı Google Play'den indirin:</div>

@@ -171,7 +171,7 @@ function buildProductHtml(product, prices, locationsById) {
   <h2 style="font-size:18px;margin-top:20px;">Fiyatlar</h2>
   ${prices.length === 0 ? '<p style="color:#666;">Bu ürün için henüz fiyat kaydı yok.</p>' : `<ul>${priceRows}</ul>`}
 
-  <a class="cta" href="/">Uygulamada Gör →</a>
+  <a class="cta" href="/p/${product.id}">📱 Uygulamada aç</a>
 
   <div class="play">
     <div class="play-text">Güncel fiyatları kaçırmayın — uygulamayı Google Play'den indirin:</div>
