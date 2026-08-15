@@ -1742,7 +1742,7 @@ export const pricesAPI = {
       const sbKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
       const params = new URLSearchParams({
         select:
-          'id,product_id,user_id,price,unit,is_active,coordinates,created_at,user:users(id,name,shop_name),location:locations(id,name,coordinates)',
+          'id,product_id,user_id,price,unit,is_active,coordinates,created_at,user:users(id,name,shop_name,is_merchant),location:locations(id,name,coordinates)',
         product_id: `in.(${ids.join(',')})`,
         is_active: 'eq.true',
         limit: '5000',

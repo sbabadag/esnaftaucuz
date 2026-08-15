@@ -22,6 +22,7 @@ export type ShoppingPrice = {
     id?: string;
     name?: string | null;
     shop_name?: string | null;
+    is_merchant?: boolean | null;
   } | null;
   price?: number | string;
   unit?: string;
@@ -190,8 +191,10 @@ export function buildShopTotals(
   prices: ShoppingPrice[],
   origin: Coordinates,
   radiusKm: number,
+  options?: { merchantsOnly?: boolean },
 ): ShopTotal[] {
   const safeRadiusKm = Math.max(0, finiteNumber(radiusKm) ?? 0);
+  const merchantsOnly = options?.merchantsOnly === true;
 
   const itemByProductId = new Map<string, ShoppingItem>();
   for (const item of items) {
@@ -216,6 +219,9 @@ export function buildShopTotals(
     const productId = price.product_id || price.product?.id;
     const item = productId ? itemByProductId.get(productId) : undefined;
     if (!item || price.is_active === false) continue;
+
+    // merchantsOnly: yalnızca gerçek esnaf dükkanları (normal kullanıcı girişlerini atla)
+    if (merchantsOnly && price.user?.is_merchant !== true) continue;
 
     const value = finiteNumber(price.price);
     if (value === null || value <= 0) continue;

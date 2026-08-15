@@ -8,6 +8,7 @@ import {
   Plus,
   Search,
   ShoppingCart,
+  Store,
   Trash2,
 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -196,6 +197,7 @@ export default function ShoppingListScreen() {
           allRows as any,
           { lat: position.latitude, lng: position.longitude },
           radiusKm,
+          { merchantsOnly: true },
         );
         setShopTotals(totals);
       } catch (shopErr) {
@@ -493,18 +495,36 @@ export default function ShoppingListScreen() {
                       </span>
                       <span className="text-xs text-gray-500">{result.distanceKm?.toFixed(1)} km</span>
                     </div>
-                    <p className="mt-1 text-gray-600">
-                      {result.cheapest.location?.name || (lang === 'tr' ? 'Konum bilgisi yok' : 'Location unavailable')}
-                    </p>
-                    {result.cheapest.location?.id && (
+                    {/* Gerçek esnaf dükkanı varsa dükkana götür; yoksa konuma düş */}
+                    {(result.cheapest as any).user?.is_merchant ? (
                       <button
                         type="button"
-                        onClick={() => navigate(`/app/location/${result.cheapest?.location?.id}`)}
+                        onClick={() =>
+                          navigate(`/app/merchant-shop/${(result.cheapest as any).user.id}`)
+                        }
                         className="mt-2 flex items-center gap-1 text-xs font-medium text-green-700"
                       >
-                        <MapPin className="h-3.5 w-3.5" />
-                        {lang === 'tr' ? 'Mağazayı görüntüle' : 'View store'}
+                        <Store className="h-3.5 w-3.5" />
+                        {(result.cheapest as any).user.shop_name ||
+                          (result.cheapest as any).user.name ||
+                          'Dükkana git'}
                       </button>
+                    ) : (
+                      <>
+                        <p className="mt-1 text-gray-600">
+                          {result.cheapest.location?.name || (lang === 'tr' ? 'Konum bilgisi yok' : 'Location unavailable')}
+                        </p>
+                        {result.cheapest.location?.id && (
+                          <button
+                            type="button"
+                            onClick={() => navigate(`/app/location/${result.cheapest?.location?.id}`)}
+                            className="mt-2 flex items-center gap-1 text-xs font-medium text-green-700"
+                          >
+                            <MapPin className="h-3.5 w-3.5" />
+                            {lang === 'tr' ? 'Mağazayı görüntüle' : 'View store'}
+                          </button>
+                        )}
+                      </>
                     )}
                   </div>
                 ) : (
