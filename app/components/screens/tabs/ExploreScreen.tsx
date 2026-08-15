@@ -126,6 +126,63 @@ function collapseConsecutiveProductPricesToCheapest<T extends { product?: { id?:
   return collapsed;
 }
 
+/** Aramada resimsiz çıkan ürünleri fiyat fotoğrafları / esnaf ürün görselleriyle zenginleştirir. */
+const enrichProductImages = async (products: any[]): Promise<any[]> => {
+  const need = products.filter((p) => !(p as any).image).map((p) => p.id || (p as any)._id).filter(Boolean);
+  if (!need.length) return products;
+  try {
+    const sbUrl = import.meta.env.VITE_SUPABASE_URL as string;
+    const sbKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
+    if (!sbUrl || !sbKey) return products;
+    const headers = { apikey: sbKey, Authorization: `Bearer ${sbKey}` };
+    const inList = need.slice(0, 80).join(',');
+    const firstPublic = (v: unknown): string => {
+      const s = String(v || '').trim();
+      return /^https?:\/\//i.test(s) ? s : '';
+    };
+    const toList = (v: unknown): string[] => {
+      if (Array.isArray(v)) return v;
+      if (typeof v === 'string') {
+        try {
+          const parsed = JSON.parse(v);
+          return Array.isArray(parsed) ? parsed : [];
+        } catch {
+          return [];
+        }
+      }
+      return [];
+    };
+    const [pricesResp, merchantResp] = await Promise.all([
+      fetch(`${sbUrl}/rest/v1/prices?select=product_id,photo,photos&product_id=in.(${inList})&order=created_at.desc&limit=200`, { headers }),
+      fetch(`${sbUrl}/rest/v1/merchant_products?select=product_id,images&product_id=in.(${inList})&limit=200`, { headers }),
+    ]);
+    const imageByProduct = new Map<string, string>();
+    if (pricesResp.ok) {
+      const rows = await pricesResp.json().catch(() => []);
+      for (const row of Array.isArray(rows) ? rows : []) {
+        if (imageByProduct.has(row.product_id)) continue;
+        const url = firstPublic(row.photo) || toList(row.photos).map(firstPublic).find(Boolean);
+        if (url) imageByProduct.set(row.product_id, url);
+      }
+    }
+    if (merchantResp.ok) {
+      const rows = await merchantResp.json().catch(() => []);
+      for (const row of Array.isArray(rows) ? rows : []) {
+        if (imageByProduct.has(row.product_id)) continue;
+        const url = toList(row.images).map(firstPublic).find(Boolean);
+        if (url) imageByProduct.set(row.product_id, url);
+      }
+    }
+    return products.map((p) => {
+      const url = imageByProduct.get(p.id || (p as any)._id);
+      return url && !p.image ? { ...p, image: url } : p;
+    });
+  } catch (e) {
+    console.warn('Product image enrichment failed:', e);
+    return products;
+  }
+};
+
 export default function ExploreScreen() {
   const navigate = useNavigate();
   const { getCurrentPosition } = useGeolocation();
@@ -1552,8 +1609,14 @@ export default function ExploreScreen() {
         .slice(0, 20);
       const remoteLocations = Array.from(results?.locations || []).slice(0, 10);
 
+      // Resimsiz ürün kartlarına fiyat/esnaf fotoğrafı bul (2.5 sn'den uzun sürerse sonuçları geciktirme).
+      const productsWithImages = await Promise.race([
+        enrichProductImages(rankedProducts),
+        new Promise<any[]>((resolve) => setTimeout(() => resolve(rankedProducts), 2500)),
+      ]);
+
       setSearchResults({
-        products: rankedProducts,
+        products: productsWithImages,
         prices: rankedPrices,
         locations: remoteLocations,
       });
