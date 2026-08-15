@@ -103,7 +103,7 @@ export default function AddPriceScreen() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isCreatingProduct, setIsCreatingProduct] = useState(false);
   const [isPickingPhoto, setIsPickingPhoto] = useState(false);
-  const productsIndexCacheKey = `add-price-products-index:${user?.id || 'anon'}`;
+  const productsIndexCacheKey = `add-price-products-index:v1:${user?.id || 'anon'}`;
   const locationsCacheKey = `add-price-locations-index:${user?.id || 'anon'}`;
   const withTimeout = async <T,>(promise: Promise<T>, ms: number, timeoutMessage: string): Promise<T> => {
     return Promise.race([

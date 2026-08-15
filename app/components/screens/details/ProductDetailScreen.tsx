@@ -17,6 +17,52 @@ import { resolveMerchantRoleFromProfile } from '../../../lib/merchant-role';
 import { pickSingleImage } from '../../../lib/native-image-picker';
 import { toast } from 'sonner';
 
+/**
+ * Silinmiş ürünlerin eski localStorage önbelleklerinde "hayalet" olarak kalmasını önler:
+ * aramada çıkıp tıklanınca "Ürün bulunamadı" veren ürünleri tüm liste önbelleklerinden temizler.
+ */
+function purgeDeadProductFromCaches(productId: string) {
+  if (!productId) return;
+  try {
+    for (let i = localStorage.length - 1; i >= 0; i--) {
+      const key = localStorage.key(i) || '';
+      if (!key.startsWith('products-search-index') && !key.startsWith('explore-cache') && !key.startsWith('add-price-products-index')) {
+        continue;
+      }
+      const raw = localStorage.getItem(key) || '';
+      let parsed: any = null;
+      try {
+        parsed = JSON.parse(raw);
+      } catch {
+        continue;
+      }
+      const matches = (entry: any) =>
+        (entry?.id || entry?._id) === productId ||
+        entry?.product?.id === productId ||
+        entry?.product_id === productId;
+      if (Array.isArray(parsed)) {
+        const next = parsed.filter((p) => !matches(p));
+        if (next.length !== parsed.length) localStorage.setItem(key, JSON.stringify(next));
+      } else if (parsed && typeof parsed === 'object') {
+        let changed = false;
+        for (const listName of ['products', 'trendProducts', 'recentPrices', 'nearbyCheapest', 'merchantShops', 'prices']) {
+          const list = parsed[listName];
+          if (Array.isArray(list)) {
+            const next = list.filter((p) => !matches(p));
+            if (next.length !== list.length) {
+              parsed[listName] = next;
+              changed = true;
+            }
+          }
+        }
+        if (changed) localStorage.setItem(key, JSON.stringify(parsed));
+      }
+    }
+  } catch {
+    /* best effort */
+  }
+}
+
 interface Price {
   id: string;
   price: number;
@@ -88,6 +134,7 @@ export default function ProductDetailScreen() {
   const navigate = useNavigate();
   const { user } = useAuth();
   const [product, setProduct] = useState<any>(null);
+  const [productNotFound, setProductNotFound] = useState(false);
   const [prices, setPrices] = useState<Price[]>([]);
   const [productGallery, setProductGallery] = useState<string[]>([]);
   const [galleryIndex, setGalleryIndex] = useState(0);
@@ -216,6 +263,7 @@ export default function ProductDetailScreen() {
   const loadProductData = async () => {
     try {
       setIsLoading(true);
+      setProductNotFound(false);
       if (id) {
         // Count toward "Bugün en çok bakılanlar" (client dedupes once per device/day).
         void productsAPI.recordView(id);
@@ -343,7 +391,15 @@ export default function ProductDetailScreen() {
       clearTimeout(tid);
 
       const productData = productResp.ok ? await productResp.json().catch(() => null) : null;
-      if (productData) setProduct(productData);
+      if (productData) {
+        setProduct(productData);
+      } else if (id && (productResp.status === 404 || productResp.status === 406)) {
+        // Ürün DB'de yok — büyük olasılıkla eski önbellekten gelen "hayalet" ürün.
+        // Tüm liste önbelleklerinden temizle ki bir daha aramada çıkmasın.
+        // (Geçici ağ hatalarında temizlik yapma — ürün geçerli olabilir.)
+        purgeDeadProductFromCaches(id);
+        setProductNotFound(true);
+      }
 
       let priceData: any[] = [];
       if (pricesResp.ok) {
@@ -701,8 +757,23 @@ export default function ProductDetailScreen() {
 
   if (!product) {
     return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <div className="text-gray-500">Ürün bulunamadı</div>
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
+        <div className="text-center max-w-sm w-full">
+          <div className="text-gray-600 font-medium mb-2">
+            {productNotFound ? 'Bu ürün artık listede değil' : 'Ürün bulunamadı'}
+          </div>
+          <p className="text-sm text-gray-500 mb-4">
+            {productNotFound
+              ? 'Ürün katalogdan kaldırılmış. Listelerden de temizlendi, bir daha görünmeyecek.'
+              : 'Aradığınız ürün mevcut değil.'}
+          </p>
+          <Button
+            onClick={() => navigate('/app/explore', { replace: true })}
+            className="w-full bg-green-600 hover:bg-green-700"
+          >
+            Ana sayfaya dön
+          </Button>
+        </div>
       </div>
     );
   }
