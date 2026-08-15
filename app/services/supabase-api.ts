@@ -4711,22 +4711,41 @@ export const merchantProductsAPI = {
   // Verify a merchant product (user confirms price is correct)
   verify: async (merchantProductId: string, userId: string, isVerified: boolean = true) => {
     try {
-      // Use UPSERT to handle both insert and update
-      const { data, error } = await supabase
-        .from('merchant_product_verifications')
-        .upsert({
-          merchant_product_id: merchantProductId,
-          user_id: userId,
-          is_verified: isVerified,
-        }, {
-          onConflict: 'merchant_product_id,user_id'
-        })
-        .select()
-        .single();
-
-      if (error) throw error;
+      // REST upsert: supabase-js Android WebView'de token yenileme askısı yapıyordu.
+      const sbUrl = import.meta.env.VITE_SUPABASE_URL as string;
+      const headers = await getRestAuthHeaders();
+      headers.Prefer = 'return=representation,resolution=merge-duplicates';
+      const controller = new AbortController();
+      const tid = setTimeout(() => controller.abort(), 10000);
+      const resp = await fetch(
+        `${sbUrl}/rest/v1/merchant_product_verifications?on_conflict=merchant_product_id,user_id`,
+        {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({
+            merchant_product_id: merchantProductId,
+            user_id: userId,
+            is_verified: isVerified,
+          }),
+          signal: controller.signal,
+        }
+      );
+      clearTimeout(tid);
+      const rawText = await resp.text().catch(() => '');
+      if (!resp.ok) {
+        console.error('Verify merchant product error:', resp.status, rawText);
+        throw new Error('Doğrulama başarısız');
+      }
+      let row: any = null;
+      try {
+        const parsed = rawText ? JSON.parse(rawText) : null;
+        row = Array.isArray(parsed) ? parsed[0] : parsed;
+      } catch {
+        row = null;
+      }
+      if (!row) throw new Error('Doğrulama başarısız');
       invalidateCachedQueries('merchant:');
-      return data;
+      return row;
     } catch (error: any) {
       console.error('❌ Verify merchant product error:', error);
       throw error;
@@ -4736,18 +4755,29 @@ export const merchantProductsAPI = {
   // Get user's verification status for a merchant product
   getUserVerification: async (merchantProductId: string, userId: string) => {
     try {
-      const { data, error } = await supabase
-        .from('merchant_product_verifications')
-        .select('*')
-        .eq('merchant_product_id', merchantProductId)
-        .eq('user_id', userId)
-        .maybeSingle();
-
-      if (error) throw error;
-      return data;
+      const sbUrl = import.meta.env.VITE_SUPABASE_URL as string;
+      const headers = await getRestAuthHeaders();
+      const params = new URLSearchParams({
+        select: '*',
+        merchant_product_id: `eq.${merchantProductId}`,
+        user_id: `eq.${userId}`,
+      });
+      const controller = new AbortController();
+      const tid = setTimeout(() => controller.abort(), 10000);
+      const resp = await fetch(`${sbUrl}/rest/v1/merchant_product_verifications?${params.toString()}`, {
+        headers,
+        signal: controller.signal,
+      });
+      clearTimeout(tid);
+      if (!resp.ok) {
+        console.error('Get user verification error:', resp.status, await resp.text().catch(() => ''));
+        return null;
+      }
+      const rows = await resp.json().catch(() => []);
+      return Array.isArray(rows) && rows.length > 0 ? rows[0] : null;
     } catch (error: any) {
       console.error('❌ Get user verification error:', error);
-      throw error;
+      return null;
     }
   },
 
