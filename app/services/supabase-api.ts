@@ -5292,7 +5292,8 @@ export const shopReviewsAPI = {
       const sbUrl = import.meta.env.VITE_SUPABASE_URL as string;
       const sbKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
       const params = new URLSearchParams({
-        select: '*,user:users(id,name,avatar)',
+        // İki FK (shop_id + user_id) users'a gittiği için PostgREST'e FK ipucu şart
+        select: '*,user:users!shop_reviews_user_id_fkey(id,name,avatar)',
         shop_id: `eq.${shopId}`,
         order: 'created_at.desc',
         limit: String(limit),

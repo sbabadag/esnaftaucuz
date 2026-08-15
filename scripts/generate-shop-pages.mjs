@@ -291,7 +291,7 @@ async function main() {
     fetchAll('/rest/v1/locations?select=id,coordinates&limit=5000'),
     fetchAll('/rest/v1/prices?select=user_id,location_id&limit=20000'),
     // Tablo henüz yoksa (migration 053 uygulanmamışsa) SSG çökmesin — boş diziyle devam
-    fetchAll('/rest/v1/shop_reviews?select=shop_id,rating,comment,created_at,user:users(name)&limit=20000').catch(() => []),
+    fetchAll('/rest/v1/shop_reviews?select=shop_id,rating,comment,created_at,user:users!shop_reviews_user_id_fkey(name)&limit=20000').catch(() => []),
   ]);
 
   const reviewsByMerchant = new Map();
