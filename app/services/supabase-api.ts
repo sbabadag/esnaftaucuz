@@ -3126,27 +3126,65 @@ export const searchAPI = {
         const productIds = (results.products || [])
           .map((p: any) => p?.id)
           .filter((id: any) => typeof id === 'string' && id.length > 0);
+        // Android WebView'de supabase-js istemcisi token yenileme sırasında asılı kalabiliyor.
+        // Arama hızı için prices/locations sorgularını doğrudan REST ile yap (products ile aynı).
+        const sbUrl = import.meta.env.VITE_SUPABASE_URL as string;
+        const sbKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
+        const restHeaders = { apikey: sbKey, Authorization: `Bearer ${sbKey}` };
+        const PRICES_SELECT = '*,product:products(id,name,category,default_unit,image),location:locations(id,name,type,address,coordinates,city,district),user:users(id,name,avatar,level)';
+        const queryPricesRest = async (url: string): Promise<any[] | null> => {
+          try {
+            const resp = await withTimeout(
+              fetch(url, { headers: restHeaders }),
+              8000,
+              null as any
+            );
+            if (resp && resp.ok) {
+              const rows = await resp.json().catch(() => []);
+              return Array.isArray(rows) ? rows : [];
+            }
+          } catch {
+            /* düşüş: boş dön */
+          }
+          return null;
+        };
 
         if (productIds.length > 0) {
-          const { data: pricesByProduct } = await withTimeout(
-            supabase
-              .from('prices')
-              .select(`
-                *,
-                product:products(id, name, category, default_unit, image),
-                location:locations(id, name, type, address, coordinates, city, district),
-                user:users(id, name, avatar, level)
-              `)
-              .or('is_active.eq.true,is_active.is.null')
-              .in('product_id', productIds)
-              .order('created_at', { ascending: false })
-              .limit(20),
-            7000,
-            { data: [], error: null } as any
+          const inList = productIds.slice(0, 100).join(',');
+          const rows = await queryPricesRest(
+            `${sbUrl}/rest/v1/prices?select=${PRICES_SELECT}&or=(is_active.eq.true,is_active.is.null)&product_id=in.(${inList})&order=created_at.desc&limit=20`
           );
-          results.prices = pricesByProduct || [];
+          if (rows !== null) {
+            results.prices = rows;
+          } else if (sbUrl && sbKey) {
+            // REST yolu başarısızsa eski supabase-js yolu (yavaş ama çalışır)
+            const { data: pricesByProduct } = await withTimeout(
+              supabase
+                .from('prices')
+                .select(`*,
+                  product:products(id, name, category, default_unit, image),
+                  location:locations(id, name, type, address, coordinates, city, district),
+                  user:users(id, name, avatar, level)`)
+                .or('is_active.eq.true,is_active.is.null')
+                .in('product_id', productIds)
+                .order('created_at', { ascending: false })
+                .limit(20),
+              7000,
+              { data: [], error: null } as any
+            );
+            results.prices = pricesByProduct || [];
+          }
         } else {
           // Fallback when no direct product hit: lightweight recent scan with client-side match.
+          const rows = await queryPricesRest(
+            `${sbUrl}/rest/v1/prices?select=${PRICES_SELECT}&or=(is_active.eq.true,is_active.is.null)&order=created_at.desc&limit=40`
+          );
+          if (rows !== null) {
+            const lowerVariants = queryVariants.map((q) => q.toLowerCase());
+            results.prices = rows.filter((p: any) =>
+              lowerVariants.some((q) => p.product?.name?.toLowerCase().includes(q))
+            );
+          } else {
           const { data: prices } = await withTimeout(
             supabase
               .from('prices')
@@ -3168,6 +3206,7 @@ export const searchAPI = {
             results.prices = prices.filter((p: any) =>
               lowerVariants.some((q) => p.product?.name?.toLowerCase().includes(q))
             );
+          }
           }
         }
       }

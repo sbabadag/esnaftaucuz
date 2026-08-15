@@ -127,13 +127,40 @@ function collapseConsecutiveProductPricesToCheapest<T extends { product?: { id?:
 }
 
 /** Aramada resimsiz çıkan ürünleri fiyat fotoğrafları / esnaf ürün görselleriyle zenginleştirir. */
+const IMAGE_HINT_KEY = 'product-image-hints:v1';
+const loadImageHints = (): Record<string, string> => {
+  try {
+    const raw = localStorage.getItem(IMAGE_HINT_KEY);
+    const parsed = raw ? JSON.parse(raw) : {};
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+};
+const saveImageHints = (hints: Record<string, string>) => {
+  try {
+    localStorage.setItem(IMAGE_HINT_KEY, JSON.stringify(hints));
+  } catch {
+    /* ignore */
+  }
+};
+
 const enrichProductImages = async (products: any[]): Promise<any[]> => {
-  const need = products.filter((p) => !(p as any).image).map((p) => p.id || (p as any)._id).filter(Boolean);
-  if (!need.length) return products;
+  // 1) Önbellekteki ipuçlarını hemen uygula (tekrar aramalarda sıfır gecikme).
+  const hints = loadImageHints();
+  const withCached = products.map((p) => {
+    const hint = hints[p.id || (p as any)._id];
+    return !(p as any).image && hint ? { ...p, image: hint } : p;
+  });
+  const need = withCached
+    .filter((p) => !(p as any).image)
+    .map((p) => p.id || (p as any)._id)
+    .filter(Boolean);
+  if (!need.length) return withCached;
   try {
     const sbUrl = import.meta.env.VITE_SUPABASE_URL as string;
     const sbKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
-    if (!sbUrl || !sbKey) return products;
+    if (!sbUrl || !sbKey) return withCached;
     const headers = { apikey: sbKey, Authorization: `Bearer ${sbKey}` };
     const inList = need.slice(0, 80).join(',');
     const firstPublic = (v: unknown): string => {
@@ -173,13 +200,21 @@ const enrichProductImages = async (products: any[]): Promise<any[]> => {
         if (url) imageByProduct.set(row.product_id, url);
       }
     }
-    return products.map((p) => {
+    // 2) Yeni bulunan ipuçlarını önbelleğe yaz.
+    if (imageByProduct.size > 0) {
+      const nextHints = { ...hints };
+      imageByProduct.forEach((url, id) => {
+        nextHints[id] = url;
+      });
+      saveImageHints(nextHints);
+    }
+    return withCached.map((p) => {
       const url = imageByProduct.get(p.id || (p as any)._id);
       return url && !p.image ? { ...p, image: url } : p;
     });
   } catch (e) {
     console.warn('Product image enrichment failed:', e);
-    return products;
+    return withCached;
   }
 };
 
@@ -1570,9 +1605,14 @@ export default function ExploreScreen() {
         localProductsMap.set(pid, p);
       }
     });
+    const hintMap = loadImageHints();
     const localProducts = Array.from(localProductsMap.values())
       .sort((a: any, b: any) => getNameScore(b?.name || '', b?.category || '') - getNameScore(a?.name || '', a?.category || ''))
-      .slice(0, 10);
+      .slice(0, 10)
+      .map((p: any) => {
+        const hint = hintMap[p?.id || p?._id];
+        return hint && !(p as any).image ? { ...p, image: hint } : p;
+      });
     const localPrices = (recentPrices || [])
       .filter((p: any) => {
         const score = getNameScore(p?.product?.name || '', p?.product?.category || '');
