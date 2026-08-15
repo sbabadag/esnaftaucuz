@@ -282,7 +282,7 @@ export default function ExploreScreen() {
   const [currentLocation, setCurrentLocation] = useState<string>('Konya / Selçuklu');
   const [isGettingLocation, setIsGettingLocation] = useState(false);
   const [userLocation, setUserLocation] = useState<{ lat: number; lng: number } | null>(null);
-  const exploreCacheKey = `explore-cache:v5:${user?.id || 'anon'}`;
+  const exploreCacheKey = `explore-cache:v6:${user?.id || 'anon'}`;
   const productsIndexCacheKey = `products-search-index:v1:${user?.id || 'anon'}`;
   const [filters, setFilters] = useState({
     pazar: false,
