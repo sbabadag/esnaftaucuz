@@ -152,6 +152,8 @@ function buildProductHtml(product, prices, locationsById) {
     .cheapest .price { font-size: 32px; font-weight: 700; color: #166534; }
     ul { list-style: none; padding: 0; }
     a.cta { display: inline-block; margin-top: 20px; padding: 12px 24px; background: #16a34a; color: #fff; text-decoration: none; border-radius: 8px; font-weight: 600; }
+    .play { text-align: center; margin-top: 24px; padding: 20px 16px; background: #f8fafc; border-radius: 10px; }
+    .play-text { font-size: 14px; color: #333; margin-bottom: 10px; }
     footer { margin-top: 32px; padding-top: 16px; border-top: 1px solid #eee; color: #999; font-size: 13px; }
   </style>
 </head>
@@ -170,6 +172,13 @@ function buildProductHtml(product, prices, locationsById) {
   ${prices.length === 0 ? '<p style="color:#666;">Bu ürün için henüz fiyat kaydı yok.</p>' : `<ul>${priceRows}</ul>`}
 
   <a class="cta" href="/">Uygulamada Gör →</a>
+
+  <div class="play">
+    <div class="play-text">Güncel fiyatları kaçırmayın — uygulamayı Google Play'den indirin:</div>
+    <a href="https://play.google.com/store/apps/details?id=com.esnaftaucuz.app" target="_blank" rel="noopener noreferrer">
+      <img src="https://play.google.com/intl/en_us/badges/static/images/badges/tr_badge_web_generic.png" alt="Google Play'den indir" style="height:52px;width:auto;" />
+    </a>
+  </div>
   <footer>Fiyatlar esnaf topluluğu tarafından paylaşılmaktadır. Güncel fiyatlar için esnaftaucuz uygulamasını kullanın.</footer>
 </body>
 </html>`;

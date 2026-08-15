@@ -185,6 +185,17 @@ export default function PublicProductPage() {
         </ul>
       )}
 
+      <div style={{ textAlign: 'center', marginTop: 24, padding: 20, background: '#f8fafc', borderRadius: 10 }}>
+        <div style={{ fontSize: 14, color: '#333', marginBottom: 10 }}>Güncel fiyatları kaçırmayın — uygulamayı Google Play'den indirin:</div>
+        <a href="https://play.google.com/store/apps/details?id=com.esnaftaucuz.app" target="_blank" rel="noopener noreferrer">
+          <img
+            src="https://play.google.com/intl/en_us/badges/static/images/badges/tr_badge_web_generic.png"
+            alt="Google Play'den indir"
+            style={{ height: 52, width: 'auto' }}
+          />
+        </a>
+      </div>
+
       <footer style={{ marginTop: 32, paddingTop: 16, borderTop: '1px solid #eee', color: '#999', fontSize: 13 }}>
         Fiyatlar esnaf topluluğu tarafından paylaşılmaktadır. Güncel fiyatlar için esnaftaucuz uygulamasını kullanın.
       </footer>
