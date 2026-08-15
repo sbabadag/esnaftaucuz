@@ -2512,60 +2512,38 @@ export const pricesAPI = {
 
   verify: async (id: string) => {
     try {
-      const { data: { user } } = await supabase.auth.getUser();
-      const token = localStorage.getItem('authToken');
-      
-      if (!user && !token) {
-        throw new Error('Giriş yapmanız gerekiyor');
+      // REST + SECURITY DEFINER RPC: RLS 044 yalnızca fiyat sahibine UPDATE izni veriyor;
+      // doğrulama ise başka kullanıcıların is_verified/verification_count artırmasıdır.
+      // supabase-js güncellemesi Android'de token yenileme askısı da yapıyordu.
+      const sbUrl = import.meta.env.VITE_SUPABASE_URL as string;
+      const headers = await getRestAuthHeaders();
+      const controller = new AbortController();
+      const tid = setTimeout(() => controller.abort(), 10000);
+      const resp = await fetch(`${sbUrl}/rest/v1/rpc/verify_price`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ price_id: id }),
+        signal: controller.signal,
+      });
+      clearTimeout(tid);
+      const rawText = await resp.text().catch(() => '');
+      if (!resp.ok) {
+        console.error('Verify price error:', resp.status, rawText);
+        if (resp.status === 42501 || /permission|execute/i.test(rawText)) {
+          throw new Error('Giriş yapmanız gerekiyor');
+        }
+        throw new Error('Fiyat doğrulanamadı');
       }
-
-      // Get current price to increment verification_count
-      const { data: currentPrice, error: fetchError } = await supabase
-        .from('prices')
-        .select('verification_count')
-        .eq('id', id)
-        .maybeSingle();
-
-      if (fetchError) {
-        console.error('Error fetching current price:', fetchError);
-        throw fetchError;
+      let rows: any[] = [];
+      try {
+        rows = rawText ? JSON.parse(rawText) : [];
+      } catch {
+        rows = [];
       }
-
-      // Update the price
-      const { error: updateError } = await supabase
-        .from('prices')
-        .update({
-          is_verified: true,
-          verification_count: (currentPrice?.verification_count || 0) + 1,
-        })
-        .eq('id', id);
-
-      if (updateError) {
-        console.error('Error updating price:', updateError);
-        throw updateError;
-      }
-
-      // Fetch the updated price with all relations
-      const { data: price, error: selectError } = await supabase
-        .from('prices')
-        .select(`
-          *,
-          product:products(id, name, category, default_unit, image),
-          location:locations(id, name, type, address, coordinates, city, district),
-          user:users(id, name, avatar, level)
-        `)
-        .eq('id', id)
-        .maybeSingle();
-
-      if (selectError) {
-        console.error('Error fetching updated price:', selectError);
-        throw selectError;
-      }
-
+      const price = Array.isArray(rows) ? rows[0] : rows;
       if (!price) {
         throw new Error('Fiyat bulunamadı');
       }
-
       return { message: 'Fiyat doğrulandı', price };
     } catch (error: any) {
       console.error('Verify price error:', error);
