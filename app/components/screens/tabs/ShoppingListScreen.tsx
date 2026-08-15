@@ -530,8 +530,8 @@ export default function ShoppingListScreen() {
                 ) : (
                   <div className="mt-3 rounded-lg bg-amber-50 p-3 text-sm text-amber-800">
                     {lang === 'tr'
-                      ? `${radiusKm} km içinde uygun fiyat bulunamadı.`
-                      : `No compatible price found within ${radiusKm} km.`}
+                      ? `${radiusKm} km içinde fiyat yok — ürün adına dokununca uzak dükkanlardaki fiyatlar görünür.`
+                      : `No compatible price found within ${radiusKm} km — tap the product name to see prices from distant shops.`}
                   </div>
                 )}
               </article>

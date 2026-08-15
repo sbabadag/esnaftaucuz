@@ -14,6 +14,7 @@ import { useGeolocation } from '../../../../src/hooks/useGeolocation';
 import { forwardGeocode } from '../../../utils/geocoding';
 import { supabase, safeGetSession } from '../../../lib/supabase';
 import { resolveMerchantRoleFromProfile } from '../../../lib/merchant-role';
+import { calculateDistanceKm } from '../../../lib/shopping-list';
 import { pickSingleImage } from '../../../lib/native-image-picker';
 import { toast } from 'sonner';
 
@@ -148,6 +149,25 @@ export default function ProductDetailScreen() {
   const [isSubmittingPrice, setIsSubmittingPrice] = useState(false);
   const [isGettingLocation, setIsGettingLocation] = useState(false);
   const { getCurrentPosition } = useGeolocation();
+  // Fiyat kartlarına mesafe rozeti için sessiz konum alma (başarısızsa rozet gösterilmez)
+  const [userCoords, setUserCoords] = useState<{ lat: number; lng: number } | null>(null);
+  useEffect(() => {
+    let mounted = true;
+    const load = async () => {
+      try {
+        const pos = await getCurrentPosition();
+        if (mounted && pos) {
+          setUserCoords({ lat: pos.latitude, lng: pos.longitude });
+        }
+      } catch {
+        // sessiz — konum yoksa mesafe rozeti çizilmez
+      }
+    };
+    void load();
+    return () => {
+      mounted = false;
+    };
+  }, []);
   const [priceFormData, setPriceFormData] = useState({
     price: '',
     unit: 'kg',
@@ -1072,6 +1092,18 @@ export default function ProductDetailScreen() {
             }
             
             const hasCoordinates = lat !== undefined && lng !== undefined && !isNaN(lat) && !isNaN(lng);
+
+            // Kullanıcı konumu biliniyorsa mesafe (uzak dükkanların fark edilmesi için)
+            const distanceKm =
+              userCoords && hasCoordinates
+                ? calculateDistanceKm(userCoords, { lat: lat as number, lng: lng as number })
+                : null;
+            const distanceText =
+              distanceKm === null
+                ? ''
+                : distanceKm < 1
+                  ? `${Math.round(distanceKm * 1000)} m uzakta`
+                  : `≈ ${Math.round(distanceKm)} km uzakta`;
             
             // Get location name - check multiple sources
             let locationName = 'Konum bilgisi yok';
@@ -1122,7 +1154,12 @@ export default function ProductDetailScreen() {
                           {formatPrice(item.price)} TL{' '}
                           <span className="text-sm text-gray-500 font-normal">/ {item.unit}</span>
                         </div>
-                        <div className="text-sm text-gray-600 mt-1">{locationName}</div>
+                        <div className="text-sm text-gray-600 mt-1">
+                          {locationName}
+                          {distanceText && (
+                            <span className="ml-2 text-xs text-gray-400">📍 {distanceText}</span>
+                          )}
+                        </div>
                       </div>
                       {isOld(createdAt) ? (
                         <Badge variant="secondary" className="ml-2 flex-shrink-0">Eski fiyat</Badge>
