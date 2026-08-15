@@ -18,6 +18,8 @@ import { useGeolocation } from '../../../../src/hooks/useGeolocation';
 import { resolveMerchantRoleFromProfile } from '../../../lib/merchant-role';
 import {
   buildShoppingComparison,
+  buildShopTotals,
+  type ShopTotal,
   type ShoppingComparisonResult,
   type ShoppingItem,
   type ShoppingProduct,
@@ -68,6 +70,7 @@ export default function ShoppingListScreen() {
     total: number;
     missingCount: number;
   } | null>(null);
+  const [shopTotals, setShopTotals] = useState<ShopTotal[]>([]);
 
   useEffect(() => {
     if (isMerchant) navigate('/app/explore', { replace: true });
@@ -184,6 +187,22 @@ export default function ShoppingListScreen() {
         radiusKm,
       );
       setComparison(result);
+
+      // 🛒 Tek dükkandan en ucuz: dükkan bilgisiyle toplu fiyat çek + dükkan başına topla
+      try {
+        const allRows = await pricesAPI.getForProducts(items.map((i) => i.product.id));
+        const totals = buildShopTotals(
+          items,
+          allRows as any,
+          { lat: position.latitude, lng: position.longitude },
+          radiusKm,
+        );
+        setShopTotals(totals);
+      } catch (shopErr) {
+        console.warn('Shop totals failed:', shopErr);
+        setShopTotals([]);
+      }
+
       if (result.missingCount === items.length) {
         toast.info(`${radiusKm} km içinde listedeki ürünler için fiyat bulunamadı`);
       }
@@ -387,6 +406,66 @@ export default function ShoppingListScreen() {
                     : `${comparison.missingCount} products had no nearby price.`)}
               </p>
             </div>
+
+            {/* 🛒 Tek dükkandan alırsan — sıralı karşılaştırma */}
+            {shopTotals.length > 0 && (
+              <div className="rounded-xl border border-green-200 bg-green-50/60 p-4">
+                <h3 className="text-sm font-semibold text-gray-900 flex items-center gap-2">
+                  <ShoppingCart className="h-4 w-4 text-green-700" />
+                  {lang === 'tr' ? 'Tek dükkandan alırsan' : 'If bought from one shop'}
+                </h3>
+                <div className="mt-3 space-y-2">
+                  {shopTotals.slice(0, 3).map((shop, idx) => (
+                    <button
+                      key={shop.shopId || shop.shopName + idx}
+                      type="button"
+                      onClick={() =>
+                        shop.shopId ? navigate(`/app/merchant-shop/${shop.shopId}`) : undefined
+                      }
+                      className="w-full rounded-lg border border-gray-200 bg-white p-3 text-left transition-colors hover:border-green-500"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-semibold text-gray-900">
+                            {idx === 0 && '🥇 '}
+                            {shop.shopName}
+                          </p>
+                          <p className="text-xs text-gray-500">
+                            {shop.matchedCount}/{items.length}{' '}
+                            {lang === 'tr' ? 'ürün mevcut' : 'products available'}
+                            {shop.distanceKm !== null
+                              ? ` · ${shop.distanceKm.toFixed(1)} km`
+                              : ''}
+                          </p>
+                          {shop.missingCount > 0 && (
+                            <p className="mt-0.5 truncate text-[11px] text-amber-600">
+                              {lang === 'tr' ? 'Eksik:' : 'Missing:'}{' '}
+                              {shop.missingNames.slice(0, 3).join(', ')}
+                              {shop.missingNames.length > 3
+                                ? ` +${shop.missingNames.length - 3}`
+                                : ''}
+                            </p>
+                          )}
+                        </div>
+                        <div className="text-right shrink-0">
+                          <p className="text-base font-bold text-green-700">
+                            {formatMoney(shop.total)}
+                          </p>
+                          <p className="text-[10px] text-gray-400">
+                            {lang === 'tr' ? 'toplam' : 'total'}
+                          </p>
+                        </div>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+                <p className="mt-2 px-1 text-[11px] text-gray-500">
+                  {lang === 'tr'
+                    ? 'Aynı dükkandaki en düşük fiyatlarla hesaplanır; dokununca dükkan sayfası açılır.'
+                    : 'Uses the cheapest price per product at each shop; tap to open the shop.'}
+                </p>
+              </div>
+            )}
 
             {comparison.results.map((result) => (
               <article key={result.item.product.id} className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">

@@ -1729,6 +1729,43 @@ export const pricesAPI = {
     return pricesAPI.getAll({ product: productId, sort });
   },
 
+  /**
+   * Alışveriş listesi için toplu fiyat çekme (REST):
+   * verilen ürünlerin TÜM aktif fiyatları + dükkan bilgisi (user embed).
+   * "Tek dükkandan en ucuz" karşılaştırması bununla çalışır.
+   */
+  getForProducts: async (productIds: string[]) => {
+    const ids = (productIds || []).filter(Boolean);
+    if (ids.length === 0) return [];
+    try {
+      const sbUrl = import.meta.env.VITE_SUPABASE_URL as string;
+      const sbKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
+      const params = new URLSearchParams({
+        select:
+          'id,product_id,user_id,price,unit,is_active,coordinates,created_at,user:users(id,name,shop_name),location:locations(id,name,coordinates)',
+        product_id: `in.(${ids.join(',')})`,
+        is_active: 'eq.true',
+        limit: '5000',
+      });
+      const controller = new AbortController();
+      const tid = setTimeout(() => controller.abort(), 15000);
+      const resp = await fetch(`${sbUrl}/rest/v1/prices?${params.toString()}`, {
+        headers: { apikey: sbKey, Authorization: `Bearer ${sbKey}` },
+        signal: controller.signal,
+      });
+      clearTimeout(tid);
+      if (!resp.ok) {
+        console.warn('pricesAPI.getForProducts failed:', resp.status);
+        return [];
+      }
+      const rows = await resp.json().catch(() => []);
+      return Array.isArray(rows) ? rows : [];
+    } catch (e) {
+      console.warn('pricesAPI.getForProducts error:', e);
+      return [];
+    }
+  },
+
   getById: async (id: string) => {
     try {
       const { data, error } = await supabase
