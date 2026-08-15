@@ -41,6 +41,25 @@ window.addEventListener('unhandledrejection', (event) => {
   console.error('❌ Unhandled promise rejection:', event.reason);
 });
 
+// SPA derin link kurtarma: GitHub Pages'te bilinmeyen yollar 404.html'e düşer ve
+// 404.html onları '/?//p/<id>' biçimine çevirir. Bu sorgu formatını gerçek yola
+// geri yazarız — aksi halde Google'dan gelen eski ürün/dükkan linkleri ana
+// sayfaya düşer ("doğru ürüne gitmiyor" şikayeti).
+(function restoreDeepPathFromQuery() {
+  try {
+    const s = window.location.search || '';
+    if (s.charAt(0) === '?' && s.charAt(1) === '/') {
+      const raw = s.slice(2); // '/p/<id>' veya '/p/<id>&q=...'
+      const [pathPart, ...rest] = raw.split('&');
+      const path = '/' + (pathPart || '').replace(/~and~/g, '&');
+      const query = rest.length ? '?' + rest.join('&').replace(/~and~/g, '&') : '';
+      window.history.replaceState(null, '', path + query + window.location.hash);
+    }
+  } catch {
+    /* sessiz — normal açılış devam eder */
+  }
+})();
+
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <ErrorBoundary>
