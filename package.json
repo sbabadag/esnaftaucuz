@@ -7,7 +7,7 @@
     "dev": "vite",
     "check-env": "node scripts/check-env.js",
     "create-test-user": "node scripts/create-test-user.mjs",
-    "build": "npm run check-env && node scripts/generate-sitemap.mjs && vite build && node scripts/generate-product-pages.mjs && node scripts/generate-shop-pages.mjs",
+    "build": "npm run check-env && node scripts/generate-sitemap.mjs && vite build && node scripts/generate-product-pages.mjs && node scripts/generate-shop-pages.mjs && node scripts/generate-location-pages.mjs",
     "build:check": "npm run build",
     "preview": "vite preview",
     "deploy": "npm run build && gh-pages -d dist",

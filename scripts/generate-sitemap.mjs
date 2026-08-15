@@ -119,6 +119,44 @@ async function fetchMerchants() {
   }
 }
 
+async function fetchLocations() {
+  if (!SUPABASE_URL || !SUPABASE_KEY) {
+    console.warn('⚠️  Supabase env eksik — bölge URL\'leri sitemap\'e eklenemeyecek.');
+    return [];
+  }
+  try {
+    const url = `${SUPABASE_URL.replace(/\/$/, '')}/rest/v1/locations?select=id,city,district&limit=5000`;
+    const resp = await fetch(url, {
+      headers: {
+        apikey: SUPABASE_KEY,
+        Authorization: `Bearer ${SUPABASE_KEY}`,
+        Accept: 'application/json',
+      },
+    });
+    if (!resp.ok) {
+      console.warn(`⚠️  Bölge listesi alınamadı (HTTP ${resp.status}) — sitemap bölgesiz üretilecek.`);
+      return [];
+    }
+    const rows = await resp.json().catch(() => []);
+    return Array.isArray(rows) ? rows : [];
+  } catch (err) {
+    console.warn(`⚠️  Bölge listesi çekilemedi: ${err.message}`);
+    return [];
+  }
+}
+
+function slugify(value) {
+  const map = { ç: 'c', ğ: 'g', ı: 'i', i: 'i', ö: 'o', ş: 's', ü: 'u', â: 'a', î: 'i', û: 'u' };
+  return String(value || '')
+    .toLocaleLowerCase('tr')
+    .split('')
+    .map((ch) => map[ch] ?? ch)
+    .join('')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .replace(/-{2,}/g, '-');
+}
+
 async function main() {
   console.log('🗺️  Sitemap oluşturuluyor...');
   console.log(`📍 Site kök URL: ${SITE_BASE}`);
@@ -127,8 +165,10 @@ async function main() {
   console.log(`📦 ${products.length} aktif ürün bulundu.`);
   const merchants = await fetchMerchants();
   console.log(`🏪 ${merchants.length} esnaf dükkanı bulundu.`);
+  const locations = await fetchLocations();
+  console.log(`📍 ${locations.length} konum bulundu.`);
 
-  const staticPaths = ['', '/onboarding', '/login'];
+  const staticPaths = ['', '/onboarding', '/login', '/bolgeler'];
   const urls = [];
 
   for (const path of staticPaths) {
@@ -150,6 +190,33 @@ async function main() {
       lastmod: new Date().toISOString().slice(0, 10),
       priority: '0.7',
     });
+  }
+
+  // Şehir + ilçe sayfaları (generate-location-pages.mjs ile üretilir)
+  const seenRegion = new Set();
+  for (const l of locations) {
+    const city = slugify(l.city);
+    if (!city) continue;
+    const cityKey = `c:${city}`;
+    if (!seenRegion.has(cityKey)) {
+      seenRegion.add(cityKey);
+      urls.push({
+        loc: `${SITE_BASE}/${city}`,
+        lastmod: new Date().toISOString().slice(0, 10),
+        priority: '0.6',
+      });
+    }
+    const district = slugify(l.district);
+    if (!district || district === city) continue;
+    const dk = `d:${city}-${district}`;
+    if (!seenRegion.has(dk)) {
+      seenRegion.add(dk);
+      urls.push({
+        loc: `${SITE_BASE}/${city}-${district}`,
+        lastmod: new Date().toISOString().slice(0, 10),
+        priority: '0.6',
+      });
+    }
   }
 
   const sitemap = `<?xml version="1.0" encoding="UTF-8"?>

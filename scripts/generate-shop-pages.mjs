@@ -79,6 +79,19 @@ function firstPublicImage(value) {
   return /^https?:\/\//i.test(s) ? s : '';
 }
 
+/** Türkçe karakterleri sadeleştirir: "Konya Meram" → "konya-meram" */
+function slugify(value) {
+  const map = { ç: 'c', ğ: 'g', ı: 'i', i: 'i', ö: 'o', ş: 's', ü: 'u', â: 'a', î: 'i', û: 'u' };
+  return String(value || '')
+    .toLocaleLowerCase('tr')
+    .split('')
+    .map((ch) => map[ch] ?? ch)
+    .join('')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .replace(/-{2,}/g, '-');
+}
+
 async function fetchAll(path) {
   const resp = await fetch(`${SUPABASE_URL}${path}`, {
     headers: {
@@ -247,6 +260,7 @@ function buildShopHtml(shop, items, merchantCoords, shopReviews) {
     ${addressText ? `<div>${escapeHtml(addressText)}</div>` : ''}
     ${hours ? `<div>🕐 ${escapeHtml(hours)}</div>` : ''}
     ${phone ? `<div>📞 ${escapeHtml(phone)}</div>` : ''}
+    ${city ? `<div>🔎 <a href="${SITE_BASE}/${slugify(city)}${district ? '-' + slugify(district) : ''}/" style="color:#166534;">${city}${district ? ' ' + district : ''} bölgesindeki diğer fiyatlar</a></div>` : ''}
   </div>
   ${descriptionText ? `<div class="desc">${escapeHtml(descriptionText)}</div>` : ''}
 
