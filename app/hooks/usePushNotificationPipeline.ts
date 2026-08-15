@@ -205,6 +205,14 @@ export const usePushRegistration = ({
 
           await upsertTokenWithRetry(token);
 
+          // Duyuru yayını için 'all' topic'ine abone ol (notify-all-users ile birlikte çalışır)
+          try {
+            await FirebaseMessaging.subscribeToTopic({ topic: 'all' });
+            console.log('🔔 Subscribed to broadcast topic: all');
+          } catch (topicError) {
+            console.warn('Topic subscription failed (yayın push\'ları topic\'siz token yoluyla yine ulaşır):', topicError);
+          }
+
           tokenRefreshListener = await FirebaseMessaging.addListener('tokenReceived', async (event) => {
             try {
               const refreshedToken = event?.token;
