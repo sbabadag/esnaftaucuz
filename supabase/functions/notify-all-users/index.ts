@@ -1,5 +1,21 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.49.8';
-import { corsHeaders, jsonResponse } from '../_shared/cors.ts';
+
+// _shared/cors.ts içeriği — Dashboard deploy'u yalnızca bu dosyayı paketlediği
+// için yardımcılar fonksiyonun içine gömüldü.
+const corsHeaders: Record<string, string> = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-debug-secret, x-admin-secret',
+  'Access-Control-Allow-Methods': 'POST, OPTIONS',
+};
+
+const jsonResponse = (status: number, payload: Record<string, unknown>) =>
+  new Response(JSON.stringify(payload), {
+    status,
+    headers: {
+      ...corsHeaders,
+      'Content-Type': 'application/json',
+    },
+  });
 
 /**
  * notify-all-users — tüm kullanıcılara duyuru push'u.
