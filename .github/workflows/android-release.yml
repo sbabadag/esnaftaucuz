@@ -82,9 +82,15 @@ jobs:
           VITE_SUPABASE_URL=$VITE_SUPABASE_URL
           VITE_SUPABASE_ANON_KEY=$VITE_SUPABASE_ANON_KEY
           VITE_GOOGLE_MAPS_API_KEY=$VITE_GOOGLE_MAPS_API_KEY
+          CUSTOM_DOMAIN=true
           EOF
 
       - name: Web build
+        env:
+          # Mobil (Capacitor WebView) için base yol her zaman '/' olmalı —
+          # yoksa vite GITHUB_ACTIONS'ta Pages alt yolu '/esnaftaucuz/' kullanır
+          # ve WebView https://localhost/esnaftaucuz/... diye 404 alır (boş ekran).
+          CUSTOM_DOMAIN: 'true'
         run: |
           npm ci
           npm run build
