@@ -93,12 +93,40 @@ async function fetchActiveProducts() {
   }
 }
 
+async function fetchMerchants() {
+  if (!SUPABASE_URL || !SUPABASE_KEY) {
+    console.warn('⚠️  Supabase env eksik — dükkan URL\'leri sitemap\'e eklenemeyecek.');
+    return [];
+  }
+  try {
+    const url = `${SUPABASE_URL.replace(/\/$/, '')}/rest/v1/users?select=id&is_merchant=eq.true&limit=2000`;
+    const resp = await fetch(url, {
+      headers: {
+        apikey: SUPABASE_KEY,
+        Authorization: `Bearer ${SUPABASE_KEY}`,
+        Accept: 'application/json',
+      },
+    });
+    if (!resp.ok) {
+      console.warn(`⚠️  Dükkan listesi alınamadı (HTTP ${resp.status}) — sitemap dükkansız üretilecek.`);
+      return [];
+    }
+    const rows = await resp.json().catch(() => []);
+    return Array.isArray(rows) ? rows : [];
+  } catch (err) {
+    console.warn(`⚠️  Dükkan listesi çekilemedi: ${err.message}`);
+    return [];
+  }
+}
+
 async function main() {
   console.log('🗺️  Sitemap oluşturuluyor...');
   console.log(`📍 Site kök URL: ${SITE_BASE}`);
 
   const products = await fetchActiveProducts();
   console.log(`📦 ${products.length} aktif ürün bulundu.`);
+  const merchants = await fetchMerchants();
+  console.log(`🏪 ${merchants.length} esnaf dükkanı bulundu.`);
 
   const staticPaths = ['', '/onboarding', '/login'];
   const urls = [];
@@ -112,6 +140,15 @@ async function main() {
       loc: `${SITE_BASE}/p/${product.id}`,
       lastmod: new Date().toISOString().slice(0, 10),
       priority: '0.8',
+    });
+  }
+
+  for (const merchant of merchants) {
+    if (!merchant || !merchant.id) continue;
+    urls.push({
+      loc: `${SITE_BASE}/s/${merchant.id}`,
+      lastmod: new Date().toISOString().slice(0, 10),
+      priority: '0.7',
     });
   }
 
