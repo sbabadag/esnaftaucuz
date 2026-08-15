@@ -75,7 +75,7 @@ jobs:
       - name: Env dosyası
         env:
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL || 'https://xmskjcdwmwlcmjexnnxw.supabase.co' }}
-          VITE_SUPABASE_ANON_KEY: {{ secrets.VITE_SUPABASE_ANON_KEY || 'sb_publishable_aJ6U77lzPTrGZEjQ6WJgUw_PPusa7R-' }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY || 'sb_publishable_aJ6U77lzPTrGZEjQ6WJgUw_PPusa7R-' }}
           VITE_GOOGLE_MAPS_API_KEY: ${{ secrets.VITE_GOOGLE_MAPS_API_KEY }}
         run: |
           cat > .env <<EOF
