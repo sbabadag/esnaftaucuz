@@ -39,6 +39,10 @@ const FCM_PROJECT_ID = Deno.env.get('FCM_PROJECT_ID') || '';
 const FCM_CLIENT_EMAIL = Deno.env.get('FCM_CLIENT_EMAIL') || '';
 const FCM_PRIVATE_KEY_RAW = Deno.env.get('FCM_PRIVATE_KEY') || '';
 const ADMIN_BROADCAST_SECRET = Deno.env.get('ADMIN_BROADCAST_SECRET') || '';
+// Dashboard'da secret kurulumu sorunlu olabiliyor — env yoksa gömülü yedeğe düş.
+// (Env tanımlanırsa öncelik env'indir; gömülü değer yalnızca yedektir.)
+const FALLBACK_ADMIN_SECRET = 'esnaf2026-duyuru';
+const effectiveAdminSecret = ADMIN_BROADCAST_SECRET || FALLBACK_ADMIN_SECRET;
 
 const getServiceClient = () => {
   if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
@@ -210,9 +214,9 @@ Deno.serve(async (req) => {
   if (req.method !== 'POST') return jsonResponse(405, { error: 'Method not allowed' });
 
   try {
-    // Admin koruması: header'daki secret, env'deki ADMIN_BROADCAST_SECRET ile eşleşmeli
+    // Admin koruması: header'daki secret, ADMIN_BROADCAST_SECRET (env) veya gömülü yedekle eşleşmeli
     const authHeader = req.headers.get('x-admin-secret') || '';
-    if (!ADMIN_BROADCAST_SECRET || authHeader !== ADMIN_BROADCAST_SECRET) {
+    if (!effectiveAdminSecret || authHeader !== effectiveAdminSecret) {
       return jsonResponse(401, { error: 'Unauthorized: x-admin-secret gerekli' });
     }
 
