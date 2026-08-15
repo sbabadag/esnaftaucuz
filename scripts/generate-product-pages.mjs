@@ -171,7 +171,17 @@ function buildProductHtml(product, prices, locationsById) {
   <h2 style="font-size:18px;margin-top:20px;">Fiyatlar</h2>
   ${prices.length === 0 ? '<p style="color:#666;">Bu ürün için henüz fiyat kaydı yok.</p>' : `<ul>${priceRows}</ul>`}
 
-  <a class="cta" href="/p/${product.id}">📱 Uygulamada aç</a>
+  <a class="cta" id="app-cta" href="/p/${product.id}">📱 Uygulamada aç</a>
+  <script>
+    (function () {
+      // Android'de App Link native uygulamayı açar; diğer platformlarda (web/masaüstü)
+      // web uygulamasının ürün sayfasına götür.
+      if (!/Android/i.test(navigator.userAgent)) {
+        var el = document.getElementById('app-cta');
+        if (el) el.href = '/app/product/${product.id}';
+      }
+    })();
+  </script>
 
   <div class="play">
     <div class="play-text">Güncel fiyatları kaçırmayın — uygulamayı Google Play'den indirin:</div>

@@ -28,6 +28,16 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
   }
 
   if (!user) {
+    // Giriş sonrası kullanıcının gitmek istediği sayfaya dönmesi için hedefi sakla
+    // (örn. web'deki "Uygulamada aç" CTA'sı → /app/product/<id>).
+    try {
+      const current = window.location.pathname + window.location.search;
+      if (current.startsWith('/app/')) {
+        localStorage.setItem('pending_deep_link', current);
+      }
+    } catch {
+      // best effort
+    }
     return <Navigate to="/login" replace />;
   }
 
@@ -138,8 +148,17 @@ function AppRoutes() {
     console.log('✅ AppRoutes: User is logged in, rendering main app routes');
     // If we're on root path and user is logged in, redirect to explore
     if (location.pathname === '/' || location.pathname === '/login') {
-      console.log('✅ AppRoutes: Redirecting from root/login to /app/explore');
-      return <Navigate to="/app/explore" replace />;
+      let target = '/app/explore';
+      try {
+        const pending = localStorage.getItem('pending_deep_link');
+        if (pending && pending.startsWith('/app/')) {
+          localStorage.removeItem('pending_deep_link');
+          target = pending;
+        }
+      } catch {
+        // best effort
+      }
+      return <Navigate to={target} replace />;
     }
     
     return (
@@ -737,11 +756,6 @@ function App() {
           try {
             const u = new URL(incomingUrl);
             const path = u.pathname; // /p/<id> veya /s/<id>
-            try {
-              localStorage.setItem('pending_deep_link', path);
-            } catch {
-              // storage hatası önemsiz
-            }
             console.log('🔗 Web derin bağlantı — uygulama içi hedefe gidiliyor:', path);
             // Capacitor kök origin üzerinden '?/' biçimiyle git: main.tsx restoreDeepPathFromQuery
             // aynı mekanizmayı çözer, SPA doğru rotada açılır.

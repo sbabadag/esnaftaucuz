@@ -164,7 +164,17 @@ export default function LoginScreen({ onLogin }: { onLogin?: () => void }) {
       setIsLoading(true);
       await guestLogin();
       toast.info('Misafir olarak devam ediliyor');
-      navigate('/app/explore');
+      let target = '/app/explore';
+      try {
+        const pending = localStorage.getItem('pending_deep_link');
+        if (pending && pending.startsWith('/app/')) {
+          localStorage.removeItem('pending_deep_link');
+          target = pending;
+        }
+      } catch {
+        // best effort
+      }
+      navigate(target);
     } catch (error: any) {
       toast.error(error.message || 'Giriş başarısız');
       console.error('Guest login error:', error);

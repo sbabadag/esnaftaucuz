@@ -182,7 +182,17 @@ function buildShopHtml(shop, items) {
   <h2 style="font-size:18px;margin-top:20px;">Ürünler ve fiyatlar</h2>
   ${items.length === 0 ? '<p style="color:#666;">Bu dükkanda henüz ürün kaydı yok.</p>' : `<ul>${productRows}</ul>`}
 
-  <a class="cta" href="/s/${shop.id}">📱 Uygulamada aç</a>
+  <a class="cta" id="app-cta" href="/s/${shop.id}">📱 Uygulamada aç</a>
+  <script>
+    (function () {
+      // Android'de App Link native uygulamayı açar; diğer platformlarda (web/masaüstü)
+      // web uygulamasının dükkan sayfasına götür.
+      if (!/Android/i.test(navigator.userAgent)) {
+        var el = document.getElementById('app-cta');
+        if (el) el.href = '/app/merchant-shop/${shop.id}';
+      }
+    })();
+  </script>
 
   <div class="play">
     <div class="play-text">Güncel fiyatları kaçırmayın — uygulamayı Google Play'den indirin:</div>
