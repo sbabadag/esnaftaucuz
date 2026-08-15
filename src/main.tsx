@@ -11,8 +11,9 @@ import 'leaflet/dist/leaflet.css';
 
 // Initialize Capacitor plugins for native
 if (Capacitor.isNativePlatform()) {
-  if (import.meta.env.PROD) {
+  if (import.meta.env.PROD && !import.meta.env.VITE_DEBUG_LOGS) {
     // Reduce JS<->native bridge noise on production builds.
+    // (Hata ayıklama için VITE_DEBUG_LOGS=1 ile logcat'e JS logları düşürülebilir.)
     console.log = () => {};
     console.info = () => {};
     console.debug = () => {};
@@ -59,6 +60,30 @@ window.addEventListener('unhandledrejection', (event) => {
     /* sessiz — normal açılış devam eder */
   }
 })();
+
+// HATA AYIKLAMA (yalnızca VITE_DEBUG_LOGS=1 build'leri): URL değişimlerinin kaynağını izle.
+if (import.meta.env.VITE_DEBUG_LOGS) {
+  try {
+    const origPush = window.history.pushState.bind(window.history);
+    const origReplace = window.history.replaceState.bind(window.history);
+    window.history.pushState = function (...args: any[]) {
+      console.log('[URL-TRACE] pushState →', String(args[2] ?? ''));
+      return (origPush as (...a: any[]) => void)(...args);
+    };
+    window.history.replaceState = function (...args: any[]) {
+      console.log('[URL-TRACE] replaceState →', String(args[2] ?? ''));
+      return (origReplace as (...a: any[]) => void)(...args);
+    };
+    window.addEventListener('popstate', () => {
+      console.log('[URL-TRACE] popstate →', window.location.pathname + window.location.search);
+    });
+    window.addEventListener('hashchange', () => {
+      console.log('[URL-TRACE] hashchange →', window.location.pathname + window.location.hash);
+    });
+  } catch {
+    /* izleme eklenemezse sorun değil */
+  }
+}
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>

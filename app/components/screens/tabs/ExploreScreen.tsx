@@ -1772,6 +1772,9 @@ export default function ExploreScreen() {
         locations: remoteLocations,
         merchants: localMerchants,
       });
+      // Ekran hâlâ mount mu? (kullanıcı dükkana girmiş olabilir — aksi halde
+      // setSearchParams eski konuma pushState yapıp kullanıcıyı ana sayfaya fırlatır)
+      if (reqSeq !== searchReqSeqRef.current) return;
       setSearchParams({ search: query });
     } catch (error: any) {
       if (reqSeq !== searchReqSeqRef.current) return;
@@ -1821,6 +1824,15 @@ export default function ExploreScreen() {
     setSearchResults(null);
     setSearchParams({});
   };
+
+  // Unmount sırasında süren aramaları iptal et — aksi halde kullanıcı dükkana
+  // girdikten sonra gelen uzak arama sonucu, setSearchParams ile eski konuma
+  // pushState yapıp kullanıcıyı ana sayfaya fırlatıyordu.
+  useEffect(() => {
+    return () => {
+      searchReqSeqRef.current += 1;
+    };
+  }, []);
 
   return (
     <div 
