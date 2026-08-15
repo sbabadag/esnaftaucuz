@@ -388,6 +388,27 @@ export default function LoginScreen({ onLogin }: { onLogin?: () => void }) {
         </a>
         {' '}kabul etmiş olursun.
       </motion.p>
+
+      <motion.div
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        transition={{ delay: 0.7 }}
+        className="text-center mt-8"
+      >
+        <p className="text-sm text-gray-600 mb-2">Güncel fiyatlar için uygulamayı indirin:</p>
+        <a
+          href="https://play.google.com/store/apps/details?id=com.esnaftaucuz.app"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-block"
+        >
+          <img
+            src="https://play.google.com/intl/en_us/badges/static/images/badges/tr_badge_web_generic.png"
+            alt="Google Play'den indir"
+            className="h-12 w-auto"
+          />
+        </a>
+      </motion.div>
     </div>
   );
 }
