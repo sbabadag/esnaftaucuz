@@ -1,0 +1,78 @@
+#!/usr/bin/env node
+/**
+ * CI için Android release imzalama konfigürasyonu.
+ * `npx cap add android` sonrası çalıştırılır; Capacitor şablonundaki build.gradle'a
+ * signingConfigs.release bloğunu enjekte eder ve keystore dosyasını yazar.
+ *
+ * Gerekli ortam değişkenleri:
+ *   ANDROID_KEYSTORE_B64 — .jks keystore'un base64'ü
+ *   KEYSTORE_PASSWORD   — keystore şifresi
+ *   KEY_ALIAS           — alias (varsayılan: esnaftaucuz)
+ *   KEY_PASSWORD        — key şifresi (boşsa keystore şifresi kullanılır)
+ */
+
+import { readFileSync, writeFileSync } from 'fs';
+import { join, dirname } from 'path';
+import { fileURLToPath } from 'url';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const projectRoot = join(__dirname, '..');
+const gradlePath = join(projectRoot, 'android', 'app', 'build.gradle');
+const keystorePath = join(projectRoot, 'android', 'app', 'esnaftaucuz-release-key.jks');
+
+const keystoreB64 = String(process.env.ANDROID_KEYSTORE_B64 || '').trim();
+const storePassword = String(process.env.KEYSTORE_PASSWORD || '').trim();
+const keyAlias = String(process.env.KEY_ALIAS || 'esnaftaucuz').trim();
+const keyPassword = String(process.env.KEY_PASSWORD || '').trim() || storePassword;
+
+if (!keystoreB64 || !storePassword) {
+  console.error('❌ ANDROID_KEYSTORE_B64 ve KEYSTORE_PASSWORD ortam değişkenleri gerekli');
+  process.exit(1);
+}
+
+const escapeGradle = (value) => value.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+
+// 1) Keystore'u yaz
+writeFileSync(keystorePath, Buffer.from(keystoreB64, 'base64'));
+console.log(`✅ Keystore yazıldı: ${keystorePath}`);
+
+// 2) build.gradle'a imza bloğunu enjekte et
+let gradle = readFileSync(gradlePath, 'utf8');
+
+if (gradle.includes('signingConfigs')) {
+  console.log('ℹ️ build.gradle zaten signingConfigs içeriyor — enjeksiyon atlandı');
+} else {
+  const target = `    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+        }
+    }`;
+
+  if (!gradle.includes(target)) {
+    console.error('❌ Capacitor build.gradle şablonu bulunamadı — enjeksiyon hedefi yok');
+    process.exit(1);
+  }
+
+  const replacement = `    signingConfigs {
+        release {
+            storeFile file('esnaftaucuz-release-key.jks')
+            storePassword '${escapeGradle(storePassword)}'
+            keyAlias '${escapeGradle(keyAlias)}'
+            keyPassword '${escapeGradle(keyPassword)}'
+        }
+    }
+    buildTypes {
+        release {
+            signingConfig signingConfigs.release
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+        }
+    }`;
+
+  gradle = gradle.replace(target, replacement);
+  writeFileSync(gradlePath, gradle);
+  console.log('✅ build.gradle imza bloğu enjekte edildi');
+}
+
+console.log('✅ configure-android-release tamamlandı');
