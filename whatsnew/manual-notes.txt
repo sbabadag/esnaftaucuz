@@ -1,0 +1,8 @@
+v1.1.12 sürüm notları:
+
+• Google arama sonuçlarından ürün ve dükkan sayfalarına doğrudan gidiş (App Links)
+• Arama hızı iyileştirildi; ürün görselleri gecikmesiz yüklenir
+• Aramada "ürün bulunamadı" sorunu giderildi (eski önbellek temizliği)
+• Esnaf Bilgileri'nde adresi mevcut konumdan alma özelliği
+• Dükkan sayfaları web arama motorlarına açıldı
+• Genel performans ve kararlılık iyileştirmeleri

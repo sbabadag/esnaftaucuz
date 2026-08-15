@@ -123,6 +123,8 @@ jobs:
         run: |
           if [ -n "$MANUAL_NOTES" ]; then
             NOTES="$MANUAL_NOTES"
+          elif [ -f whatsnew/manual-notes.txt ]; then
+            NOTES="$(cat whatsnew/manual-notes.txt)"
           else
             NOTES=$(git log --pretty=format:'- %s' "$(git describe --tags --abbrev=0 2>/dev/null || git rev-list --max-parents=0 HEAD)"..HEAD | head -20)
           fi
