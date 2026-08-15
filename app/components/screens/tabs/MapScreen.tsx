@@ -416,6 +416,7 @@ export default function MapScreen() {
   const mapRef = useRef<L.Map | null>(null);
   const hasFocusFromURL = useRef(false); // Track if we have focus coordinates from URL
   const focusedLocationRef = useRef<[number, number] | null>(null); // Store focused location coordinates
+  const focusSessionRef = useRef(false); // Odak bu harita ziyareti boyunca korunur (pin seçimine kadar)
   const [mapError, setMapError] = useState<string | null>(null);
   const [locationDenied, setLocationDenied] = useState(false);
   const sheetOpenRef = useRef(false);
@@ -514,6 +515,7 @@ export default function MapScreen() {
         const focusCoords: [number, number] = [lat, lng];
         hasFocusFromURL.current = true; // Mark that we have focus from URL
         focusedLocationRef.current = focusCoords; // Store focused location
+        focusSessionRef.current = true; // Kullanıcı pin seçene kadar odak korunur
         setMapCenter(focusCoords);
         setMapZoom(19); // Maximum zoom for closest view of product address
         // Clear URL params after focusing (with a delay to ensure map updates)
@@ -586,7 +588,7 @@ export default function MapScreen() {
         setUserLocation(location);
         // Only update map center if we don't have focus from URL or focused location
         // Check both the flag and the stored focused location to prevent override
-        if (!hasFocusFromURL.current && !focusedLocationRef.current) {
+        if (!hasFocusFromURL.current && !focusedLocationRef.current && !focusSessionRef.current) {
           setMapCenter(location);
           setMapZoom(15);
         } else {
@@ -856,7 +858,7 @@ export default function MapScreen() {
       setMapPins(pins);
       
       // If we have pins, center map on them (only if no user location and no focus from URL)
-      if (pins.length > 0 && !userLocation && !hasFocusFromURL.current && !focusedLocationRef.current) {
+      if (pins.length > 0 && !userLocation && !hasFocusFromURL.current && !focusedLocationRef.current && !focusSessionRef.current) {
         const firstShop = pins.find((p) => p.kind === 'shop') || pins[0];
         console.log('📍 Centering map on first pin:', { lat: firstShop.lat, lng: firstShop.lng, kind: firstShop.kind, title: firstShop.title });
         setMapCenter([firstShop.lat, firstShop.lng]);
@@ -1218,6 +1220,7 @@ export default function MapScreen() {
                   zIndexOffset={isShop ? 600 : 200}
                   eventHandlers={{
                     click: () => {
+                      focusSessionRef.current = false; // Kullanıcı pin seçti → odak kilidi kalkar
                       setSelectedPin(pin);
                       setSelectedPrice(null);
                     },
