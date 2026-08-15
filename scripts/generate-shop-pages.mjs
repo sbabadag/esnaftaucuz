@@ -92,14 +92,15 @@ async function fetchAll(path) {
   return Array.isArray(rows) ? rows : [];
 }
 
-function buildShopHtml(shop, items) {
+function buildShopHtml(shop, items, merchantCoords) {
   const name = escapeHtml(shop.name);
   const pref = (shop.preferences && typeof shop.preferences === 'object') ? shop.preferences : {};
   const loc = (shop.location && typeof shop.location === 'object') ? shop.location : {};
   const city = escapeHtml(loc.city || '');
   const district = escapeHtml(loc.district || '');
   const descriptionText = String(pref.shopDescription || '');
-  const addressText = String(pref.shopAddress || '');
+  // Öncelik preferences.shopAddress; güncellenmiş users.shop_address'e düş (DB düzeltmeleri oraya yazılıyor)
+  const addressText = String(pref.shopAddress || shop.shop_address || '');
   const hours = String(pref.openingHours || '');
   const phone = String(pref.phone || '');
   const logo = firstPublicImage(pref.shopLogo) || firstPublicImage(shop.avatar);
@@ -119,10 +120,48 @@ function buildShopHtml(shop, items) {
     })
     .join('\n');
 
+  // Shop koordinatları — öncelik sırası:
+  // 1) users.location.coordinates nesnesi ({lat,lng})
+  // 2) prices.user_id → locations.coordinates POINT stringi (merchantCoords)
+  // 3) shop.coordinates POINT stringi
+  let geoLat = null;
+  let geoLng = null;
+  const locCoords = loc.coordinates && typeof loc.coordinates === 'object' ? loc.coordinates : null;
+  if (
+    locCoords &&
+    locCoords.lat != null &&
+    locCoords.lng != null &&
+    Number.isFinite(Number(locCoords.lat)) &&
+    Number.isFinite(Number(locCoords.lng))
+  ) {
+    geoLat = Number(locCoords.lat);
+    geoLng = Number(locCoords.lng);
+  }
+  if ((geoLat === null || geoLng === null) && merchantCoords) {
+    const mc = merchantCoords.get(shop.id);
+    if (mc && Number.isFinite(mc.lat) && Number.isFinite(mc.lng)) {
+      geoLat = mc.lat;
+      geoLng = mc.lng;
+    }
+  }
+  if (geoLat === null || geoLng === null) {
+    const coordRaw = String(shop.coordinates || '');
+    const coordMatch = coordRaw.match(/\(([^,]+),([^)]+)\)/);
+    if (coordMatch) {
+      const lng = parseFloat(coordMatch[1]);
+      const lat = parseFloat(coordMatch[2]);
+      if (Number.isFinite(lat) && Number.isFinite(lng)) {
+        geoLat = lat;
+        geoLng = lng;
+      }
+    }
+  }
+
   const jsonLd = {
     '@context': 'https://schema.org',
     '@type': 'LocalBusiness',
     name: shop.name,
+    url: canonical,
     image: logo || undefined,
     description: descriptionText || undefined,
     ...(addressText || city
@@ -132,10 +171,21 @@ function buildShopHtml(shop, items) {
             ...(addressText ? { streetAddress: addressText } : {}),
             ...(city ? { addressLocality: city } : {}),
             ...(district ? { addressRegion: district } : {}),
+            ...(city || addressText ? { addressCountry: 'TR' } : {}),
+          },
+        }
+      : {}),
+    ...(geoLat !== null && geoLng !== null
+      ? {
+          geo: {
+            '@type': 'GeoCoordinates',
+            latitude: geoLat,
+            longitude: geoLng,
           },
         }
       : {}),
     ...(phone ? { telephone: phone } : {}),
+    ...(hours ? { openingHours: hours } : {}),
     priceRange: items.length ? '₺' : undefined,
   };
   const jsonLdString = JSON.stringify(jsonLd).replace(/</g, '\\u003c');
@@ -213,11 +263,31 @@ async function main() {
 
   console.log('🏪 SSG: dükkan sayfaları üretiliyor...');
 
-  const [merchants, merchantProducts, products] = await Promise.all([
-    fetchAll('/rest/v1/users?select=id,name,avatar,location,preferences&is_merchant=eq.true&limit=2000'),
-    fetchAll('/rest/v1/merchant_products?select=merchant_id,product_id,price,unit,images,is_active&limit=20000'),
+  const [merchants, merchantProducts, products, locations, prices] = await Promise.all([
+    fetchAll('/rest/v1/users?select=id,name,avatar,location,preferences,shop_address&is_merchant=eq.true&limit=2000'),
+    fetchAll('/rest/v1/merchant_products?select=merchant_id,product_id,price,unit,images,is_active,location_id&limit=20000'),
     fetchAll('/rest/v1/products?select=id,name&limit=5000'),
+    fetchAll('/rest/v1/locations?select=id,coordinates&limit=5000'),
+    fetchAll('/rest/v1/prices?select=user_id,location_id&limit=20000'),
   ]);
+
+  // merchant → ilk bağlı lokasyon koordinatı (merchant_products.location_id çoğunlukla null;
+  // gerçek bağlantı prices.user_id → prices.location_id üzerinden)
+  const coordsByMerchant = new Map();
+  const locRows = new Map(locations.map((l) => [l.id, l]));
+  for (const p of prices) {
+    if (!p.user_id || coordsByMerchant.has(p.user_id)) continue;
+    const lrow = locRows.get(p.location_id);
+    if (!lrow) continue;
+    const m = String(lrow.coordinates || '').match(/\(([^,]+),([^)]+)\)/);
+    if (m) {
+      const lng = parseFloat(m[1]);
+      const lat = parseFloat(m[2]);
+      if (Number.isFinite(lat) && Number.isFinite(lng)) {
+        coordsByMerchant.set(p.user_id, { lat, lng });
+      }
+    }
+  }
 
   const productNameById = new Map(products.map((p) => [p.id, p.name]));
 
@@ -240,7 +310,7 @@ async function main() {
   for (const shop of merchants) {
     if (!shop || !shop.id || !shop.name) continue;
     const items = itemsByMerchant.get(shop.id) || [];
-    const html = buildShopHtml(shop, items);
+    const html = buildShopHtml(shop, items, coordsByMerchant);
     const dir = join(DIST_DIR, 's', shop.id);
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, 'index.html'), html, 'utf-8');

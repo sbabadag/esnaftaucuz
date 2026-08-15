@@ -100,6 +100,7 @@ function buildProductHtml(product, prices, locationsById) {
     '@context': 'https://schema.org',
     '@type': 'Product',
     name: product.name,
+    url: canonical,
     image: product.image || undefined,
     description: `${product.name} — güncel esnaf fiyatları`,
     category: product.category || undefined,
