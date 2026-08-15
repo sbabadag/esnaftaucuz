@@ -5282,6 +5282,139 @@ export const feedbackAPI = {
 };
 
 // ============================================================================
+// SHOP REVIEWS API — dükkan değerlendirmeleri (yıldız + yorum)
+// ============================================================================
+
+export const shopReviewsAPI = {
+  /** Dükkanın son değerlendirmeleri (kullanıcı bilgisiyle) */
+  list: async (shopId: string, limit = 20) => {
+    try {
+      const sbUrl = import.meta.env.VITE_SUPABASE_URL as string;
+      const sbKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
+      const params = new URLSearchParams({
+        select: '*,user:users(id,name,avatar)',
+        shop_id: `eq.${shopId}`,
+        order: 'created_at.desc',
+        limit: String(limit),
+      });
+      const controller = new AbortController();
+      const tid = setTimeout(() => controller.abort(), 10000);
+      const resp = await fetch(`${sbUrl}/rest/v1/shop_reviews?${params.toString()}`, {
+        headers: { apikey: sbKey, Authorization: `Bearer ${sbKey}` },
+        signal: controller.signal,
+      });
+      clearTimeout(tid);
+      if (!resp.ok) {
+        console.warn('shopReviewsAPI.list failed:', resp.status);
+        return [];
+      }
+      const rows = await resp.json().catch(() => []);
+      return Array.isArray(rows) ? rows : [];
+    } catch (e) {
+      console.warn('shopReviewsAPI.list error:', e);
+      return [];
+    }
+  },
+
+  /** Kullanıcının bu dükkandaki kendi değerlendirmesi */
+  my: async (shopId: string, userId: string) => {
+    try {
+      const sbUrl = import.meta.env.VITE_SUPABASE_URL as string;
+      const sbKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
+      const params = new URLSearchParams({
+        select: '*',
+        shop_id: `eq.${shopId}`,
+        user_id: `eq.${userId}`,
+      });
+      const controller = new AbortController();
+      const tid = setTimeout(() => controller.abort(), 10000);
+      const resp = await fetch(`${sbUrl}/rest/v1/shop_reviews?${params.toString()}`, {
+        headers: { apikey: sbKey, Authorization: `Bearer ${sbKey}` },
+        signal: controller.signal,
+      });
+      clearTimeout(tid);
+      if (!resp.ok) return null;
+      const rows = await resp.json().catch(() => []);
+      return Array.isArray(rows) && rows.length > 0 ? rows[0] : null;
+    } catch (e) {
+      console.warn('shopReviewsAPI.my error:', e);
+      return null;
+    }
+  },
+
+  /** Yıldız + yorum ekle/güncelle (aynı kullanıcı → upsert) */
+  upsert: async (shopId: string, userId: string, rating: number, comment: string) => {
+    try {
+      const sbUrl = import.meta.env.VITE_SUPABASE_URL as string;
+      const headers = await getRestAuthHeaders();
+      headers.Prefer = 'return=representation,resolution=merge-duplicates';
+      const controller = new AbortController();
+      const tid = setTimeout(() => controller.abort(), 10000);
+      const resp = await fetch(
+        `${sbUrl}/rest/v1/shop_reviews?on_conflict=shop_id,user_id`,
+        {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({
+            shop_id: shopId,
+            user_id: userId,
+            rating,
+            comment: comment.trim() || null,
+            updated_at: new Date().toISOString(),
+          }),
+          signal: controller.signal,
+        }
+      );
+      clearTimeout(tid);
+      const rawText = await resp.text().catch(() => '');
+      if (!resp.ok) {
+        console.error('shopReviewsAPI.upsert failed:', resp.status, rawText);
+        if (resp.status === 401 || resp.status === 403 || /permission/i.test(rawText)) {
+          throw new Error('Giriş yapmanız gerekiyor');
+        }
+        throw new Error('Değerlendirme kaydedilemedi');
+      }
+      let row: any = null;
+      try {
+        const parsed = rawText ? JSON.parse(rawText) : null;
+        row = Array.isArray(parsed) ? parsed[0] : parsed;
+      } catch {
+        row = null;
+      }
+      if (!row) throw new Error('Değerlendirme kaydedilemedi');
+      return row;
+    } catch (error: any) {
+      console.error('shopReviewsAPI.upsert error:', error);
+      throw new Error(error.message || 'Değerlendirme kaydedilemedi');
+    }
+  },
+
+  /** Kendi değerlendirmesini sil */
+  remove: async (id: string) => {
+    try {
+      const sbUrl = import.meta.env.VITE_SUPABASE_URL as string;
+      const headers = await getRestAuthHeaders();
+      const controller = new AbortController();
+      const tid = setTimeout(() => controller.abort(), 10000);
+      const resp = await fetch(`${sbUrl}/rest/v1/shop_reviews?id=eq.${id}`, {
+        method: 'DELETE',
+        headers,
+        signal: controller.signal,
+      });
+      clearTimeout(tid);
+      if (!resp.ok && resp.status !== 204) {
+        console.warn('shopReviewsAPI.remove failed:', resp.status);
+        return false;
+      }
+      return true;
+    } catch (e) {
+      console.warn('shopReviewsAPI.remove error:', e);
+      return false;
+    }
+  },
+};
+
+// ============================================================================
 // HELPER FUNCTIONS
 // ============================================================================
 

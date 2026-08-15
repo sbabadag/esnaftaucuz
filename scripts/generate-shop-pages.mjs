@@ -92,7 +92,7 @@ async function fetchAll(path) {
   return Array.isArray(rows) ? rows : [];
 }
 
-function buildShopHtml(shop, items, merchantCoords) {
+function buildShopHtml(shop, items, merchantCoords, shopReviews) {
   const name = escapeHtml(shop.name);
   const pref = (shop.preferences && typeof shop.preferences === 'object') ? shop.preferences : {};
   const loc = (shop.location && typeof shop.location === 'object') ? shop.location : {};
@@ -187,6 +187,27 @@ function buildShopHtml(shop, items, merchantCoords) {
     ...(phone ? { telephone: phone } : {}),
     ...(hours ? { openingHours: hours } : {}),
     priceRange: items.length ? '₺' : undefined,
+    // Gerçek kullanıcı değerlendirmeleri (shop_reviews) → Review rich snippet
+    ...(shopReviews && shopReviews.length > 0
+      ? {
+          aggregateRating: {
+            '@type': 'AggregateRating',
+            ratingValue: Number(
+              (shopReviews.reduce((s, r) => s + Number(r.rating || 0), 0) / shopReviews.length).toFixed(1)
+            ),
+            reviewCount: shopReviews.length,
+            bestRating: 5,
+            worstRating: 1,
+          },
+          review: shopReviews.slice(0, 3).map((r) => ({
+            '@type': 'Review',
+            author: { '@type': 'Person', name: r.user_name || 'Kullanıcı' },
+            datePublished: r.created_at || undefined,
+            reviewRating: { '@type': 'Rating', ratingValue: Number(r.rating), bestRating: 5, worstRating: 1 },
+            ...(r.comment ? { description: String(r.comment).slice(0, 500) } : {}),
+          })),
+        }
+      : {}),
   };
   const jsonLdString = JSON.stringify(jsonLd).replace(/</g, '\\u003c');
 
@@ -263,13 +284,27 @@ async function main() {
 
   console.log('🏪 SSG: dükkan sayfaları üretiliyor...');
 
-  const [merchants, merchantProducts, products, locations, prices] = await Promise.all([
+  const [merchants, merchantProducts, products, locations, prices, reviews] = await Promise.all([
     fetchAll('/rest/v1/users?select=id,name,avatar,location,preferences,shop_address&is_merchant=eq.true&limit=2000'),
     fetchAll('/rest/v1/merchant_products?select=merchant_id,product_id,price,unit,images,is_active,location_id&limit=20000'),
     fetchAll('/rest/v1/products?select=id,name&limit=5000'),
     fetchAll('/rest/v1/locations?select=id,coordinates&limit=5000'),
     fetchAll('/rest/v1/prices?select=user_id,location_id&limit=20000'),
+    // Tablo henüz yoksa (migration 053 uygulanmamışsa) SSG çökmesin — boş diziyle devam
+    fetchAll('/rest/v1/shop_reviews?select=shop_id,rating,comment,created_at,user:users(name)&limit=20000').catch(() => []),
   ]);
+
+  const reviewsByMerchant = new Map();
+  for (const rv of reviews) {
+    if (!rv.shop_id) continue;
+    if (!reviewsByMerchant.has(rv.shop_id)) reviewsByMerchant.set(rv.shop_id, []);
+    reviewsByMerchant.get(rv.shop_id).push({
+      rating: rv.rating,
+      comment: rv.comment,
+      created_at: rv.created_at,
+      user_name: rv.user?.name || null,
+    });
+  }
 
   // merchant → ilk bağlı lokasyon koordinatı (merchant_products.location_id çoğunlukla null;
   // gerçek bağlantı prices.user_id → prices.location_id üzerinden)
@@ -310,7 +345,7 @@ async function main() {
   for (const shop of merchants) {
     if (!shop || !shop.id || !shop.name) continue;
     const items = itemsByMerchant.get(shop.id) || [];
-    const html = buildShopHtml(shop, items, coordsByMerchant);
+    const html = buildShopHtml(shop, items, coordsByMerchant, reviewsByMerchant.get(shop.id) || []);
     const dir = join(DIST_DIR, 's', shop.id);
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, 'index.html'), html, 'utf-8');
