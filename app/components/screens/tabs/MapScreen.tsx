@@ -6,6 +6,8 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle } from '../../ui/sheet';
 import { Button } from '../../ui/button';
 import { MapContainer, TileLayer, Marker, Popup, useMap, Circle, ZoomControl } from 'react-leaflet';
 import L from 'leaflet';
+import { Capacitor } from '@capacitor/core';
+import { App as CapacitorApp } from '@capacitor/app';
 import { merchantProductsAPI, pricesAPI } from '../../../services/supabase-api';
 import { useGeolocation } from '../../../../src/hooks/useGeolocation';
 import { useAuth } from '../../../contexts/AuthContext';
@@ -416,6 +418,49 @@ export default function MapScreen() {
   const focusedLocationRef = useRef<[number, number] | null>(null); // Store focused location coordinates
   const [mapError, setMapError] = useState<string | null>(null);
   const [locationDenied, setLocationDenied] = useState(false);
+  const sheetOpenRef = useRef(false);
+
+  // Alt panel (sheet) açıklık durumunu ref'e yansıt — backButton listener'ı her render'da yeniden kurulmasın.
+  useEffect(() => {
+    sheetOpenRef.current = !!(selectedPin || selectedPrice);
+  }, [selectedPin, selectedPrice]);
+
+  // Android: harita kaydırırken ekran kenarından gelen back-gesture'ı WebView geçmişini
+  // geri alıp kullanıcıyı ana sayfaya (explore) fırlatıyordu. Harita açıkken back'i yakala:
+  // açık panel varsa paneli kapat; yoksa uygulamayı minimize etmeyi dene (API < 34'te yut).
+  useEffect(() => {
+    try {
+      if (Capacitor.getPlatform() !== 'android') return;
+    } catch {
+      return;
+    }
+    let handle: { remove: () => void } | null = null;
+    CapacitorApp.addListener('backButton', () => {
+      if (sheetOpenRef.current) {
+        setSelectedPin(null);
+        setSelectedPrice(null);
+        return;
+      }
+      try {
+        CapacitorApp.minimizeApp();
+      } catch {
+        // minimizeApp desteklenmiyorsa hiçbir şey yapma — haritada kal.
+      }
+    })
+      .then((h) => {
+        handle = h;
+      })
+      .catch(() => {
+        /* listener kurulamadıysa varsayılan davranışa dokunma */
+      });
+    return () => {
+      try {
+        handle?.remove();
+      } catch {
+        /* ignore */
+      }
+    };
+  }, []);
 
   // State for filtering by product ID
   const [filterProductId, setFilterProductId] = useState<string | null>(null);

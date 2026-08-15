@@ -17,7 +17,6 @@ import { supabase } from './lib/supabase';
 import { FirebaseMessaging } from '@capacitor-firebase/messaging';
 import { asUuidOrNull, isLikelyJwt, normalizePushEvent } from './lib/push-notification-utils';
 import { ensureNativeStartupPermissions } from './lib/nativeStartupPermissions';
-import { resolveMerchantRoleFromProfile } from './lib/merchant-role';
 
 // Protected route wrapper - redirects to login if not authenticated
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -144,7 +143,7 @@ function AppRoutes() {
     
     return (
       <Routes>
-        <Route path="/app/*" element={<MainApp key={`${user.id}:${resolveMerchantRoleFromProfile(user) ? 'merchant' : 'normal'}`} />} />
+        <Route path="/app/*" element={<MainApp key={user.id} />} />
         <Route path="/p/:id" element={<PublicProductPage />} />
         <Route path="*" element={<Navigate to="/app/explore" replace />} />
       </Routes>

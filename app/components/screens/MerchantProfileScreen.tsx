@@ -46,14 +46,21 @@ export default function MerchantProfileScreen() {
   const [logoFile, setLogoFile] = useState<File | null>(null);
   const [logoPreview, setLogoPreview] = useState<string>('');
   const fileInputRef = useRef<HTMLInputElement>(null);
+  // Kullanıcı yerel olarak logo seçtiyse/kaldırdıysa true. Arka planda user nesnesi
+  // değiştiğinde (token yenileme / profil senkronu) seçili logoyu sessizce sıfırlamayı önler.
+  const hasLocalLogoChangeRef = useRef(false);
 
   useEffect(() => {
-    if (user) {
-      const profile = readMerchantProfileFromUser(user);
-      setForm(profile);
-      setLogoPreview(profile.logoUrl);
-      setLogoFile(null);
+    if (!user) return;
+    if (hasLocalLogoChangeRef.current) {
+      // Kaydedilmemiş logo değişikliği varken formu user'dan senkronlama —
+      // aksi halde ilk kayıt denemesi eski logoyla gidiyordu.
+      return;
     }
+    const profile = readMerchantProfileFromUser(user);
+    setForm(profile);
+    setLogoPreview(profile.logoUrl);
+    setLogoFile(null);
   }, [user]);
 
   useEffect(() => {
@@ -87,6 +94,7 @@ export default function MerchantProfileScreen() {
     if (logoPreview && logoPreview.startsWith('blob:')) {
       URL.revokeObjectURL(logoPreview);
     }
+    hasLocalLogoChangeRef.current = true;
     setLogoFile(file);
     setLogoPreview(previewUrl || URL.createObjectURL(file));
   };
@@ -111,19 +119,26 @@ export default function MerchantProfileScreen() {
     if (logoPreview && logoPreview.startsWith('blob:')) {
       URL.revokeObjectURL(logoPreview);
     }
+    hasLocalLogoChangeRef.current = true;
     setLogoFile(null);
     setLogoPreview('');
     setField('logoUrl', '');
   };
 
-  const uploadLogoToStorage = async (file: File, userId: string): Promise<string> => {
+  const uploadLogoToStorage = async (
+    file: File,
+    userId: string,
+    options?: { token?: string; allowRetry?: boolean }
+  ): Promise<string> => {
     const sbUrl = import.meta.env.VITE_SUPABASE_URL as string;
     const sbKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
     if (!sbUrl || !sbKey) throw new Error('Depolama ayarları eksik');
 
     // Prefer cached JWT — avoid waiting on hung getSession during save.
     let token =
-      (typeof localStorage !== 'undefined' ? localStorage.getItem('authToken') : null) || '';
+      options?.token ||
+      (typeof localStorage !== 'undefined' ? localStorage.getItem('authToken') : null) ||
+      '';
     if (!token) {
       const { accessToken } = await safeGetSession();
       token = accessToken || '';
@@ -167,6 +182,20 @@ export default function MerchantProfileScreen() {
       if (!resp.ok) {
         const body = await resp.text().catch(() => '');
         console.error('Logo upload failed:', resp.status, body);
+        if ((resp.status === 401 || resp.status === 403) && options?.allowRetry !== false) {
+          // Önbellekteki token eskimiş olabilir — taze oturumla bir kez daha dene.
+          try {
+            const fresh = await safeGetSession();
+            if (fresh.accessToken && fresh.accessToken !== token) {
+              return uploadLogoToStorage(file, userId, {
+                token: fresh.accessToken,
+                allowRetry: false,
+              });
+            }
+          } catch {
+            /* retry kurulamazsa aşağıdaki hataya düş */
+          }
+        }
         if (resp.status === 403 || /row-level security|access denied|unauthorized/i.test(body)) {
           throw new Error(
             'Logo yükleme izni yok (403). Oturumu yenileyip tekrar deneyin; sorun sürerse Storage politikasını kontrol edin.'
@@ -248,6 +277,8 @@ export default function MerchantProfileScreen() {
       setForm(mergedLocal);
       setLogoPreview(mergedLocal.logoUrl);
       setLogoFile(null);
+      // Kayıt başarılı — refreshUser sonrası gelen profil artık formu senkronlayabilir.
+      hasLocalLogoChangeRef.current = false;
 
       // Optimistic local cache so UI updates without waiting for refreshUser.
       try {
