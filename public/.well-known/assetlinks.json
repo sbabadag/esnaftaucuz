@@ -5,7 +5,8 @@
       "namespace": "android_app",
       "package_name": "com.esnaftaucuz.app",
       "sha256_cert_fingerprints": [
-        "d35519b34cab9447d312adc7a849720966b260dab4b00783834b54e5560fc4bf"
+        "d35519b34cab9447d312adc7a849720966b260dab4b00783834b54e5560fc4bf",
+        "54d2923a4e27ba59902f7cb2cc16979e787dd20bbe41e9be8d3f741ac83c285e"
       ]
     }
   }
