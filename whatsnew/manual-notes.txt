@@ -1,8 +1,9 @@
-v1.1.12 sürüm notları:
+v1.1.14 sürüm notları:
 
-• Google arama sonuçlarından ürün ve dükkan sayfalarına doğrudan gidiş (App Links)
-• Arama hızı iyileştirildi; ürün görselleri gecikmesiz yüklenir
-• Aramada "ürün bulunamadı" sorunu giderildi (eski önbellek temizliği)
-• Esnaf Bilgileri'nde adresi mevcut konumdan alma özelliği
-• Dükkan sayfaları web arama motorlarına açıldı
-• Genel performans ve kararlılık iyileştirmeleri
+• 🎉 Esnaf kampanyaları: Ana sayfada indirim kampanyaları; esnaflar kendi dükkanlarından kampanya ekleyebilir
+• ⭐ Dükkan değerlendirmeleri: Yıldız ver, yorum yaz; dükkan puan ortalamaları herkese açık
+• 🔍 Arama artık dükkan adlarını ve açıklama metinlerini de bulur
+• 🛒 Akıllı alışveriş listesi: "Tek dükkandan alırsan en ucuzu hangisi?" karşılaştırması
+• 📍 Fiyat kartlarında dükkana uzaklık bilgisi (📍 X km uzakta)
+• 🗺️ İl/ilçe bazlı fiyat sayfaları: Şehir ve ilçelerdeki en ucuz ürünler ve dükkanlar
+• 🐛 Düzeltmeler: Arama sonucundan dükkana girince ana sayfaya dönme sorunu, alışveriş listesi sonuçlarının kaybolması, konum ve harita doğruluğu
