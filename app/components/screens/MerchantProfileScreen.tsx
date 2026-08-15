@@ -29,6 +29,8 @@ import {
 } from '../../lib/merchant-profile';
 import { pickImages } from '../../lib/native-image-picker';
 import { safeGetSession } from '../../lib/supabase';
+import { useGeolocation } from '../../../src/hooks/useGeolocation';
+import { reverseGeocode } from '../../utils/geocoding';
 import {
   geocodeMerchantShopAddress,
   syncMerchantShopCoordinates,
@@ -43,6 +45,8 @@ export default function MerchantProfileScreen() {
   const [form, setForm] = useState<MerchantProfileFields>(emptyMerchantProfile());
   const [isSaving, setIsSaving] = useState(false);
   const [isUploadingLogo, setIsUploadingLogo] = useState(false);
+  const [isLocating, setIsLocating] = useState(false);
+  const { getCurrentPosition } = useGeolocation();
   const [logoFile, setLogoFile] = useState<File | null>(null);
   const [logoPreview, setLogoPreview] = useState<string>('');
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -123,6 +127,32 @@ export default function MerchantProfileScreen() {
     setLogoFile(null);
     setLogoPreview('');
     setField('logoUrl', '');
+  };
+
+  const handleUseCurrentLocation = async () => {
+    if (isLocating || isSaving) return;
+    setIsLocating(true);
+    try {
+      const position = await getCurrentPosition();
+      if (!position) {
+        toast.error('Konum alınamadı. Konum iznini kontrol edin.');
+        return;
+      }
+      const geo = await reverseGeocode(position.latitude, position.longitude);
+      if (!geo.success || !geo.address) {
+        toast.error(geo.error || 'Adres bulunamadı. Adresi elle girebilirsiniz.');
+        return;
+      }
+      setField('address', geo.address);
+      if (geo.city) setField('city', geo.city);
+      if (geo.district) setField('district', geo.district);
+      toast.success('Adres konumdan alındı — istersen düzenleyebilirsin');
+    } catch (error: any) {
+      console.error('Use current location failed:', error);
+      toast.error(error?.message || 'Adres alınamadı');
+    } finally {
+      setIsLocating(false);
+    }
   };
 
   const uploadLogoToStorage = async (
@@ -506,7 +536,20 @@ export default function MerchantProfileScreen() {
             <h2 className="font-semibold text-sm">Adres</h2>
           </div>
           <div className="space-y-2">
-            <Label htmlFor="address">Açık adres</Label>
+            <div className="flex items-center justify-between gap-2">
+              <Label htmlFor="address">Açık adres</Label>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={isLocating || isSaving}
+                onClick={handleUseCurrentLocation}
+                className="text-xs h-7 px-2 flex-shrink-0"
+              >
+                <MapPin className="w-3.5 h-3.5 mr-1" />
+                {isLocating ? 'Konum alınıyor...' : 'Mevcut konumdan al'}
+              </Button>
+            </div>
             <Textarea
               id="address"
               value={form.address}

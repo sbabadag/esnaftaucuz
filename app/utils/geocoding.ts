@@ -6,6 +6,8 @@
 interface GeocodingResult {
   success: boolean;
   address?: string;
+  city?: string;
+  district?: string;
   error?: string;
 }
 
@@ -49,12 +51,13 @@ export async function reverseGeocode(
 
   if (!googleApiKey) {
     if (import.meta.env.DEV) {
-      console.error('❌ VITE_GOOGLE_MAPS_API_KEY is missing — set it in .env');
+      console.warn('⚠️ VITE_GOOGLE_MAPS_API_KEY yok — anahtarsız OSM ters geocoding kullanılacak');
     }
-    return {
-      success: false,
-      error: USER_FRIENDLY_GEOCODE_UNAVAILABLE,
-    };
+    try {
+      return await reverseGeocodeOsm(latitude, longitude);
+    } catch {
+      return { success: false, error: USER_FRIENDLY_GEOCODE_UNAVAILABLE };
+    }
   }
   
   // Use Google Maps API - Retry up to 3 times on failure
@@ -94,12 +97,65 @@ export async function reverseGeocode(
     }
   }
   
-  // All retries failed - return error (NEVER use OpenStreetMap)
-  console.error('❌ Google Maps geocoding failed after all retries');
-  return {
-    success: false,
-    error: lastError?.message || lastError || 'Google Maps API hatası - Tüm denemeler başarısız oldu',
-  };
+  // All retries failed — son çare olarak anahtarsız OSM ters geocoding.
+  console.error('❌ Google Maps geocoding failed after all retries — OSM fallback deneniyor');
+  try {
+    return await reverseGeocodeOsm(latitude, longitude);
+  } catch {
+    return {
+      success: false,
+      error: lastError?.message || lastError || 'Google Maps API hatası - Tüm denemeler başarısız oldu',
+    };
+  }
+}
+
+/**
+ * Anahtarsız ters geocoding (Nominatim/OSM) — Google key yokken "mevcut konumdan
+ * adres al" özelliğinin çalışmasını sağlar. Hafif kullanım (buton tetikli) içindir.
+ */
+async function reverseGeocodeOsm(latitude: number, longitude: number): Promise<GeocodingResult> {
+  const url = `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${latitude}&lon=${longitude}&accept-language=tr&zoom=18`;
+  const response = await fetch(url, {
+    headers: { 'User-Agent': 'esnaftaucuz-app/1.0 (community price sharing; contact: sbabadag@gmail.com)' },
+  });
+  if (!response.ok) throw new Error(`OSM HTTP ${response.status}`);
+  const data = await response.json();
+  if (!data || data.error) return { success: false, error: 'Bu konum için adres bulunamadı' };
+
+  const a = data.address || {};
+  // İlçe: county/state_district; metropollerde Nominatim ilçeyi "city" alanına koyar.
+  const district = String(a.county || a.state_district || a.city || a.town || '').trim();
+  const mahalle = String(a.suburb || a.neighbourhood || a.quarter || '').trim();
+  const road = String(a.road || a.pedestrian || a.footway || '').trim();
+  const no = String(a.house_number || '').trim();
+
+  // İl: province/state/region güvenilmez (region = "İç Anadolu Bölgesi" gibi) —
+  // display_name'den çıkar: sondaki 'Türkiye' ve posta kodunu at, '... Bölgesi' varsa onu da at.
+  let city = String(a.province || a.state || '').trim();
+  if (!city) {
+    const dnParts = String(data.display_name || '')
+      .split(', ')
+      .map((s: string) => s.trim())
+      .filter((p: string) => p && p !== 'Türkiye' && !/^\d{4,6}$/.test(p));
+    let candidate = dnParts[dnParts.length - 1] || '';
+    if (/Bölgesi$/i.test(candidate) && dnParts.length > 1) {
+      candidate = dnParts[dnParts.length - 2] || '';
+    }
+    city = candidate;
+  }
+  if (/Bölgesi$/i.test(city)) city = '';
+
+  const parts: string[] = [];
+  if (mahalle && mahalle !== district && mahalle !== city) parts.push(mahalle);
+  if (road) parts.push(no ? `${road} ${no}` : road);
+  if (district && district !== city) parts.push(district);
+  if (city) parts.push(city);
+
+  const address = parts.join(', ') || String(data.display_name || '').trim();
+  if (!address) return { success: false, error: 'Bu konum için adres bulunamadı' };
+
+  console.log('📍 OSM reverse geocode:', { address, city, district });
+  return { success: true, address, city: city || undefined, district: district || undefined };
 }
 
 /**
@@ -230,6 +286,8 @@ async function reverseGeocodeGoogle(
       return {
         success: true,
         address: locationText,
+        city: city || undefined,
+        district: district || undefined,
       };
     }
   }
