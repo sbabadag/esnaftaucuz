@@ -136,12 +136,12 @@ function buildProductHtml(product, prices, locationsById) {
   <meta name="description" content="${escapeHtml(description)}" />
   <link rel="canonical" href="${canonical}" />
   <meta property="og:type" content="product" />
-  <meta property="og:title" content="${name} fiyatları | esnaftaucuz" />
+  <meta property="og:title" content="${name} fiyatları" />
   <meta property="og:description" content="${escapeHtml(description)}" />
   <meta property="og:url" content="${canonical}" />
   ${image ? `<meta property="og:image" content="${image}" />` : ''}
   <meta name="twitter:card" content="summary" />
-  <title>${name} fiyatları | esnaftaucuz</title>
+  <title>${name} fiyatları</title>
   <script type="application/ld+json">${jsonLdString}</script>
   <style>
     body { max-width: 720px; margin: 0 auto; padding: 24px; font-family: system-ui, -apple-system, sans-serif; color: #111; }

@@ -142,7 +142,7 @@ export default function PublicProductPage() {
   return (
     <div style={{ maxWidth: 720, margin: '0 auto', padding: 24, fontFamily: 'system-ui, sans-serif' }}>
       <SeoHead
-        title={`${product.name} fiyatları | esnaftaucuz`}
+        title={`${product.name} fiyatları`}
         description={description}
         canonicalUrl={canonicalUrl}
         imageUrl={imageUrl}
