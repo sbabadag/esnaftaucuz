@@ -129,6 +129,8 @@ jobs:
             NOTES=$(git log --pretty=format:'- %s' "$(git describe --tags --abbrev=0 2>/dev/null || git rev-list --max-parents=0 HEAD)"..HEAD | head -20)
           fi
           if [ -z "$NOTES" ]; then NOTES="Otomatik sürüm"; fi
+          # Play sınırı: dil başına 500 karakter — satır sınırından kes
+          NOTES=$(python3 -c "import sys; t=sys.stdin.read(); print(t[:480].rsplit(chr(10),1)[0])" <<< "$NOTES")
           mkdir -p whatsnew
           printf '%s\n' "$NOTES" > whatsnew/whatsnew-tr-TR
           printf '%s\n' "$NOTES" > whatsnew/whatsnew-en-US

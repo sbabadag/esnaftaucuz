@@ -1,9 +1,8 @@
-v1.1.14 sürüm notları:
+v1.1.15 sürüm notları:
 
-• 🎉 Esnaf kampanyaları: Ana sayfada indirim kampanyaları; esnaflar kendi dükkanlarından kampanya ekleyebilir
-• ⭐ Dükkan değerlendirmeleri: Yıldız ver, yorum yaz; dükkan puan ortalamaları herkese açık
-• 🔍 Arama artık dükkan adlarını ve açıklama metinlerini de bulur
-• 🛒 Akıllı alışveriş listesi: "Tek dükkandan alırsan en ucuzu hangisi?" karşılaştırması
-• 📍 Fiyat kartlarında dükkana uzaklık bilgisi (📍 X km uzakta)
-• 🗺️ İl/ilçe bazlı fiyat sayfaları: Şehir ve ilçelerdeki en ucuz ürünler ve dükkanlar
-• 🐛 Düzeltmeler: Arama sonucundan dükkana girince ana sayfaya dönme sorunu, alışveriş listesi sonuçlarının kaybolması, konum ve harita doğruluğu
+• 🎉 Esnaf kampanyaları: ana sayfada indirimler; esnaf kendi dükkanından kampanya ekler
+• ⭐ Dükkan değerlendirmeleri: yıldız ver, yorum yaz
+• 🔍 Arama dükkan adlarını ve açıklamaları da bulur
+• 🛒 Akıllı alışveriş listesi: "tek dükkandan en ucuz" karşılaştırması
+• 📍 Fiyatlarda dükkana uzaklık bilgisi
+• 🐛 Düzeltmeler: dükkan açılış sorunları, liste kaybolması, konum doğruluğu
