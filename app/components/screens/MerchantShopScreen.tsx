@@ -13,6 +13,7 @@ import { forwardGeocode } from '../../utils/geocoding';
 import { resolveCatalogProduct } from '../../lib/product-name';
 import { readMerchantProfileFromUser, type MerchantProfileFields } from '../../lib/merchant-profile';
 import ShopReviewsSection from '../ShopReviewsSection';
+import ShopCampaignsSection from '../ShopCampaignsSection';
 import { supabase, safeGetSession } from '../../lib/supabase';
 import { v4 as uuidv4 } from 'uuid';
 import { Capacitor } from '@capacitor/core';
@@ -1591,6 +1592,9 @@ export default function MerchantShopScreen() {
 
       {/* Scrollable content area */}
       <div className="flex-1 overflow-y-auto">
+
+      {/* 🎉 Kampanyalar (ziyaretçi banner / esnaf yönetimi) */}
+      <ShopCampaignsSection merchantId={merchantId || ''} isOwnShop={isOwnShop} />
 
       {/* ⭐ Dükkan değerlendirmeleri (yıldız + yorum) */}
       <ShopReviewsSection

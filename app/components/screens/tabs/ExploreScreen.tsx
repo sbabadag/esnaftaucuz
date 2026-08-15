@@ -15,6 +15,7 @@ import {
   merchantProductsAPI,
   notificationsAPI,
   invalidateExploreListCaches,
+  campaignsAPI,
 } from '../../../services/supabase-api';
 import { useGeolocation } from '../../../../src/hooks/useGeolocation';
 import { useAuth } from '../../../contexts/AuthContext';
@@ -257,6 +258,7 @@ export default function ExploreScreen() {
   } | null>(null);
   const [allProductsIndex, setAllProductsIndex] = useState<Product[]>([]);
   const [allMerchantsIndex, setAllMerchantsIndex] = useState<any[]>([]);
+  const [activeCampaigns, setActiveCampaigns] = useState<any[]>([]);
   const [isSearching, setIsSearching] = useState(false);
   const [trendProducts, setTrendProducts] = useState<Product[]>([]);
   const [nearbyCheapest, setNearbyCheapest] = useState<Price[]>([]);
@@ -1647,6 +1649,19 @@ export default function ExploreScreen() {
     };
   }, []);
 
+  // Kampanyalar — ana sayfa bölümü için aktif esnaf kampanyaları
+  useEffect(() => {
+    let mounted = true;
+    const load = async () => {
+      const list = await campaignsAPI.listActive(6);
+      if (mounted) setActiveCampaigns(list);
+    };
+    void load();
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
   const performSearch = async (query: string) => {
     const normalized = query.trim().toLowerCase();
     if (!normalized) {
@@ -2046,6 +2061,54 @@ export default function ExploreScreen() {
           zIndex: 1
         }}
       >
+        {/* Kampanyalar — esnaf indirimleri (arama yokken) */}
+        {!searchQuery.trim() && !searchResults && activeCampaigns.length > 0 && (
+          <section className="mt-2 mb-4">
+            <h2 className="text-base sm:text-lg mb-2 text-gray-900 font-semibold">🎉 Kampanyalar</h2>
+            <div className="flex gap-3 overflow-x-auto pb-2 -mx-4 px-4">
+              {activeCampaigns.map((c) => {
+                const shopName =
+                  c.merchant?.shop_name || c.merchant?.name || 'Esnaf';
+                const logo =
+                  (c.merchant?.preferences && c.merchant.preferences.shopLogo) ||
+                  c.merchant?.avatar ||
+                  null;
+                return (
+                  <div
+                    key={c.id}
+                    onClick={() => navigate(`/app/merchant-shop/${c.merchant_id}`)}
+                    className="shrink-0 w-64 bg-gradient-to-br from-amber-50 to-orange-50 border border-amber-200 rounded-xl p-3 cursor-pointer hover:shadow-md transition-shadow"
+                  >
+                    <div className="flex items-center gap-2 mb-1.5">
+                      <div className="w-8 h-8 rounded-lg bg-white border border-amber-200 flex items-center justify-center overflow-hidden shrink-0">
+                        {logo ? (
+                          <img src={logo} alt="" className="w-full h-full object-cover" />
+                        ) : (
+                          <span className="text-base">🎉</span>
+                        )}
+                      </div>
+                      <div className="min-w-0">
+                        <p className="text-sm font-semibold text-amber-900 truncate">
+                          {c.title}
+                        </p>
+                        <p className="text-xs text-amber-700 truncate">{shopName}</p>
+                      </div>
+                    </div>
+                    {c.description && (
+                      <p className="text-xs text-amber-800/90 line-clamp-2">{c.description}</p>
+                    )}
+                    {c.ends_at && (
+                      <p className="text-[11px] text-amber-600 mt-1.5">
+                        ⏳ {new Date(c.ends_at).toLocaleDateString('tr-TR')} tarihine kadar
+                      </p>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </section>
+        )}
+
         {/* Trend Products - hide while searching (match recent/merchant gates) */}
         {!searchQuery.trim() && !searchResults && (
           <section className="mt-0 pt-0">

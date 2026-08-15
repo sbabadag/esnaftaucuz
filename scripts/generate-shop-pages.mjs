@@ -105,7 +105,7 @@ async function fetchAll(path) {
   return Array.isArray(rows) ? rows : [];
 }
 
-function buildShopHtml(shop, items, merchantCoords, shopReviews) {
+function buildShopHtml(shop, items, merchantCoords, shopReviews, shopCampaigns) {
   const name = escapeHtml(shop.name);
   const pref = (shop.preferences && typeof shop.preferences === 'object') ? shop.preferences : {};
   const loc = (shop.location && typeof shop.location === 'object') ? shop.location : {};
@@ -221,6 +221,20 @@ function buildShopHtml(shop, items, merchantCoords, shopReviews) {
           })),
         }
       : {}),
+    // Aktif esnaf kampanyaları (migration 054) → LocalBusiness makesOffer
+    ...(shopCampaigns && shopCampaigns.length
+      ? {
+          makesOffer: shopCampaigns.slice(0, 5).map((c) => ({
+            '@type': 'Offer',
+            name: String(c.title || '').slice(0, 120),
+            ...(c.description ? { description: String(c.description).slice(0, 300) } : {}),
+            ...(c.ends_at ? { validThrough: c.ends_at } : {}),
+            priceCurrency: 'TRY',
+            url: canonical,
+            availability: 'https://schema.org/InStock',
+          })),
+        }
+      : {}),
   };
   const jsonLdString = JSON.stringify(jsonLd).replace(/</g, '\\u003c');
 
@@ -263,6 +277,7 @@ function buildShopHtml(shop, items, merchantCoords, shopReviews) {
     ${city ? `<div>🔎 <a href="${SITE_BASE}/${slugify(city)}${district ? '-' + slugify(district) : ''}/" style="color:#166534;">${city}${district ? ' ' + district : ''} bölgesindeki diğer fiyatlar</a></div>` : ''}
   </div>
   ${descriptionText ? `<div class="desc">${escapeHtml(descriptionText)}</div>` : ''}
+  ${shopCampaigns && shopCampaigns.length ? `<div style="margin:12px 0;">${shopCampaigns.map((c) => `<div style="background:#fef3c7;border:1px solid #f59e0b;border-radius:8px;padding:10px 14px;margin-bottom:8px;"><strong style="color:#92400e;">🎉 ${escapeHtml(c.title)}</strong>${c.description ? `<div style="font-size:13px;color:#78350f;margin-top:2px;">${escapeHtml(c.description)}</div>` : ''}${c.ends_at ? `<div style="font-size:12px;color:#a16207;margin-top:2px;">Geçerlilik: ${new Date(c.ends_at).toLocaleDateString('tr-TR')} tarihine kadar</div>` : ''}</div>`).join('')}</div>` : ''}
 
   <h2 style="font-size:18px;margin-top:20px;">Ürünler ve fiyatlar</h2>
   ${items.length === 0 ? '<p style="color:#666;">Bu dükkanda henüz ürün kaydı yok.</p>' : `<ul>${productRows}</ul>`}
@@ -298,7 +313,7 @@ async function main() {
 
   console.log('🏪 SSG: dükkan sayfaları üretiliyor...');
 
-  const [merchants, merchantProducts, products, locations, prices, reviews] = await Promise.all([
+  const [merchants, merchantProducts, products, locations, prices, reviews, campaigns] = await Promise.all([
     fetchAll('/rest/v1/users?select=id,name,avatar,location,preferences,shop_address&is_merchant=eq.true&limit=2000'),
     fetchAll('/rest/v1/merchant_products?select=merchant_id,product_id,price,unit,images,is_active,location_id&limit=20000'),
     fetchAll('/rest/v1/products?select=id,name&limit=5000'),
@@ -306,7 +321,17 @@ async function main() {
     fetchAll('/rest/v1/prices?select=user_id,location_id&limit=20000'),
     // Tablo henüz yoksa (migration 053 uygulanmamışsa) SSG çökmesin — boş diziyle devam
     fetchAll('/rest/v1/shop_reviews?select=shop_id,rating,comment,created_at,user:users!shop_reviews_user_id_fkey(name)&limit=20000').catch(() => []),
+    // Tablo henüz yoksa (migration 054 uygulanmamışsa) SSG çökmesin
+    fetchAll('/rest/v1/campaigns?select=id,merchant_id,title,description,ends_at,is_active&limit=5000').catch(() => []),
   ]);
+
+  const campaignsByMerchant = new Map();
+  for (const c of campaigns) {
+    if (!c.merchant_id || c.is_active === false) continue;
+    if (c.ends_at && new Date(c.ends_at).getTime() <= Date.now()) continue;
+    if (!campaignsByMerchant.has(c.merchant_id)) campaignsByMerchant.set(c.merchant_id, []);
+    campaignsByMerchant.get(c.merchant_id).push(c);
+  }
 
   const reviewsByMerchant = new Map();
   for (const rv of reviews) {
@@ -359,7 +384,7 @@ async function main() {
   for (const shop of merchants) {
     if (!shop || !shop.id || !shop.name) continue;
     const items = itemsByMerchant.get(shop.id) || [];
-    const html = buildShopHtml(shop, items, coordsByMerchant, reviewsByMerchant.get(shop.id) || []);
+    const html = buildShopHtml(shop, items, coordsByMerchant, reviewsByMerchant.get(shop.id) || [], campaignsByMerchant.get(shop.id) || []);
     const dir = join(DIST_DIR, 's', shop.id);
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, 'index.html'), html, 'utf-8');

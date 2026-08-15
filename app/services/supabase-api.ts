@@ -5282,6 +5282,150 @@ export const feedbackAPI = {
 };
 
 // ============================================================================
+// CAMPAIGNS API — esnaf kampanyaları (ana sayfa + dükkan banner'ı)
+// ============================================================================
+
+/** ends_at geçmişse kampanya süresi dolmuş sayılır */
+const isCampaignLive = (c: any) => {
+  if (c?.is_active === false) return false;
+  if (!c?.ends_at) return true;
+  return new Date(c.ends_at).getTime() > Date.now();
+};
+
+export const campaignsAPI = {
+  /** Aktif kampanyalar (ana sayfa bölümü için) — anon okur */
+  listActive: async (limit = 8) => {
+    try {
+      const sbUrl = import.meta.env.VITE_SUPABASE_URL as string;
+      const sbKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
+      const params = new URLSearchParams({
+        select: '*,merchant:users!campaigns_merchant_id_fkey(id,name,shop_name,avatar,preferences)',
+        is_active: 'eq.true',
+        order: 'created_at.desc',
+        limit: String(limit),
+      });
+      const controller = new AbortController();
+      const tid = setTimeout(() => controller.abort(), 10000);
+      const resp = await fetch(`${sbUrl}/rest/v1/campaigns?${params.toString()}`, {
+        headers: { apikey: sbKey, Authorization: `Bearer ${sbKey}` },
+        signal: controller.signal,
+      });
+      clearTimeout(tid);
+      if (!resp.ok) {
+        console.warn('campaignsAPI.listActive failed:', resp.status);
+        return [];
+      }
+      const rows = await resp.json().catch(() => []);
+      return (Array.isArray(rows) ? rows : []).filter(isCampaignLive);
+    } catch (e) {
+      console.warn('campaignsAPI.listActive error:', e);
+      return [];
+    }
+  },
+
+  /** Bir dükkanın kampanyaları (dükkan sayfası banner'ı için) */
+  listByMerchant: async (merchantId: string) => {
+    try {
+      const sbUrl = import.meta.env.VITE_SUPABASE_URL as string;
+      const sbKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
+      const params = new URLSearchParams({
+        select: '*',
+        merchant_id: `eq.${merchantId}`,
+        order: 'created_at.desc',
+        limit: '10',
+      });
+      const controller = new AbortController();
+      const tid = setTimeout(() => controller.abort(), 10000);
+      const resp = await fetch(`${sbUrl}/rest/v1/campaigns?${params.toString()}`, {
+        headers: { apikey: sbKey, Authorization: `Bearer ${sbKey}` },
+        signal: controller.signal,
+      });
+      clearTimeout(tid);
+      if (!resp.ok) return [];
+      const rows = await resp.json().catch(() => []);
+      return Array.isArray(rows) ? rows : [];
+    } catch (e) {
+      console.warn('campaignsAPI.listByMerchant error:', e);
+      return [];
+    }
+  },
+
+  /** Esnaf kendi kampanyasını ekler/günceller */
+  upsert: async (merchantId: string, payload: { id?: string; title: string; description: string; ends_at: string | null }) => {
+    try {
+      const sbUrl = import.meta.env.VITE_SUPABASE_URL as string;
+      const headers = await getRestAuthHeaders();
+      headers.Prefer = 'return=representation';
+      const body: any = {
+        merchant_id: merchantId,
+        title: payload.title.trim(),
+        description: payload.description.trim() || null,
+        ends_at: payload.ends_at || null,
+        is_active: true,
+        updated_at: new Date().toISOString(),
+      };
+      let url: string;
+      let method: string;
+      if (payload.id) {
+        url = `${sbUrl}/rest/v1/campaigns?id=eq.${payload.id}`;
+        method = 'PATCH';
+        delete body.merchant_id;
+      } else {
+        url = `${sbUrl}/rest/v1/campaigns`;
+        method = 'POST';
+      }
+      const controller = new AbortController();
+      const tid = setTimeout(() => controller.abort(), 10000);
+      const resp = await fetch(new URL(url), {
+        method,
+        headers,
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+      clearTimeout(tid);
+      const rawText = await resp.text().catch(() => '');
+      if (!resp.ok) {
+        console.error('campaignsAPI.upsert failed:', resp.status, rawText);
+        throw new Error('Kampanya kaydedilemedi');
+      }
+      try {
+        const parsed = rawText ? JSON.parse(rawText) : null;
+        return Array.isArray(parsed) ? parsed[0] : parsed;
+      } catch {
+        return null;
+      }
+    } catch (error: any) {
+      console.error('campaignsAPI.upsert error:', error);
+      throw new Error(error.message || 'Kampanya kaydedilemedi');
+    }
+  },
+
+  /** Esnaf kendi kampanyasını siler */
+  remove: async (id: string) => {
+    try {
+      const sbUrl = import.meta.env.VITE_SUPABASE_URL as string;
+      const headers = await getRestAuthHeaders();
+      const controller = new AbortController();
+      const tid = setTimeout(() => controller.abort(), 10000);
+      const resp = await fetch(`${sbUrl}/rest/v1/campaigns?id=eq.${id}`, {
+        method: 'DELETE',
+        headers,
+        signal: controller.signal,
+      });
+      clearTimeout(tid);
+      if (!resp.ok && resp.status !== 204) {
+        console.warn('campaignsAPI.remove failed:', resp.status);
+        return false;
+      }
+      return true;
+    } catch (e) {
+      console.warn('campaignsAPI.remove error:', e);
+      return false;
+    }
+  },
+};
+
+// ============================================================================
 // SHOP REVIEWS API — dükkan değerlendirmeleri (yıldız + yorum)
 // ============================================================================
 
