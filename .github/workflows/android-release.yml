@@ -106,6 +106,7 @@ jobs:
             echo "⚠️ FIREBASE_ANDROID_GOOGLE_SERVICES_JSON_B64 yok — push bildirimleri kapalı olacak"
           fi
           npx cap sync android
+          node scripts/configure-android-sdk.js
           node scripts/configure-android-oauth.js
 
       - name: Release imzalama konfigürasyonu
